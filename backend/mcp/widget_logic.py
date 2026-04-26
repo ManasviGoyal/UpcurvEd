@@ -1,7 +1,7 @@
 # backend/mcp/widget_logic.py
 """
 Generate self-contained interactive HTML widgets for teaching concepts.
-Mirrors the pattern of podcast_logic.py — standalone module, no LangGraph.
+Standalone module, no LangGraph.
 """
 import logging
 
@@ -28,49 +28,81 @@ def _pick_provider_and_key(
     raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' key.")
 
 
-WIDGET_SYSTEM = """\
-You generate self-contained interactive educational HTML widgets.
+WIDGET_SYSTEM = """You generate self-contained interactive educational HTML widgets.
 Output ONLY a complete HTML document. No markdown, no backticks, no explanation.
 
-The HTML must:
-1. Be 100% self-contained — NO external CDN links whatsoever. No src= pointing 
-   to unpkg, cdnjs, cdn.tailwindcss.com, or any URL. Everything inline. Or else it won't load and the user will see a broken widget.
+This widget will be rendered inside a sandboxed iframe in a desktop app.
+If you break any rule below, the widget may fail.
 
-2. Use only vanilla HTML, CSS, and JavaScript (ES6+). No React, no Babel, 
-   no Tailwind, no libraries. All JS in a <script> block, all CSS in a <style> block.
+Hard requirements:
+1. Return a complete HTML document:
+   - It must start with <!DOCTYPE html>
+   - It must contain <html>, <head>, <body>, and a closing </html>
 
-3. Teach ONE concept through hands-on interaction:
-   - Use <input type="range">, buttons, or checkboxes with addEventListener
-   - Draw on <canvas> or manipulate DOM elements directly in JS
-   - At least TWO interactive controls the student can manipulate
-   - Clear title, one-sentence explanation, labeled controls
+2. Use ONLY vanilla HTML, CSS, and JavaScript.
+   - No React, ReactDOM, Babel, Tailwind, libraries, modules, imports, TypeScript, JSX, or templates.
+   - No external scripts, external CSS, external fonts, external images, CDN URLs, or network requests.
+   - No fetch, XMLHttpRequest, localStorage, cookies, window.top, window.parent, or same-origin assumptions.
 
-4. Style with an inline <style> block. White background, system-ui font,
-   good contrast. Compact layout (~450px height).
+3. Keep it small and reliable.
+   - Maximum 1 canvas
+   - Maximum 2 buttons
+   - Maximum 2 sliders
+   - Maximum 1 select
+   - No large arrays or long hardcoded datasets
+   - No more than about 220 lines total
 
-5. NO fetch(), NO XMLHttpRequest, NO external resources of any kind.
-   Must work fully offline in a sandboxed iframe with allow-scripts only.
+4. The widget must teach exactly one concept through interaction.
+   - Include a clear title
+   - Include one short explanatory sentence
+   - Include a visible status/result text element that updates when the user interacts
+   - Include at least 2 interactive controls
 
-6. Start with <!DOCTYPE html> and end with </html>.
+5. All CSS must be in one <style> block in <head>.
+6. All JavaScript must be in one <script> block near the end of <body>.
+7. Use addEventListener for interactivity.
+8. If using a canvas:
+   - attach listeners directly to the canvas
+   - compute coordinates with getBoundingClientRect()
+9. Use a white background, system-ui font, good contrast, and compact side-panel layout.
+10. Do not use transparent overlays or absolute-positioned elements that could block pointer events.
+
+Completeness requirements:
+- Do not truncate the response.
+- Do not end inside a JavaScript function, object, array, string, or conditional.
+- Make sure every <style> tag is closed.
+- Make sure every <script> tag is closed.
+- Make sure every HTML tag is closed.
+- Before finishing, verify that the document ends with </script> (if a script is used), </body>, and </html>.
+- If you cannot complete a working widget, return a simpler widget instead of a partial one.
+
+Fallback rule:
+- If the concept is too complex for a reliable interactive widget, simplify it to the most basic visual intuition and build a smaller widget that still teaches the core idea.
+
+Reliability rules:
+- Prefer simple deterministic interaction over fancy visuals.
+- Do not generate partial code.
+- Do not leave any object literals, arrays, functions, strings, or conditions unfinished.
+- Make sure every tag is closed and every function body is complete.
+- The widget must actually run, not just look impressive.
 """
 
 
 def _widget_user_prompt(topic: str) -> str:
     return (
         f"Create an interactive educational widget that teaches: {topic}\n\n"
-        "Focus on the most fundamental, visualizable aspect of this concept.\n"
-        "Make it immediately intuitive — a student should understand the core idea "
-        "within 30 seconds of playing with it.\n"
+        "Focus on the most fundamental, visualizable aspect of this concept. "
+        "Keep the implementation simple, compact, and robust. "
+        "The widget must work on the first try in a sandboxed iframe.\n\n"
         "Output ONLY the HTML document."
     )
 
 
 def _extract_html(raw: str) -> str:
-    """Strip any accidental markdown fences the model may add."""
     text = raw.strip()
     if text.startswith("```"):
         lines = text.splitlines()
-        if lines[0].startswith("```"):
+        if lines and lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
@@ -87,10 +119,6 @@ def generate_widget(
     model: str | None = None,
     provider_keys: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """
-    Generate an interactive HTML widget for the given topic.
-    Returns { status, widget_html } — no GCS upload, HTML is inline.
-    """
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
     logger.info("widget: calling LLM provider=%s model=%s", prov, model)
 
@@ -100,7 +128,7 @@ def generate_widget(
         model=model,
         system=WIDGET_SYSTEM,
         user=_widget_user_prompt(prompt),
-        temperature=0.4,
+        temperature=0.2,
     )
 
     if not raw or not raw.strip():

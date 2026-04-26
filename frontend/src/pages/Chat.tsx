@@ -67,7 +67,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { isDesktopLocalMode } from "@/lib/runtime";
 import { clearApiKeysForUser } from "@/lib/secureKeys";
-import { TEST_WIDGET_HTML, USE_MOCK_WIDGET } from "@/debug/mockWidgetHtml";
+import { prepareWidgetHtmlForIframe } from "@/lib/widgetRuntime";
 
 interface ChatInterfaceProps {
   setView: (view: string) => void;
@@ -552,7 +552,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   title: m.media.title as string | undefined,
                   gcsPath: m.media.gcsPath as string | undefined,
                   sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
-                  widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
+                  widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
                 } : undefined;
                 // Preserve quiz data
                 const extras: any = {};
@@ -689,6 +689,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const lastMediaMessage = [...messages].reverse().find((m: any) => m?.media);
 
     if (!lastMediaMessage?.media) {
+      setWidgetHtml(null);
       return;
     }
 
@@ -699,14 +700,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setVttUrl(null);
       setSrtText(null);
       setSubtitleLang(undefined);
-      setWidgetHtml((prev) => prev === lastMediaMessage.media.widgetCode ? prev : lastMediaMessage.media.widgetCode);
+      setWidgetHtml((prev) => (
+        prev === lastMediaMessage.media.widgetCode ? prev : lastMediaMessage.media.widgetCode
+      ));
       return;
     }
 
-    if (lastMediaMessage.media.type === 'video' || lastMediaMessage.media.type === 'audio') {
-      setWidgetHtml(null);
-    }
+    setWidgetHtml(null);
   }, [activeChatId, activeChat.messages]);
+
 
   // Render helper: support [text](url) markdown links, then autolink any leftover plain URLs
   const renderMessage = (text: string) => {
@@ -1753,7 +1755,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       if (res.ok && data?.status === "ok" && data?.video_url) {
         // Use signed URL if available, otherwise use regular URL
         const audioUrl = data.signed_video_url || data.video_url;
-        setWidgetHtml(null);
         setVideoUrl(audioUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -1983,48 +1984,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
       return;
     }
+    if (!ensureLlmKey("quiz")) return; // reuse key check
 
     setWidgetLoading(true);
     let persistedId: string | undefined;
-
-    if (USE_MOCK_WIDGET) {
-      try {
-        persistedId = await ensurePersistedActiveChat(prompt);
-        const finalChatId = persistedId || activeChatId;
-        if (!finalChatId) {
-          toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
-          return;
-        }
-        setActiveChatId(finalChatId);
-
-        await processAndAddMessage(prompt, true, undefined, persistedId);
-        setQuery("");
-
-        const mediaAttachment: import('@/types').MediaAttachment = {
-          type: 'widget',
-          widgetCode: TEST_WIDGET_HTML,
-          title: `Widget: ${prompt.slice(0, 50)}`,
-        };
-        await processAndAddMessage("✅ Interactive widget generated.", false, mediaAttachment, String(finalChatId));
-        setVideoUrl(null);
-        setCurrentMediaMeta(null);
-        setSrtText(null);
-        setVttUrl(null);
-        setSubtitleLang(undefined);
-        setWidgetHtml(TEST_WIDGET_HTML);
-      } catch (err: any) {
-        await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
-        toast({ title: "Mock widget failed", description: err?.message || "Unknown error", duration: 4000 });
-      } finally {
-        setWidgetLoading(false);
-      }
-      return;
-    }
-
-    if (!ensureLlmKey("quiz")) {
-      setWidgetLoading(false);
-      return;
-    } // reuse key check
 
     try {
       persistedId = await ensurePersistedActiveChat(prompt);
@@ -2066,7 +2029,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         };
         await processAndAddMessage("✅ Interactive widget generated.", false, mediaAttachment, String(finalChatId));
         setVideoUrl(null);
-        setCurrentMediaMeta(null);
+        setCurrentMediaMeta({ type: 'widget' });
         setSrtText(null);
         setVttUrl(null);
         setSubtitleLang(undefined);
@@ -2693,7 +2656,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         // Use signed URL if available, otherwise use regular URL
         const videoUrl = data.signed_video_url || data.video_url;
-        setWidgetHtml(null);
         setVideoUrl(videoUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -2935,6 +2897,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     stopPlayback();
     setBusy(true);
     setApiError(null);
+    setWidgetHtml(null);
     setVideoUrl(null);
     setSrtText(null);
     setSubtitleLang(undefined);
@@ -2990,7 +2953,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       if (res.ok && data?.status === "ok" && data?.video_url) {
         const videoUrl = data.signed_video_url || data.video_url;
-        setWidgetHtml(null);
         setVideoUrl(videoUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -3170,7 +3132,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       try {
         const refreshed = await apiRefreshArtifact({ artifactId: currentMediaMeta.artifactId, gcsPath: currentMediaMeta.gcsPath, subtitle: true });
         if (refreshed?.signed_video_url) {
-          setWidgetHtml(null);
           setVideoUrl(refreshed.signed_video_url);
         }
         if (refreshed?.signed_subtitle_url) {
@@ -3470,7 +3431,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           gcsPath: m.media.gcsPath as string | undefined,
           title: m.media.title as string | undefined,
           sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
-          widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
+          widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
         } : undefined;
         // Ensure all messages have createdAt for proper ordering
         const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -3824,10 +3785,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }
 
   const WidgetFrame: React.FC<WidgetFrameProps> = ({ widgetCode, title, className, height }) => {
+    const preparedHtml = useMemo(() => prepareWidgetHtmlForIframe(widgetCode), [widgetCode]);
+
     const widgetUrl = useMemo(() => {
-      const blob = new Blob([widgetCode], { type: "text/html" });
+      const blob = new Blob([preparedHtml], { type: "text/html" });
       return URL.createObjectURL(blob);
-    }, [widgetCode]);
+    }, [preparedHtml]);
 
     useEffect(() => {
       return () => URL.revokeObjectURL(widgetUrl);
@@ -4418,7 +4381,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   </div>
                 ) : apiError ? (
                   <div className="flex flex-col items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="w-10 h-10 text-red-500">
+                    <svg viewBox="0 0 24 24" className="w-10 h-10 text-red-500" aria-hidden="true">
                       <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 14h-2v-2h2v2Zm0-4h-2V6h2v6Z"/>
                     </svg>
                     <p className="text-sm text-red-600 font-medium">Generation failed.</p>
@@ -4521,7 +4484,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
           {!widgetHtml && (
             <div className="space-y-4">
-              <Slider
+            <Slider
               value={progress}
               onValueChange={(val) => {
                 setProgress(val);
@@ -4716,8 +4679,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 </div>
               </div>
             </div>
-              {/* Removed "Open Quiz" button; link already shown in chat messages */}
-              {/* Quiz error panel removed per request; quiz errors surface in chat/toast instead */}
+            {/* Removed "Open Quiz" button; link already shown in chat messages */}
+            {/* Quiz error panel removed per request; quiz errors surface in chat/toast instead */}
             </div>
           )}
         </div>
