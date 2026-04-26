@@ -1,0 +1,60 @@
+[project]
+name = "ac215-backend"
+version = "0.1.0"
+description = "FastAPI backend for AC215 Group 1 (Manim + RAG)"
+requires-python = ">=3.12"
+# Runtime deps (migrated from your requirements.txt)
+dependencies = [
+  "fastapi>=0.111.0,<1.0.0",
+  "uvicorn[standard]>=0.30.0,<1.0.0",
+  "pydantic>=2.7.0,<3.0.0",
+
+  # Manim + voiceover
+  "manim>=0.19.0",
+  "manim-voiceover[gtts]>=0.3.7",
+  "gTTS>=2.5.1",
+  "setuptools>=68",
+
+  # Agent
+  "langgraph>=0.6.10",
+  "tiktoken",
+  "chromadb>=0.4.0",
+  "httpx>=0.27.0",
+
+  # LLM SDKs
+  "anthropic>=0.29.0",
+  "google-generativeai>=0.7.2",
+
+  # Tests/runtime helpers
+  "mcp>=1.2.0",
+  "langdetect>=1.0.9",
+  "mutagen>=1.47.0",
+  "firebase-admin>=6.5.0",
+  "google-cloud-firestore>=2.16.0",
+  "google-cloud-storage>=2.18.0",
+  "json5>=0.9.24",
+  "fastmcp>=0.1.0",
+]
+
+[dependency-groups]
+# Dev-only deps (not included in prod image)
+dev = [
+  "ruff",
+  "pytest",
+  "pytest-cov",
+  "pytest-asyncio",
+  "pre-commit",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "I"]  # basic errors, pyupgrade, bugbear, isort
+ignore = ["E203"]                    # if you want Black-compat behavior later
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-ra -q"

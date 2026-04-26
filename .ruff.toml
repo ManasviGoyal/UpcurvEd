@@ -1,0 +1,13 @@
+# Root ruff configuration (for tests/)
+# Matches backend/pyproject.toml configuration
+
+line-length = 100
+
+[format]
+indent-style = "space"
+quote-style = "double"
+
+[lint]
+select = ["E", "F", "UP", "B", "I"]
+ignore = ["E203"]
+

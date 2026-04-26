@@ -1,0 +1,50 @@
+# rag/.dockerignore
+# Ignore unnecessary files for llm-rag-job build
+# Context: rag/
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+venv/
+env/
+.venv/
+
+# Local environment and credentials
+.env
+.env.local
+.env.example
+secrets/*.json
+
+# Logs and temp files
+*.log
+tmp/
+temp/
+*.tmp
+
+# Data folders created at runtime
+rag-data/
+__output__/
+.cache/
+
+# Git
+.git/
+.gitignore
+
+# Docs and media
+README.md
+img/
+pdf/
+
+# Anything outside this directory (not needed in build context)
+../*

@@ -1,0 +1,52 @@
+# .dockerignore
+# =====================================================
+# Global .dockerignore for backend + rag-service builds
+# Context: repo root (.)
+# =====================================================
+
+# Python cache and build artifacts
+**/__pycache__/
+**/*.py[cod]
+**/*.so
+**/*.egg-info/
+.venv/
+env/
+venv/
+build/
+dist/
+
+# Node artifacts
+frontend/node_modules/
+frontend/dist/
+**/.vite/
+
+# Local development and secrets
+.env
+.env.local
+**/secrets/
+**/service-account.json
+
+# Local storage and generated files
+storage/
+rag/rag-data/
+**/*.mp4
+**/*.srt
+**/*.jsonl
+
+# Git and IDE files
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+**/*.log
+tmp/
+temp/
+*.tmp
+
+# Media and docs (not needed for build)
+img/
+pdf/

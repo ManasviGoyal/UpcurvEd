@@ -1,0 +1,26 @@
+{
+  "name": "upcurved-desktop",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Desktop runtime for UpcurvEd",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "desktop:dev": "electron desktop/main.cjs --dev",
+    "desktop:build:frontend": "npm --prefix frontend run build -- --mode desktop",
+    "desktop:prepare:python": "node desktop/scripts/prepare-python-runtime.cjs",
+    "desktop:start": "electron desktop/main.cjs",
+    "desktop:build": "npm run desktop:build:frontend && npm run desktop:start",
+    "desktop:dist": "npm run desktop:build:frontend && npm run desktop:prepare:python && electron-builder --config electron-builder.yml",
+    "desktop:dist:win": "npm run desktop:build:frontend && npm run desktop:prepare:python && electron-builder --config electron-builder.yml --win nsis --x64",
+    "desktop:dist:mac": "npm run desktop:build:frontend && npm run desktop:prepare:python && electron-builder --config electron-builder.yml --mac dmg",
+    "desktop:dist:mac:x64": "npm run desktop:build:frontend && npm run desktop:prepare:python && electron-builder --config electron-builder.yml --mac dmg --x64",
+    "desktop:dist:mac:arm64": "npm run desktop:build:frontend && npm run desktop:prepare:python && electron-builder --config electron-builder.yml --mac dmg --arm64"
+  },
+  "dependencies": {
+    "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1"
+  }
+}

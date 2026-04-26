@@ -1,0 +1,3 @@
+config:
+  gcp:project: ac215-project-475007
+  gcp:region: us-central1

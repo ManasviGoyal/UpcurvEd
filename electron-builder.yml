@@ -1,0 +1,49 @@
+appId: com.upcurved.desktop
+productName: UpcurvEd
+
+directories:
+  output: release
+
+files:
+  - desktop/**/*
+  - "!desktop/python-runtime/**"
+  - desktop/requirements-desktop.txt
+  - frontend/dist/**/*
+  - backend/**/*
+  - package.json
+  - "!backend/**/__pycache__/**"
+  - "!backend/**/*.pyc"
+  - "!backend/.env"
+  - "!tests/**"
+  - "!.github/**"
+
+asar: true
+asarUnpack:
+  - backend/**/*
+
+extraResources:
+  - from: desktop/python-runtime/
+    to: python-runtime
+    filter:
+      - "**/*"
+
+extraMetadata:
+  main: desktop/main.cjs
+
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+mac:
+  category: public.app-category.education
+  target:
+    - target: dmg
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+linux:
+  target:
+    - AppImage
+  category: Education
