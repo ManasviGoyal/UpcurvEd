@@ -67,6 +67,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { isDesktopLocalMode } from "@/lib/runtime";
 import { clearApiKeysForUser } from "@/lib/secureKeys";
+import { TEST_WIDGET_HTML, USE_MOCK_WIDGET } from "@/debug/mockWidgetHtml";
 
 interface ChatInterfaceProps {
   setView: (view: string) => void;
@@ -168,6 +169,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const [quotedMessage, setQuotedMessage] = useState<{ messageId: string; content: string; media: import('@/types').MediaAttachment } | null>(null);
   // backend integration state
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [widgetHtml, setWidgetHtml] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0); // 0-100 visual progress during render
@@ -550,6 +552,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   title: m.media.title as string | undefined,
                   gcsPath: m.media.gcsPath as string | undefined,
                   sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
+                  widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
                 } : undefined;
                 // Preserve quiz data
                 const extras: any = {};
@@ -680,6 +683,30 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   // Create activeChat with messages from cache, but other properties from baseChat
   const activeChat = { ...baseChat, messages: activeChatMessages } as Chat;
+
+  useEffect(() => {
+    const messages = Array.isArray(activeChat.messages) ? activeChat.messages : [];
+    const lastMediaMessage = [...messages].reverse().find((m: any) => m?.media);
+
+    if (!lastMediaMessage?.media) {
+      return;
+    }
+
+    if (lastMediaMessage.media.type === 'widget' && lastMediaMessage.media.widgetCode) {
+      stopPlayback();
+      setVideoUrl(null);
+      setCurrentMediaMeta({ type: 'widget' });
+      setVttUrl(null);
+      setSrtText(null);
+      setSubtitleLang(undefined);
+      setWidgetHtml((prev) => prev === lastMediaMessage.media.widgetCode ? prev : lastMediaMessage.media.widgetCode);
+      return;
+    }
+
+    if (lastMediaMessage.media.type === 'video' || lastMediaMessage.media.type === 'audio') {
+      setWidgetHtml(null);
+    }
+  }, [activeChatId, activeChat.messages]);
 
   // Render helper: support [text](url) markdown links, then autolink any leftover plain URLs
   const renderMessage = (text: string) => {
@@ -1294,6 +1321,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setPendingChatSwitch(null);
     if (dest == null) return;
     abortAllGeneration();
+    setWidgetHtml(null);
     if (dest === NEW_CHAT_SENTINEL) {
       startDraftChat();
       return;
@@ -1355,6 +1383,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setQuery("");
     setUploadedFiles([]);
     setApiError(null);
+    setWidgetHtml(null);
     setVideoUrl(null);
     setSrtText(null);
     setCurrentMediaMeta(null);
@@ -1674,6 +1703,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setPodcastLoading(true);
     setApiError(null);
     // Reset current media
+    setWidgetHtml(null);
     setVideoUrl(null);
     setSrtText(null);
     // Use the provided chat ID or fall back to activeChatId
@@ -1723,6 +1753,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       if (res.ok && data?.status === "ok" && data?.video_url) {
         // Use signed URL if available, otherwise use regular URL
         const audioUrl = data.signed_video_url || data.video_url;
+        setWidgetHtml(null);
         setVideoUrl(audioUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -1952,10 +1983,48 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
       return;
     }
-    if (!ensureLlmKey("quiz")) return; // reuse key check
 
     setWidgetLoading(true);
     let persistedId: string | undefined;
+
+    if (USE_MOCK_WIDGET) {
+      try {
+        persistedId = await ensurePersistedActiveChat(prompt);
+        const finalChatId = persistedId || activeChatId;
+        if (!finalChatId) {
+          toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+          return;
+        }
+        setActiveChatId(finalChatId);
+
+        await processAndAddMessage(prompt, true, undefined, persistedId);
+        setQuery("");
+
+        const mediaAttachment: import('@/types').MediaAttachment = {
+          type: 'widget',
+          widgetCode: TEST_WIDGET_HTML,
+          title: `Widget: ${prompt.slice(0, 50)}`,
+        };
+        await processAndAddMessage("✅ Interactive widget generated.", false, mediaAttachment, String(finalChatId));
+        setVideoUrl(null);
+        setCurrentMediaMeta(null);
+        setSrtText(null);
+        setVttUrl(null);
+        setSubtitleLang(undefined);
+        setWidgetHtml(TEST_WIDGET_HTML);
+      } catch (err: any) {
+        await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
+        toast({ title: "Mock widget failed", description: err?.message || "Unknown error", duration: 4000 });
+      } finally {
+        setWidgetLoading(false);
+      }
+      return;
+    }
+
+    if (!ensureLlmKey("quiz")) {
+      setWidgetLoading(false);
+      return;
+    } // reuse key check
 
     try {
       persistedId = await ensurePersistedActiveChat(prompt);
@@ -1996,6 +2065,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           title: `Widget: ${prompt.slice(0, 50)}`,
         };
         await processAndAddMessage("✅ Interactive widget generated.", false, mediaAttachment, String(finalChatId));
+        setVideoUrl(null);
+        setCurrentMediaMeta(null);
+        setSrtText(null);
+        setVttUrl(null);
+        setSubtitleLang(undefined);
+        setWidgetHtml(data.widget_html);
       } else {
         await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
       }
@@ -2559,6 +2634,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     setBusy(true);
     setApiError(null);
+    setWidgetHtml(null);
     setVideoUrl(null);
     setSrtText(null);
   setSubtitleLang(undefined);
@@ -2617,6 +2693,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         // Use signed URL if available, otherwise use regular URL
         const videoUrl = data.signed_video_url || data.video_url;
+        setWidgetHtml(null);
         setVideoUrl(videoUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -2913,6 +2990,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       if (res.ok && data?.status === "ok" && data?.video_url) {
         const videoUrl = data.signed_video_url || data.video_url;
+        setWidgetHtml(null);
         setVideoUrl(videoUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -3092,6 +3170,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       try {
         const refreshed = await apiRefreshArtifact({ artifactId: currentMediaMeta.artifactId, gcsPath: currentMediaMeta.gcsPath, subtitle: true });
         if (refreshed?.signed_video_url) {
+          setWidgetHtml(null);
           setVideoUrl(refreshed.signed_video_url);
         }
         if (refreshed?.signed_subtitle_url) {
@@ -3391,6 +3470,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           gcsPath: m.media.gcsPath as string | undefined,
           title: m.media.title as string | undefined,
           sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
+          widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
         } : undefined;
         // Ensure all messages have createdAt for proper ordering
         const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -3736,30 +3816,33 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   // (Removed duplicate captions toggle effect to avoid thrash/reset)
 
-  interface WidgetPlayerProps {
+  interface WidgetFrameProps {
     widgetCode: string;
     title?: string;
+    className?: string;
+    height?: string;
   }
 
-  // Sandboxed iframe widget player — no scripts can escape the sandbox
-  const WidgetPlayer: React.FC<WidgetPlayerProps> = ({ widgetCode, title }) => {
+  const WidgetFrame: React.FC<WidgetFrameProps> = ({ widgetCode, title, className, height }) => {
+    const widgetUrl = useMemo(() => {
+      const blob = new Blob([widgetCode], { type: "text/html" });
+      return URL.createObjectURL(blob);
+    }, [widgetCode]);
+
+    useEffect(() => {
+      return () => URL.revokeObjectURL(widgetUrl);
+    }, [widgetUrl]);
+
     return (
-      <div className="mt-3 rounded-lg overflow-hidden border border-border">
-        {title && (
-          <div className="px-3 py-1.5 bg-secondary text-secondary-foreground text-xs font-medium flex items-center gap-1.5">
-            <Zap className="w-3 h-3" />
-            {title}
-          </div>
-        )}
-        <iframe
-          srcDoc={widgetCode}
-          sandbox="allow-scripts"
-          className="w-full border-0"
-          style={{ height: "460px" }}
-          title={title || "Interactive Widget"}
-          loading="lazy"
-        />
-      </div>
+      <iframe
+        key={widgetUrl}
+        src={widgetUrl}
+        sandbox="allow-scripts"
+        className={className || "w-full border-0"}
+        style={height ? { height } : undefined}
+        title={title || "Interactive Widget"}
+        loading="eager"
+      />
     );
   };
 
@@ -3807,6 +3890,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setIsEditMode(false);
       setIsQuizMode(false);
       setQuotedMessage(null);
+      setWidgetHtml(null);
       // Immediately update activeChatId - URL will sync via effect
       setActiveChatId(id);
       // Also update URL immediately to prevent race conditions and auto-refresh issues
@@ -3944,6 +4028,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                   setCurrentMediaMeta({ artifactId: msg.media!.artifactId, gcsPath: msg.media!.gcsPath, type: msg.media!.type });
                                   // Load captions BEFORE setting video URL to ensure they're ready
                                   await fetchCaptions(mediaUrl, msg.media!.subtitleUrl, msg.media!.artifactId, msg.media!.gcsPath);
+                                  setWidgetHtml(null);
                                   setVideoUrl(mediaUrl);
                                   // Force video reload after captions are set to ensure track is attached
                                   await new Promise(resolve => setTimeout(resolve, 50));
@@ -3957,11 +4042,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                           )}
                           {/* Copy button - appears on hover */}
                           {msg.media && msg.media.type === 'widget' && msg.media.widgetCode && (
-                            <div className="mt-3">
-                              <WidgetPlayer
-                                widgetCode={msg.media.widgetCode}
-                                title={msg.media.title}
-                              />
+                            <div className="mt-3 text-xs text-muted-foreground">
+                              Interactive widget shown in the right panel.
                             </div>
                           )}
                           {msg.content && (
@@ -4309,9 +4391,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             className="flex-grow bg-muted/50 border-border flex items-center justify-center aspect-video min-h-[200px] relative"
             onContextMenu={(e) => e.preventDefault()}
           >
-            {!videoUrl ? (
+            {widgetHtml ? (
+              <WidgetFrame
+                widgetCode={widgetHtml}
+                className="w-full h-full rounded-xl border-0"
+                title="Interactive Widget"
+              />
+            ) : !videoUrl ? (
               <div className="text-center p-4">
-                {busy || podcastLoading ? (
+                {busy || podcastLoading || widgetLoading ? (
                   <div className="flex flex-col items-center gap-3">
                     <div className="relative h-16 w-16">
                       <svg className="h-16 w-16 -rotate-90" viewBox="0 0 36 36">
@@ -4320,26 +4408,23 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                           d="M18 2 a 16 16 0 1 1 0 32 a 16 16 0 1 1 0 -32"
                           strokeDasharray={`${busy ? videoProgress : podcastProgress}, 100`} />
                       </svg>
-                      <div className="absolute inset-0 flex items-center justify-center text-sm font-medium">{busy ? `${videoProgress}%` : `${podcastProgress}%`}</div>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{busy ? "Rendering video…" : "Generating podcast…"}</p>
-                  </div>
-                ) : (
-                  apiError ? (
-                    <div className="text-center p-4">
-                      <div className="flex flex-col items-center gap-2">
-                        {/* error icon */}
-                        <svg viewBox="0 0 24 24" className="w-10 h-10 text-red-500" aria-hidden="true">
-                          <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 14h-2v-2h2v2Zm0-4h-2V6h2v6Z"/>
-                        </svg>
-                        <p className="text-sm text-red-600 font-medium">Generation failed.</p>
+                      <div className="absolute inset-0 flex items-center justify-center text-sm font-medium">
+                        {widgetLoading ? <Zap className="w-6 h-6 animate-pulse" /> : busy ? `${videoProgress}%` : `${podcastProgress}%`}
                       </div>
                     </div>
-                  ) : (
-                    <>
-                      <Play className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                    </>
-                  )
+                    <p className="text-sm text-muted-foreground">
+                      {busy ? "Rendering video…" : widgetLoading ? "Generating widget…" : "Generating podcast…"}
+                    </p>
+                  </div>
+                ) : apiError ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="w-10 h-10 text-red-500">
+                      <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 14h-2v-2h2v2Zm0-4h-2V6h2v6Z"/>
+                    </svg>
+                    <p className="text-sm text-red-600 font-medium">Generation failed.</p>
+                  </div>
+                ) : (
+                  <Play className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                 )}
               </div>
             ) : (
@@ -4434,8 +4519,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             )}
           </Card>
 
-          <div className="space-y-4">
-            <Slider
+          {!widgetHtml && (
+            <div className="space-y-4">
+              <Slider
               value={progress}
               onValueChange={(val) => {
                 setProgress(val);
@@ -4630,9 +4716,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 </div>
               </div>
             </div>
-            {/* Removed "Open Quiz" button; link already shown in chat messages */}
-            {/* Quiz error panel removed per request; quiz errors surface in chat/toast instead */}
-          </div>
+              {/* Removed "Open Quiz" button; link already shown in chat messages */}
+              {/* Quiz error panel removed per request; quiz errors surface in chat/toast instead */}
+            </div>
+          )}
         </div>
       </div>
       {settingsOpen && (
