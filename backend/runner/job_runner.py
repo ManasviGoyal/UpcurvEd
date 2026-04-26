@@ -372,8 +372,6 @@ def run_job_from_code(
                 final_vtt.write_text(vtt_text, encoding="utf-8")
             except Exception as e:
                 # Log but don't fail the whole job if VTT conversion fails
-                import sys
-
                 print(f"Warning: VTT conversion failed: {e}", file=sys.stderr)
 
         return {
