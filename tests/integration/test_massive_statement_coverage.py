@@ -160,7 +160,7 @@ class TestLLMClientsIntegration:
     def test_llm_all_combinations(self, client):
         """Test LLM with all provider/model combinations."""
         combinations = [
-            ("claude", "claude-3-5-sonnet-latest"),
+            ("claude", "claude-sonnet-4-6"),
             ("claude", "claude-3-opus"),
             ("gemini", "gemini-2.5-pro"),
             ("gemini", "gemini-2.0-flash"),

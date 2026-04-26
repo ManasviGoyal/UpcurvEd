@@ -65,7 +65,7 @@ class TestLLMClientsIntegration:
                 "prompt": "Draw circle",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
         )
         assert r.status_code in [200, 500]

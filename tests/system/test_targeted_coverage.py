@@ -30,7 +30,7 @@ class TestGraphE2E:
                 "prompt": "Create an educational animation explaining derivatives",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
                 "temperature": 0.7,
                 "chatId": "session-001",
             },
@@ -83,7 +83,7 @@ class TestLLMClientsE2E:
                 "prompt": "Create an animation showing sorting algorithms in action",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
         )
         assert r.status_code in [200, 500]

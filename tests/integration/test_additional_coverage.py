@@ -28,7 +28,7 @@ class TestAPIMainExtensive:
                 "prompt": "Variation A",
                 "keys": {"claude": "k1"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
                 "temperature": 0.5,
             },
         )

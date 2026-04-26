@@ -216,7 +216,7 @@ class TestGraphWoRagRetryE2E:
                 "prompt": "Create animation without RAG: visualize sorting algorithms",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
         )
         assert r.status_code in [200, 500]

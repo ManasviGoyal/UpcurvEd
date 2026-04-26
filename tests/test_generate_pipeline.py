@@ -69,7 +69,7 @@ def test_generate_pipeline_happy_path(monkeypatch):
             "gemini": "",
         },  # no real keys needed due to monkeypatch
         "provider": "claude",
-        "model": "claude-3-5-sonnet-latest",
+        "model": "claude-sonnet-4-6",
     }
 
     # Global mock in conftest.py handles auth

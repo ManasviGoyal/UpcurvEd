@@ -87,6 +87,31 @@ The RAG system consists of three coordinated components:
 ---
 
 ## Quick Start
+
+### NPM Setup (Maintainers)
+
+Run these once from repo root:
+
+```bash
+npm install
+npm --prefix frontend install
+```
+
+Use these npm scripts during development/release:
+
+```bash
+# Run desktop app in dev mode
+npm run desktop:dev
+
+# Build frontend for desktop mode
+npm run desktop:build:frontend
+
+# Build installers
+npm run desktop:dist:win
+npm run desktop:dist:mac:x64
+npm run desktop:dist:mac:arm64
+```
+
 ### Desktop Start (Recommended)
 
 ```bash
@@ -115,6 +140,16 @@ npm run desktop:dist:mac:arm64
 ```
 
 Installer artifacts are generated in `release/`.
+
+### End User Steps (No Build/Setup)
+
+For end users, no npm commands are required.
+
+1. Go to the landing page.
+2. Click **Download for Windows** or **Download for macOS**.
+3. Run the downloaded installer (`.exe` or `.dmg`).
+4. Open the installed UpcurvEd app.
+5. Use the app locally (the desktop runtime starts required local services automatically).
 
 ### Containerized Start (Optional Web Stack)
 

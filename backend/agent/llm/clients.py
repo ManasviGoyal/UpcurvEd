@@ -169,7 +169,7 @@ def call_llm(
     Recommended: 0.2 for code, 0.4-0.5 for quizzes, 0.5-0.7 for creative content.
     """
     if provider == "claude":
-        model = model or "claude-3-5-sonnet-latest"
+        model = model or "claude-sonnet-4-6"
         return call_claude(
             api_key=api_key, model=model, system=system, user=user, temperature=temperature
         )

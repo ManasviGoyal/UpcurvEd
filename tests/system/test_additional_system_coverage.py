@@ -26,7 +26,7 @@ class TestSystemCoverageBoost:
                 "prompt": "Create a mathematical animation showing the Pythagorean theorem",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
                 "temperature": 0.7,
                 "chatId": "session-001",
             },

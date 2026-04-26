@@ -238,7 +238,7 @@ class TestAPIMainMassiveE2E:
             {
                 "prompt": "Create animation explaining derivatives",
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
                 "temperature": 0.7,
                 "chatId": "session-001",
             },
@@ -381,7 +381,7 @@ class TestLLMClientsE2E:
     def test_llm_complete_workflows(self, client):
         """Complete LLM workflows with all providers and models."""
         workflows = [
-            ("claude", "claude-3-5-sonnet-latest", "generate"),
+            ("claude", "claude-sonnet-4-6", "generate"),
             ("claude", "claude-3-opus", "quiz"),
             ("gemini", "gemini-2.5-pro", "podcast"),
             ("gemini", "gemini-2.0-flash", "generate"),
@@ -437,7 +437,7 @@ class TestGraphWoRagRetryE2E:
             {
                 "prompt": "No RAG workflow with Claude Sonnet",
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
             {
                 "prompt": "No RAG workflow with Gemini Pro",

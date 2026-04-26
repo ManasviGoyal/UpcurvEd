@@ -406,7 +406,7 @@ def _generate_quiz_json_with_call_llm(
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
     # For Gemini, let the unified client choose its preferred default (gemini-2.5-pro).
     # For Claude, keep a sensible default.
-    use_model = model or ("claude-3-5-sonnet-latest" if prov == "claude" else None)
+    use_model = model or ("claude-sonnet-4-6" if prov == "claude" else None)
     user_prompt = _quiz_prompt(prompt, num_questions, difficulty, context)
     # Add a strict system instruction to force JSON-only output
     strict_system = (

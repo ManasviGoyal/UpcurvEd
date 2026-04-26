@@ -45,7 +45,7 @@ export interface ApiKeys {
   gemini: string;
   claude: string;
   provider?: Provider;   // optional UI selection; "" -> auto by available key
-  model?: string;        // optional model id, e.g. "claude-3-5-sonnet-latest"
+  model?: string;        // optional model id, e.g. "claude-sonnet-4-6"
 }
 
 export type ColorTheme = 'blue' | 'rose' | 'green' | 'orange';

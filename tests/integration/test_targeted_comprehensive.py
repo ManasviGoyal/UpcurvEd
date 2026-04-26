@@ -73,7 +73,7 @@ class TestLLMClientsIntegration:
                 "prompt": "Test 1",
                 "keys": {"claude": "k"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
             {
                 "prompt": "Test 2",

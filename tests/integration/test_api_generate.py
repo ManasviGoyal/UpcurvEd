@@ -139,11 +139,11 @@ class TestGenerateEndpoint:
                 "prompt": "Test",
                 "keys": {"claude": "key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
         )
         assert response.status_code == 200
-        assert captured_kwargs.get("model") == "claude-3-5-sonnet-latest"
+        assert captured_kwargs.get("model") == "claude-sonnet-4-6"
 
     def test_generate_infers_provider_from_keys(self, client, mock_auth, monkeypatch):
         """Generate should infer provider if not specified."""
@@ -250,4 +250,4 @@ class TestGenerateEndpoint:
             },
         )
         assert response.status_code == 200
-        assert captured_kwargs.get("model") == "claude-3-5-sonnet-latest"
+        assert captured_kwargs.get("model") == "claude-sonnet-4-6"

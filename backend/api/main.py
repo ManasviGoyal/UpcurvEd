@@ -307,7 +307,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
     if not model and provider == "gemini":
         model = "gemini-2.5-pro"
     if not model and provider == "claude":
-        model = "claude-3-5-sonnet-latest"
+        model = "claude-sonnet-4-6"
     logger.info("/generate called provider=%s model=%s", provider, model)
 
     # returns: code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id
@@ -659,7 +659,7 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
     if not model and provider == "gemini":
         model = "gemini-2.5-pro"
     if not model and provider == "claude":
-        model = "claude-3-5-sonnet-latest"
+        model = "claude-sonnet-4-6"
     logger.info("/edit using provider=%s model=%s", provider, model)
 
     key = body.keys.get(provider) if provider else None
@@ -905,7 +905,7 @@ def quiz_embedded(body: QuizIn):
         if not model and provider == "gemini":
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
-            model = "claude-3-5-sonnet-latest"
+            model = "claude-sonnet-4-6"
         logger.info("/quiz/embedded called provider=%s model=%s", provider, model)
         quiz = generate_quiz_embedded(
             prompt=body.prompt,
@@ -949,7 +949,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
         if not model and provider == "gemini":
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
-            model = "claude-3-5-sonnet-latest"
+            model = "claude-sonnet-4-6"
 
         # Optional scene code as context
         context = body.get("sceneCode")
@@ -1005,7 +1005,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
         if not model and provider == "gemini":
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
-            model = "claude-3-5-sonnet-latest"
+            model = "claude-sonnet-4-6"
         logger.info("/podcast called provider=%s model=%s", provider, model)
         result = generate_podcast(
             prompt=body.prompt,

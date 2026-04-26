@@ -37,7 +37,7 @@ class TestGraphWoRagRetryE2E:
                 "prompt": "Create animation explaining binary search without RAG",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
                 "chatId": "session-rag-001",
             },
         )
@@ -111,7 +111,7 @@ class TestLLMClientsE2E:
                 ),
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-3-5-sonnet-latest",
+                "model": "claude-sonnet-4-6",
             },
         )
         assert r.status_code in [200, 500]
