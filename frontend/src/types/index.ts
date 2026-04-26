@@ -1,41 +1,41 @@
 // frontend/src/types/index.ts
 export interface MediaAttachment {
-  type: 'video' | 'audio';
-  url: string;
+  type: 'video' | 'audio' | 'widget';
+  url?: string;                    // optional — widgets have no URL
   subtitleUrl?: string;
   title?: string;
   artifactId?: string;
-  gcsPath?: string; // path inside bucket to allow refresh of signed URL
-  sceneCode?: string; // scene.py code for video editing
-  scriptGcsPath?: string; // GCS path to podcast script for persistent fallback
+  gcsPath?: string;
+  sceneCode?: string;
+  scriptGcsPath?: string;
+  widgetCode?: string;             // full HTML document for sandboxed iframe
 }
 
 export interface Message {
   role: 'user' | 'bot';
   content: string;
   media?: MediaAttachment;
-  // Optional server metadata for persistence and pagination
-  createdAt?: number;        // ms epoch
-  messageId?: string;        // server message_id
+  createdAt?: number;
+  messageId?: string;
 }
 
 export interface Chat {
-  id: string | number; // Firestore IDs are strings; keep number for legacy local items
+  id: string | number;
   name: string;
   messages: Message[];
-  sessionId?: string;   // client-generated unless returned by backend
-  shareable?: boolean;  // whether chat is shareable
-  share_token?: string; // share token for public access
-  updatedAt?: number;   // timestamp in milliseconds
-  model?: string;       // model used for this chat (stored in chat document)
+  sessionId?: string;
+  shareable?: boolean;
+  share_token?: string;
+  updatedAt?: number;
+  model?: string;
 }
 
 export interface User {
   name: string;
   email: string;
-  password?: string; // optional when using Google Sign-In
-  uid?: string;      // Firebase UID
-  idToken?: string;  // Firebase ID token (ephemeral)
+  password?: string;
+  uid?: string;
+  idToken?: string;
   chats: Chat[];
 }
 
@@ -44,8 +44,8 @@ export type Provider = 'claude' | 'gemini' | '';
 export interface ApiKeys {
   gemini: string;
   claude: string;
-  provider?: Provider;   // optional UI selection; "" -> auto by available key
-  model?: string;        // optional model id, e.g. "claude-sonnet-4-6"
+  provider?: Provider;
+  model?: string;
 }
 
 export type ColorTheme = 'blue' | 'rose' | 'green' | 'orange';

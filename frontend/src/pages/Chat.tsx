@@ -45,6 +45,7 @@ import {
   Reply,
   Pencil,
   Brain,
+  Zap,
 } from "lucide-react";
 import type { User, Chat, ColorTheme, Theme, ApiKeys } from "@/types";
 import {
@@ -60,6 +61,7 @@ import {
   apiToggleShare,
   apiDeleteAccount,
   apiQuiz,
+  apiWidget,
   apiUrl,
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -175,6 +177,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const podcastProgressTimer = useRef<number | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [podcastLoading, setPodcastLoading] = useState(false);
+  const [widgetLoading, setWidgetLoading] = useState(false);
   // Embedded quiz runtime state per chat, anchored to a specific messageId
   // quizzesByChat[chatId][messageId] => QuizRuntime
   interface QuizData { title: string; description?: string; questions: { prompt: string; options: string[]; correctIndex: number }[] }
@@ -194,7 +197,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   );
 
   // Track typing state per chat (whether assistant is currently generating)
-  const isTyping = (busy || podcastLoading || quizLoading) && activeChatId !== null;
+  const isTyping = (busy || podcastLoading || quizLoading || widgetLoading) && activeChatId !== null;
 
   // Copy message to clipboard state
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -219,10 +222,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
 
   const [vttUrl, setVttUrl] = useState<string | null>(null); // object URL for converted WebVTT captions
-  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio' } | null>(null);
+  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget' } | null>(null);
   const videoAbortRef = useRef<AbortController | null>(null);
   const quizAbortRef = useRef<AbortController | null>(null);
   const podcastAbortRef = useRef<AbortController | null>(null);
+  const widgetAbortRef = useRef<AbortController | null>(null);
   const currentVideoJobId = useRef<string | null>(null);
   // Cache messages per chat id to avoid flicker during CURRENT SESSION only
   // DO NOT persist across refreshes - Firestore is the single source of truth
@@ -539,7 +543,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               const existingIdx = chats.findIndex(c => c.id === urlId);
               const msgs = (chatDetail.messages || []).map((m: any) => {
                 const media = m.media ? {
-                  type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video',
+                  type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
                   url: m.media.url as string | undefined,
                   subtitleUrl: m.media.subtitleUrl as string | undefined,
                   artifactId: m.media.artifactId as string | undefined,
@@ -1231,7 +1235,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }, [activeChatId, user.email]);
 
   const handleNewChat = () => {
-    if (busy || podcastLoading || quizLoading) {
+    if (busy || podcastLoading || quizLoading || widgetLoading) {
       setPendingChatSwitch(NEW_CHAT_SENTINEL);
       setShowSwitchWarning(true);
       return;
@@ -1276,10 +1280,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     try { videoAbortRef.current?.abort(); } catch {}
     try { podcastAbortRef.current?.abort(); } catch {}
     try { quizAbortRef.current?.abort(); } catch {}
+    try { widgetAbortRef.current?.abort(); } catch {}
     // Reset loading flags; progress bars will settle via existing effects
     setBusy(false);
     setPodcastLoading(false);
     setQuizLoading(false);
+    setWidgetLoading(false);
   };
 
   const confirmChatSwitch = () => {
@@ -1577,6 +1583,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             title: media.title,
             gcsPath: media.gcsPath,
             sceneCode: media.sceneCode,  // Include sceneCode for video editing
+            widgetCode: media.widgetCode,        // BUG FIX: persist widget HTML
           };
         }
         // Persist quiz data if present in extras
@@ -1930,6 +1937,78 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } finally {
       setQuizLoading(false);
       quizAbortRef.current = null;
+    }
+  }
+
+  async function generateWidgetFromPrompt() {
+    // Cancel toggle if already loading
+    if (widgetLoading && widgetAbortRef.current) {
+      widgetAbortRef.current.abort();
+      return;
+    }
+
+    const prompt = query.trim();
+    if (!prompt) {
+      toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
+      return;
+    }
+    if (!ensureLlmKey("quiz")) return; // reuse key check
+
+    setWidgetLoading(true);
+    let persistedId: string | undefined;
+
+    try {
+      persistedId = await ensurePersistedActiveChat(prompt);
+      const finalChatId = persistedId || activeChatId;
+      if (!finalChatId) {
+        toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+        return;
+      }
+      setActiveChatId(finalChatId);
+
+      // Add user message first
+      await processAndAddMessage(prompt, true, undefined, persistedId);
+      setQuery("");
+
+      const safe: ApiKeys = {
+        claude: apiKeys?.claude || "",
+        gemini: apiKeys?.gemini || "",
+        provider: apiKeys?.provider || "",
+        model: apiKeys?.model || "",
+      };
+
+      const controller = new AbortController();
+      widgetAbortRef.current = controller;
+
+      const data = await apiWidget({
+        prompt,
+        provider: safe.provider || undefined,
+        model: safe.model || undefined,
+        keys: { claude: safe.claude, gemini: safe.gemini },
+        chatId: String(finalChatId),
+      }, controller.signal);
+
+      if (data?.status === "ok" && data?.widget_html) {
+        // Store widget HTML in media attachment (no URL, no GCS — fully inline)
+        const mediaAttachment: import('@/types').MediaAttachment = {
+          type: 'widget',
+          widgetCode: data.widget_html,
+          title: `Widget: ${prompt.slice(0, 50)}`,
+        };
+        await processAndAddMessage("✅ Interactive widget generated.", false, mediaAttachment, String(finalChatId));
+      } else {
+        await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        await processAndAddMessage("⏹️ Canceled widget generation.", false, undefined, persistedId);
+      } else {
+        await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
+        toast({ title: "Widget failed", description: err?.message || "Unknown error", duration: 4000 });
+      }
+    } finally {
+      setWidgetLoading(false);
+      widgetAbortRef.current = null;
     }
   }
 
@@ -3081,13 +3160,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const msgs = page?.messages || [];
         const mapped = (msgs || []).map((m: any) => {
           const media = m.media ? {
-            type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video',
+            type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
             url: m.media.url as string | undefined,
             subtitleUrl: m.media.subtitleUrl as string | undefined,
             artifactId: m.media.artifactId as string | undefined,
             gcsPath: m.media.gcsPath as string | undefined,
             title: m.media.title as string | undefined,
             sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
+            widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
           } : undefined;
           // Ensure all messages have createdAt for proper ordering
           const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -3304,7 +3384,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const older = page?.messages || [];
       const mapped = (older || []).map((m: any) => {
         const media = m.media ? {
-          type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video',
+          type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
           url: m.media.url as string | undefined,
           subtitleUrl: m.media.subtitleUrl as string | undefined,
           artifactId: m.media.artifactId as string | undefined,
@@ -3656,6 +3736,33 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   // (Removed duplicate captions toggle effect to avoid thrash/reset)
 
+  interface WidgetPlayerProps {
+    widgetCode: string;
+    title?: string;
+  }
+
+  // Sandboxed iframe widget player — no scripts can escape the sandbox
+  const WidgetPlayer: React.FC<WidgetPlayerProps> = ({ widgetCode, title }) => {
+    return (
+      <div className="mt-3 rounded-lg overflow-hidden border border-border">
+        {title && (
+          <div className="px-3 py-1.5 bg-secondary text-secondary-foreground text-xs font-medium flex items-center gap-1.5">
+            <Zap className="w-3 h-3" />
+            {title}
+          </div>
+        )}
+        <iframe
+          srcDoc={widgetCode}
+          sandbox="allow-scripts"
+          className="w-full border-0"
+          style={{ height: "460px" }}
+          title={title || "Interactive Widget"}
+          loading="lazy"
+        />
+      </div>
+    );
+  };
+
   return (
     <div className="h-screen flex bg-background">
       <AlertDialog
@@ -3691,7 +3798,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setActiveChatId={(id) => {
       if (id === activeChatId) return;
       // If a generation is active, require confirmation before switching
-      if (busy || podcastLoading || quizLoading) {
+      if (busy || podcastLoading || quizLoading || widgetLoading) {
         setPendingChatSwitch(id);
         setShowSwitchWarning(true);
         return;
@@ -3849,6 +3956,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             </div>
                           )}
                           {/* Copy button - appears on hover */}
+                          {msg.media && msg.media.type === 'widget' && msg.media.widgetCode && (
+                            <div className="mt-3">
+                              <WidgetPlayer
+                                widgetCode={msg.media.widgetCode}
+                                title={msg.media.title}
+                              />
+                            </div>
+                          )}
                           {msg.content && (
                             <Button
                               variant="ghost"
@@ -3879,7 +3994,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 void handleQuizMediaDirect(msg);
                               }}
                               title="Generate quiz from podcast"
-                              disabled={busy || podcastLoading || quizLoading}
+                              disabled={busy || podcastLoading || quizLoading || widgetLoading}
                             >
                               <Brain className="w-4 h-4" />
                             </Button>
@@ -3899,8 +4014,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                   // Generate quiz directly without entering quiz mode
                                   void handleQuizMediaDirect(msg);
                                 }}
-                                title="Generate quiz from video"
-                                disabled={busy || podcastLoading || quizLoading}
+                                  title="Generate quiz from video"
+                                  disabled={busy || podcastLoading || quizLoading || widgetLoading}
                               >
                                 <Brain className="w-4 h-4" />
                               </Button>
@@ -3922,7 +4037,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                   textareaRef.current?.focus();
                                 }}
                                 title="Edit this video"
-                                disabled={busy || podcastLoading || quizLoading}
+                                disabled={busy || podcastLoading || quizLoading || widgetLoading}
                               >
                                 <Pencil className="w-4 h-4" />
                               </Button>
@@ -4144,8 +4259,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       variant="default"
                       className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
                       onClick={generatePodcastFromPrompt}
-                      title={podcastLoading ? "Stop podcast" : (busy || quizLoading ? "Wait for current generation" : "Generate podcast")}
-                      disabled={(!podcastLoading && (busy || quizLoading))}
+                      title={podcastLoading ? "Stop podcast" : (busy || quizLoading || widgetLoading ? "Wait for current generation" : "Generate podcast")}
+                      disabled={(!podcastLoading && (busy || quizLoading || widgetLoading))}
                     >
                       {podcastLoading ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                     </Button>
@@ -4154,8 +4269,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       variant="default"
                       className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
                       onClick={() => void generateVideoFromPrompt()}
-                      title={busy ? "Stop video" : (podcastLoading || quizLoading ? "Wait for current generation" : "Generate video")}
-                      disabled={(!busy && (podcastLoading || quizLoading))}
+                      title={busy ? "Stop video" : (podcastLoading || quizLoading || widgetLoading ? "Wait for current generation" : "Generate video")}
+                      disabled={(!busy && (podcastLoading || quizLoading || widgetLoading))}
                     >
                       {busy ? <Square className="w-5 h-5" /> : <VideoIcon className="w-5 h-5" />}
                     </Button>
@@ -4164,10 +4279,20 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       variant="default"
                       className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
                       onClick={generateQuiz}
-                      title={quizLoading ? "Stop quiz" : (busy || podcastLoading ? "Wait for current generation" : "Generate quiz")}
-                      disabled={(!quizLoading && (busy || podcastLoading))}
+                      title={quizLoading ? "Stop quiz" : (busy || podcastLoading || widgetLoading ? "Wait for current generation" : "Generate quiz")}
+                      disabled={(!quizLoading && (busy || podcastLoading || widgetLoading))}
                     >
                       {quizLoading ? <Square className="w-5 h-5" /> : <Brain className="w-5 h-5" />}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="default"
+                      className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
+                      onClick={generateWidgetFromPrompt}
+                      title={widgetLoading ? "Stop widget" : (busy || podcastLoading || quizLoading ? "Wait for current generation" : "Generate interactive widget")}
+                      disabled={(!widgetLoading && (busy || podcastLoading || quizLoading))}
+                    >
+                      {widgetLoading ? <Square className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
                     </Button>
                   </>
                 )}

@@ -188,3 +188,26 @@ export async function apiQuiz(body: {
   if (!res.ok) throw new Error(`quiz generation failed: ${res.status}`);
   return res.json();
 }
+
+// Generate an interactive HTML widget for a topic
+export async function apiWidget(body: {
+  prompt: string;
+  provider?: string;
+  model?: string;
+  keys?: Record<string, string>;
+  chatId?: string;
+}, signal?: AbortSignal) {
+  const res = await apiFetch('/widget', {
+    method: 'POST',
+    body: JSON.stringify({
+      prompt: body.prompt,
+      provider: body.provider,
+      model: body.model,
+      keys: body.keys || {},
+      chatId: body.chatId,
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`widget generation failed: ${res.status}`);
+  return res.json(); // { ok, status, widget_html }
+}
