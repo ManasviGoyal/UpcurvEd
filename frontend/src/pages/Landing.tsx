@@ -91,7 +91,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               Create Educational Content with Natural Language
             </p>
             <p className={`text-lg ${textTertiary} max-w-2xl mx-auto`}>
-              Transform concepts into stunning animations, podcasts, quizzes, and interactive visuals.
+              Transform concepts into animations, podcasts, quizzes, and interactive visuals.
             </p>
           </div>
 
