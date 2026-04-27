@@ -24,16 +24,16 @@ jobs:
         include:
           - label: windows-x64
             os: windows-latest
-            dist_command: npm run desktop:dist:win
+            dist_command: npm run desktop:dist:win -- --publish never
           - label: macos-x64
             os: macos-13
-            dist_command: npm run desktop:dist:mac:x64
+            dist_command: npm run desktop:dist:mac:x64 -- --publish never
           - label: macos-arm64
             os: macos-14
-            dist_command: npm run desktop:dist:mac:arm64
+            dist_command: npm run desktop:dist:mac:arm64 -- --publish never
           - label: linux-x64
             os: ubuntu-latest
-            dist_command: npm run desktop:dist:linux
+            dist_command: npm run desktop:dist:linux -- --publish never
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
