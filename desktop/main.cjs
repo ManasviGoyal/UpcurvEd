@@ -42,6 +42,8 @@ let staticServer = null;
 let isShuttingDown = false;
 const KEYCHAIN_SERVICE = "UpcurvEdDesktop";
 let keytarErrorLogged = false;
+let backendLogTail = "";
+const BACKEND_LOG_TAIL_MAX = 12000;
 
 function disableKeytarFallback(reason, err) {
   if (!keytarErrorLogged) {
@@ -221,11 +223,26 @@ async function waitForBackendStartup(proc, port, host, timeoutMs) {
   while (Date.now() - started < timeoutMs) {
     if (await isPortOpen(port, host, 500)) return;
     if (proc && proc.exitCode !== null) {
+      const tail = (backendLogTail || "").trim();
+      if (tail) {
+        throw new Error(
+          `Backend process exited early (code=${proc.exitCode}).\n\nRecent backend logs:\n${tail.slice(
+            -5000
+          )}`
+        );
+      }
       throw new Error(`Backend process exited early (code=${proc.exitCode}).`);
     }
     await sleep(250);
   }
   throw new Error(`Backend did not become available at ${host}:${port} in time.`);
+}
+
+function runCapture(command, args, options = {}) {
+  return spawnSync(command, args, {
+    encoding: "utf8",
+    ...options,
+  });
 }
 
 function getPythonCommand() {
@@ -285,11 +302,17 @@ function spawnManagedProcess(command, args, name, options = {}) {
 
   if (child.stdout) {
     child.stdout.on("data", (buf) => {
+      if (name === "backend") {
+        backendLogTail = `${backendLogTail}${String(buf)}`.slice(-BACKEND_LOG_TAIL_MAX);
+      }
       process.stdout.write(`[${name}] ${buf}`);
     });
   }
   if (child.stderr) {
     child.stderr.on("data", (buf) => {
+      if (name === "backend") {
+        backendLogTail = `${backendLogTail}${String(buf)}`.slice(-BACKEND_LOG_TAIL_MAX);
+      }
       process.stderr.write(`[${name}] ${buf}`);
     });
   }
@@ -373,24 +396,40 @@ function startBackend() {
           process.env.PATH || ""
         }`
       : process.env.PATH;
+    const backendEnv = {
+      ...process.env,
+      PATH: backendPath,
+      VIRTUAL_ENV: isUsingBundledPython ? PYTHON_RUNTIME_VENV_DIR : process.env.VIRTUAL_ENV,
+      UPCURVED_FFMPEG_PATH: bundledFfmpeg || process.env.UPCURVED_FFMPEG_PATH,
+      IMAGEIO_FFMPEG_EXE: bundledFfmpeg || process.env.IMAGEIO_FFMPEG_EXE,
+      FFMPEG_BINARY: bundledFfmpeg || process.env.FFMPEG_BINARY,
+      UPCURVED_DISABLE_LATEX: process.env.UPCURVED_DISABLE_LATEX || "1",
+      PYTHONPATH: process.env.PYTHONPATH
+        ? `${BACKEND_ROOT_DIR}${path.delimiter}${process.env.PYTHONPATH}`
+        : BACKEND_ROOT_DIR,
+      APP_MODE: process.env.APP_MODE || "desktop-local",
+      UPCURVED_STORAGE_DIR: process.env.UPCURVED_STORAGE_DIR || storageDir,
+      UPCURVED_DESKTOP_STATE_DIR: process.env.UPCURVED_DESKTOP_STATE_DIR || desktopStateDir,
+    };
 
+    if (isUsingBundledPython) {
+      const preflight = runCapture(
+        python,
+        ["-c", "import sys; import backend.api.main as m; print(sys.version); print('backend_ok', bool(m))"],
+        { cwd: BACKEND_ROOT_DIR, env: backendEnv }
+      );
+      if (preflight.status !== 0) {
+        const details = `${preflight.stdout || ""}\n${preflight.stderr || ""}`.trim();
+        throw new Error(
+          `Bundled backend runtime preflight failed.\n${details || "No Python stderr/stdout captured."}`
+        );
+      }
+    }
+
+    backendLogTail = "";
     backendProcess = spawnManagedProcess(python, args, "backend", {
       cwd: BACKEND_ROOT_DIR,
-      env: {
-        ...process.env,
-        PATH: backendPath,
-        VIRTUAL_ENV: isUsingBundledPython ? PYTHON_RUNTIME_VENV_DIR : process.env.VIRTUAL_ENV,
-        UPCURVED_FFMPEG_PATH: bundledFfmpeg || process.env.UPCURVED_FFMPEG_PATH,
-        IMAGEIO_FFMPEG_EXE: bundledFfmpeg || process.env.IMAGEIO_FFMPEG_EXE,
-        FFMPEG_BINARY: bundledFfmpeg || process.env.FFMPEG_BINARY,
-        UPCURVED_DISABLE_LATEX: process.env.UPCURVED_DISABLE_LATEX || "1",
-        PYTHONPATH: process.env.PYTHONPATH
-          ? `${BACKEND_ROOT_DIR}${path.delimiter}${process.env.PYTHONPATH}`
-          : BACKEND_ROOT_DIR,
-        APP_MODE: process.env.APP_MODE || "desktop-local",
-        UPCURVED_STORAGE_DIR: process.env.UPCURVED_STORAGE_DIR || storageDir,
-        UPCURVED_DESKTOP_STATE_DIR: process.env.UPCURVED_DESKTOP_STATE_DIR || desktopStateDir,
-      },
+      env: backendEnv,
     });
 
     await waitForBackendStartup(backendProcess, API_PORT, API_HOST, 90000);

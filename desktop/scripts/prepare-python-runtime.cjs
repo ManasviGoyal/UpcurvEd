@@ -104,7 +104,9 @@ function main() {
   }
 
   ensureCleanRuntimeDir();
-  runOrThrow(command, [...prefixArgs, "-m", "venv", VENV_DIR], { cwd: ROOT_DIR });
+  // Use copies (not symlinks) so macOS codesign won't fail on bundled runtime links
+  // that point outside the app bundle.
+  runOrThrow(command, [...prefixArgs, "-m", "venv", "--copies", VENV_DIR], { cwd: ROOT_DIR });
 
   const venvPython = getVenvPythonPath();
   if (!fs.existsSync(venvPython)) {
