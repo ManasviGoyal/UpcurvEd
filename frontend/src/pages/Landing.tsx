@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { trackEvent } from "@/lib/analytics";
 
-export default function Landing({ setView }: { setView?: (view: string) => void }) {
+export default function Landing({ setView: _setView }: { setView?: (view: string) => void }) {
   const [isDark, setIsDark] = useState(true);
   const [mutedStates, setMutedStates] = useState([true, true, true]);
   const windowsDownloadUrl = (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
@@ -155,56 +155,46 @@ export default function Landing({ setView }: { setView?: (view: string) => void 
             </div>
           </div>
 
-          {/* CTA Section - Minimal Create Button */}
-          <div className="flex flex-col items-center gap-5">
-            <a 
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                trackEvent("create_click", { source: "landing" });
-                if (setView) setView('login');
-              }}
-              className="group relative bg-white dark:bg-slate-800/50 hover:bg-gradient-to-r hover:from-teal-300 hover:to-purple-400 border-2 border-teal-500 rounded-2xl shadow-lg hover:shadow-2xl hover:shadow-purple-400/50 transition-all duration-300 hover:scale-105 overflow-hidden cursor-pointer"
-              style={{
-                backgroundColor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'white'
-              }}
-            >
-              <div className="absolute inset-0 bg-gradient-to-r from-teal-300 to-purple-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-              
-              <div className="relative px-12 py-6 flex items-center justify-center gap-4">
-                <span className={`text-2xl font-bold ${textPrimary} group-hover:text-slate-900 transition-colors duration-300`}>
-                  Create
-                </span>
-              </div>
-            </a>
-
-            <div className="flex flex-wrap items-center justify-center gap-3">
+          {/* Desktop Download Section */}
+          <div className="flex flex-col items-center gap-4">
+            <h3 className={`text-lg md:text-xl font-semibold ${textPrimary}`}>
+              Download UpcurvEd Desktop
+            </h3>
+            <div className="flex flex-wrap items-center justify-center gap-4">
               <button
                 type="button"
                 onClick={() => handleDownloadClick("windows", windowsDownloadUrl)}
-                className="px-4 py-2 rounded-lg border border-teal-500 text-sm font-semibold hover:bg-teal-500 hover:text-white transition-colors"
+                className="min-w-[240px] px-6 py-4 rounded-xl border border-teal-500 text-base font-semibold hover:bg-teal-500 hover:text-white transition-colors inline-flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={!windowsDownloadUrl}
                 title={windowsDownloadUrl ? "Download for Windows" : "Windows download URL not configured"}
               >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
+                  <path fill="currentColor" d="M2 3.5l9.5-1.3v9H2v-7.7zm10.8-1.5L22 0.7v10.5h-9.2V2zm-10.8 10.5h9.5v9L2 20.2v-7.7zm10.8 0H22V23.3l-9.2-1.3v-9.5z" />
+                </svg>
                 Download for Windows
               </button>
               <button
                 type="button"
                 onClick={() => handleDownloadClick("mac", macDownloadUrl)}
-                className="px-4 py-2 rounded-lg border border-purple-500 text-sm font-semibold hover:bg-purple-500 hover:text-white transition-colors"
+                className="min-w-[240px] px-6 py-4 rounded-xl border border-purple-500 text-base font-semibold hover:bg-purple-500 hover:text-white transition-colors inline-flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={!macDownloadUrl}
                 title={macDownloadUrl ? "Download for macOS" : "macOS download URL not configured"}
               >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
+                  <path fill="currentColor" d="M16.4 12.7c0-2 1.6-3 1.7-3.1-1-1.5-2.7-1.7-3.2-1.7-1.3-.1-2.5.7-3.2.7-.7 0-1.7-.7-2.8-.7-1.4 0-2.8.8-3.5 2-.8 1.4-1 3.5-.2 5.3.4.9.9 2 1.8 2 .8 0 1.1-.5 2.1-.5s1.2.5 2.1.5c.9 0 1.4-.8 1.8-1.6.5-.9.7-1.8.7-1.8-.1 0-1.3-.5-1.3-2.1zm-2.2-6c.3-.4.6-1 .5-1.6-.5 0-1.2.3-1.6.8-.3.4-.6 1-.5 1.6.6 0 1.2-.3 1.6-.8z"/>
+                </svg>
                 Download for macOS
               </button>
               <button
                 type="button"
                 onClick={() => handleDownloadClick("linux", linuxDownloadUrl)}
-                className="px-4 py-2 rounded-lg border border-blue-500 text-sm font-semibold hover:bg-blue-500 hover:text-white transition-colors"
+                className="min-w-[240px] px-6 py-4 rounded-xl border border-blue-500 text-base font-semibold hover:bg-blue-500 hover:text-white transition-colors inline-flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={!linuxDownloadUrl}
                 title={linuxDownloadUrl ? "Download for Linux" : "Linux download URL not configured"}
               >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
+                  <path fill="currentColor" d="M12 2.2c-2.1 0-3.8 1.7-3.8 3.8v2.6c-1.5.8-2.5 2.4-2.5 4.2 0 1.7.9 3.2 2.3 4l-.8 2.4h2.3l.6-1.9c.6.1 1.2.2 1.9.2s1.3-.1 1.9-.2l.6 1.9h2.3l-.8-2.4c1.4-.8 2.3-2.3 2.3-4 0-1.8-1-3.4-2.5-4.2V6c0-2.1-1.7-3.8-3.8-3.8zm-1.7 3.7c.4 0 .7.3.7.7s-.3.7-.7.7-.7-.3-.7-.7.3-.7.7-.7zm3.4 0c.4 0 .7.3.7.7s-.3.7-.7.7-.7-.3-.7-.7.3-.7.7-.7zm-1.7 4.6c1.6 0 2.9 1 2.9 2.3S13.6 15 12 15s-2.9-1-2.9-2.2 1.3-2.3 2.9-2.3z"/>
+                </svg>
                 Download for Linux
               </button>
             </div>
