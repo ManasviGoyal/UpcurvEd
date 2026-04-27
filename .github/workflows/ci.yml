@@ -190,7 +190,6 @@ jobs:
     name: Test Summary
     runs-on: ubuntu-latest
     needs: [lint-and-format, unit-tests, integration-tests, system-tests]
-    if: always()
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

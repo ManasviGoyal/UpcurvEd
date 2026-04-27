@@ -115,6 +115,10 @@ function main() {
     cwd: ROOT_DIR,
   });
   runOrThrow(venvPython, ["-m", "pip", "install", "-r", REQUIREMENTS_FILE], { cwd: ROOT_DIR });
+  // Ensure pkg_resources remains available for manim plugins (manim-voiceover).
+  runOrThrow(venvPython, ["-m", "pip", "install", "--upgrade", "setuptools<81"], {
+    cwd: ROOT_DIR,
+  });
   runOrThrow(venvPython, ["-m", "manim", "--version"], { cwd: ROOT_DIR });
 
   const ffmpegSource = runAndCaptureOrThrow(
