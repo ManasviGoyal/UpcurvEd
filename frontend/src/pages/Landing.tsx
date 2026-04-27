@@ -7,6 +7,8 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
   const windowsDownloadUrl = (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
   const macDownloadUrl = (import.meta.env.VITE_MAC_DOWNLOAD_URL as string | undefined) || "";
   const linuxDownloadUrl = (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) || "";
+  const appleLogo = "https://cdn.simpleicons.org/apple/FFFFFF";
+  const linuxLogo = "https://cdn.simpleicons.org/linux/FFFFFF";
 
   useEffect(() => {
     // Determine theme based on time of day
@@ -180,9 +182,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                 disabled={!macDownloadUrl}
                 title={macDownloadUrl ? "Download for macOS" : "macOS download URL not configured"}
               >
-                <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
-                  <path fill="currentColor" d="M16.4 12.7c0-2 1.6-3 1.7-3.1-1-1.5-2.7-1.7-3.2-1.7-1.3-.1-2.5.7-3.2.7-.7 0-1.7-.7-2.8-.7-1.4 0-2.8.8-3.5 2-.8 1.4-1 3.5-.2 5.3.4.9.9 2 1.8 2 .8 0 1.1-.5 2.1-.5s1.2.5 2.1.5c.9 0 1.4-.8 1.8-1.6.5-.9.7-1.8.7-1.8-.1 0-1.3-.5-1.3-2.1zm-2.2-6c.3-.4.6-1 .5-1.6-.5 0-1.2.3-1.6.8-.3.4-.6 1-.5 1.6.6 0 1.2-.3 1.6-.8z"/>
-                </svg>
+                <img src={appleLogo} alt="Apple logo" className="w-5 h-5" loading="lazy" />
                 Download for macOS
               </button>
               <button
@@ -192,9 +192,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                 disabled={!linuxDownloadUrl}
                 title={linuxDownloadUrl ? "Download for Linux" : "Linux download URL not configured"}
               >
-                <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
-                  <path fill="currentColor" d="M12 2.2c-2.1 0-3.8 1.7-3.8 3.8v2.6c-1.5.8-2.5 2.4-2.5 4.2 0 1.7.9 3.2 2.3 4l-.8 2.4h2.3l.6-1.9c.6.1 1.2.2 1.9.2s1.3-.1 1.9-.2l.6 1.9h2.3l-.8-2.4c1.4-.8 2.3-2.3 2.3-4 0-1.8-1-3.4-2.5-4.2V6c0-2.1-1.7-3.8-3.8-3.8zm-1.7 3.7c.4 0 .7.3.7.7s-.3.7-.7.7-.7-.3-.7-.7.3-.7.7-.7zm3.4 0c.4 0 .7.3.7.7s-.3.7-.7.7-.7-.3-.7-.7.3-.7.7-.7zm-1.7 4.6c1.6 0 2.9 1 2.9 2.3S13.6 15 12 15s-2.9-1-2.9-2.2 1.3-2.3 2.9-2.3z"/>
-                </svg>
+                <img src={linuxLogo} alt="Linux logo" className="w-5 h-5" loading="lazy" />
                 Download for Linux
               </button>
             </div>
