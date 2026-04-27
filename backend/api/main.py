@@ -1,11 +1,11 @@
 # backend/api/main.py
+import json
 import logging
 import mimetypes
 import os
 import pathlib
 import re
 import time
-import json
 from difflib import SequenceMatcher
 from typing import Literal
 from uuid import uuid4
@@ -20,7 +20,6 @@ from backend.agent.llm.clients import call_llm
 from backend.agent.minigraph import echo_manim_code
 from backend.agent.prompts import EDIT_SYSTEM, build_edit_user_prompt
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
-
 from backend.utils import app_logging  # noqa: F401
 
 logger = logging.getLogger(f"app.{__name__}")
@@ -130,6 +129,18 @@ def _run_to_code(
     return _run_to_code_cloud(
         prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
     ) + (None,)
+
+
+# Public compatibility wrapper used by tests and monkeypatching hooks.
+def run_to_code(
+    prompt: str,
+    provider_keys: dict | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+):
+    return _run_to_code(
+        prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
+    )
 
 
 def _get_db():
@@ -451,12 +462,18 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             model = "claude-sonnet-4-6"
         logger.info("/generate called provider=%s model=%s", provider, model)
 
-        code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id, failure_detail = _run_to_code(
+        run_result = run_to_code(
             prompt=body.prompt,
             provider_keys=body.keys,
             provider=provider,
             model=model,
         )
+        # Backward compatibility with older tests/mocks that return 6 fields.
+        if len(run_result) == 7:
+            code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id, failure_detail = run_result
+        else:
+            code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id = run_result
+            failure_detail = None
 
         if render_ok and video_url:
             gcs_bucket = _get_bucket_name()

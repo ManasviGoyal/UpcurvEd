@@ -8,6 +8,7 @@ For production: Override via Pulumi config (pulumi config set) or environment va
 
 # GCP Project Configuration
 import os
+
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT", "ac215-project-475007")  # Centralized project ID
 GCP_REGION = "us-central1"
 

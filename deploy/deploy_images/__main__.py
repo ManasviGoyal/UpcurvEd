@@ -1,17 +1,17 @@
+import datetime
 import os
+
 import pulumi
 import pulumi_docker_build as docker_build
-from pulumi_gcp import artifactregistry
-from pulumi import CustomTimeouts
-import datetime
-
 from config import (
-    GCP_REGION,
     ARTIFACT_REGISTRY_REPO,
     BACKEND_IMAGE_NAME,
     FRONTEND_IMAGE_NAME,
+    GCP_REGION,
     RAG_IMAGE_NAME,
 )
+from pulumi import CustomTimeouts
+from pulumi_gcp import artifactregistry
 
 # Get absolute paths for build contexts
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -3,8 +3,8 @@
 Generate self-contained interactive HTML widgets for teaching concepts.
 Standalone module, no LangGraph.
 """
-import logging
 import json
+import logging
 import re
 from html import escape
 
