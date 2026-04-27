@@ -11,6 +11,9 @@ interface SettingsPageProps {
   apiKeys: ApiKeys;
   setApiKeys: (keys: ApiKeys) => void;
   asDialog?: boolean; // when true, render without full-page background so it can be used in an overlay
+  onUpdateName?: (name: string) => void;
+  desktopLocal?: boolean;
+  onResetLocalData?: () => void;
 }
 
 const PROVIDER_LABELS: Record<Provider, string> = {
@@ -25,7 +28,17 @@ const PROVIDER_MODELS: Record<Provider, string[]> = {
   "gemini": ["gemini-2.5-pro"],
 };
 
-export const SettingsPage = ({ setView, user, apiKeys, setApiKeys, asDialog }: SettingsPageProps) => {
+export const SettingsPage = ({
+  setView,
+  user,
+  apiKeys,
+  setApiKeys,
+  asDialog,
+  onUpdateName,
+  desktopLocal = false,
+  onResetLocalData,
+}: SettingsPageProps) => {
+  const [displayName, setDisplayName] = useState<string>(user.name || "");
   const [localKeys, setLocalKeys] = useState<ApiKeys>({
     claude: apiKeys.claude || "",
     gemini: apiKeys.gemini || "",
@@ -48,6 +61,10 @@ export const SettingsPage = ({ setView, user, apiKeys, setApiKeys, asDialog }: S
   }, [user.email, apiKeys]);
 
   const handleSave = async () => {
+    const trimmedName = displayName.trim();
+    if (trimmedName && trimmedName !== user.name && onUpdateName) {
+      onUpdateName(trimmedName);
+    }
     setApiKeys(localKeys);
     await persistApiKeysForUser(user.email, localKeys);
     setView("chat");
@@ -65,6 +82,16 @@ export const SettingsPage = ({ setView, user, apiKeys, setApiKeys, asDialog }: S
         <h2 className="text-2xl font-bold mb-6">Settings</h2>
 
         <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Your Name</label>
+            <Input
+              type="text"
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              placeholder="Enter your display name"
+            />
+          </div>
+
           <div>
             <label className="text-sm font-medium">Gemini API Key</label>
             <Input
@@ -119,6 +146,15 @@ export const SettingsPage = ({ setView, user, apiKeys, setApiKeys, asDialog }: S
             <Button onClick={handleSave} className="flex-1">Save</Button>
             <Button onClick={() => setView("chat")} variant="outline" className="flex-1">Cancel</Button>
           </div>
+          {desktopLocal && onResetLocalData && (
+            <Button
+              onClick={onResetLocalData}
+              variant="destructive"
+              className="w-full"
+            >
+              Reset local data
+            </Button>
+          )}
         </div>
       </Card>
     </div>

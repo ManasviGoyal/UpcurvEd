@@ -19,9 +19,9 @@ const APP_DIR = path.resolve(__dirname, "..");
 const BACKEND_ROOT_DIR = IS_PACKAGED
   ? path.join(process.resourcesPath, "app.asar.unpacked")
   : APP_DIR;
-const PYTHON_RUNTIME_VENV_DIR = IS_PACKAGED
-  ? path.join(process.resourcesPath, "python-runtime", "venv")
-  : path.join(APP_DIR, "desktop", "python-runtime", "venv");
+const PYTHON_RUNTIME_PYTHON_DIR = IS_PACKAGED
+  ? path.join(process.resourcesPath, "python-runtime", "python")
+  : path.join(APP_DIR, "desktop", "python-runtime", "python");
 const PYTHON_RUNTIME_BIN_DIR = IS_PACKAGED
   ? path.join(process.resourcesPath, "python-runtime", "bin")
   : path.join(APP_DIR, "desktop", "python-runtime", "bin");
@@ -257,10 +257,10 @@ function getPythonCommand() {
 function getBundledPythonPath() {
   const candidates =
     process.platform === "win32"
-      ? [path.join(PYTHON_RUNTIME_VENV_DIR, "Scripts", "python.exe")]
+      ? [path.join(PYTHON_RUNTIME_PYTHON_DIR, "python.exe")]
       : [
-          path.join(PYTHON_RUNTIME_VENV_DIR, "bin", "python3"),
-          path.join(PYTHON_RUNTIME_VENV_DIR, "bin", "python"),
+          path.join(PYTHON_RUNTIME_PYTHON_DIR, "bin", "python3"),
+          path.join(PYTHON_RUNTIME_PYTHON_DIR, "bin", "python"),
         ];
 
   for (const candidate of candidates) {
@@ -399,7 +399,7 @@ function startBackend() {
     const backendEnv = {
       ...process.env,
       PATH: backendPath,
-      VIRTUAL_ENV: isUsingBundledPython ? PYTHON_RUNTIME_VENV_DIR : process.env.VIRTUAL_ENV,
+      VIRTUAL_ENV: process.env.VIRTUAL_ENV,
       UPCURVED_FFMPEG_PATH: bundledFfmpeg || process.env.UPCURVED_FFMPEG_PATH,
       IMAGEIO_FFMPEG_EXE: bundledFfmpeg || process.env.IMAGEIO_FFMPEG_EXE,
       FFMPEG_BINARY: bundledFfmpeg || process.env.FFMPEG_BINARY,

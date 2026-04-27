@@ -46,6 +46,7 @@ import {
   Pencil,
   Brain,
   Zap,
+  ExternalLink,
 } from "lucide-react";
 import type { User, Chat, ColorTheme, Theme, ApiKeys } from "@/types";
 import {
@@ -227,6 +228,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const [vttUrl, setVttUrl] = useState<string | null>(null); // object URL for converted WebVTT captions
   const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget' } | null>(null);
+  type PersistedMediaSelection = {
+    chatId: string;
+    messageId?: string;
+    type: "video" | "audio" | "widget";
+    url?: string;
+    subtitleUrl?: string;
+    artifactId?: string;
+    gcsPath?: string;
+    widgetCode?: string;
+    title?: string;
+    updatedAt: number;
+  };
   const videoAbortRef = useRef<AbortController | null>(null);
   const quizAbortRef = useRef<AbortController | null>(null);
   const podcastAbortRef = useRef<AbortController | null>(null);
@@ -247,6 +260,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const makeJobId = () =>
     Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+
+  const toPlayableMediaUrl = (raw?: string | null): string | undefined => {
+    if (!raw) return undefined;
+    const value = String(raw).trim();
+    if (!value) return undefined;
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith("blob:")) return value;
+    return apiUrl(value);
+  };
 
   const ensureLlmKey = (action: "video" | "quiz"): boolean => {
     const safe: ApiKeys = {
@@ -319,9 +341,67 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Captions cache keyed by artifactId (preferred) or media URL to keep correct pairs per media
   const captionsCacheRef = useRef<Record<string, { vttUrl?: string; lang?: string; isBlob?: boolean }>>({});
   const currentCaptionKeyRef = useRef<string | null>(null);
+  const mediaSelectionStoreKey = useMemo(
+    () => `app.mediaSelection.${(user.email || "desktop-local-user").toLowerCase()}`,
+    [user.email]
+  );
+  const quizRuntimeStoreKey = useMemo(
+    () => `app.quizRuntime.${(user.email || "desktop-local-user").toLowerCase()}`,
+    [user.email]
+  );
 
   const normalizeMessageContent = (text?: string | null) =>
     (text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  const loadPersistedMediaSelections = (): Record<string, PersistedMediaSelection> => {
+    try {
+      const raw = localStorage.getItem(mediaSelectionStoreKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      return parsed;
+    } catch {
+      return {};
+    }
+  };
+
+  const persistMediaSelection = (selection: PersistedMediaSelection | null) => {
+    if (!activeChatId) return;
+    const chatKey = String(activeChatId);
+    try {
+      const all = loadPersistedMediaSelections();
+      if (!selection) {
+        delete all[chatKey];
+      } else {
+        all[chatKey] = selection;
+      }
+      localStorage.setItem(mediaSelectionStoreKey, JSON.stringify(all));
+    } catch {}
+  };
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(quizRuntimeStoreKey);
+      if (!raw) {
+        setQuizzesByChat({});
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        setQuizzesByChat(parsed);
+      } else {
+        setQuizzesByChat({});
+      }
+    } catch {
+      setQuizzesByChat({});
+    }
+  }, [quizRuntimeStoreKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(quizRuntimeStoreKey, JSON.stringify(quizzesByChat));
+    } catch {}
+  }, [quizRuntimeStoreKey, quizzesByChat]);
 
   const makeMessageKey = (msg: any) => {
     const normalized = normalizeMessageContent(msg?.content);
@@ -494,6 +574,127 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
     } catch {}
   };
+
+  const openMediaFromMessage = async (
+    message: any,
+    opts?: { persist?: boolean; skipSignedRefresh?: boolean; autoplay?: boolean }
+  ) => {
+    const media = message?.media;
+    if (!media) return;
+    const persist = opts?.persist !== false;
+    const skipSignedRefresh = opts?.skipSignedRefresh === true;
+    const autoplay = opts?.autoplay === true;
+    const chatKey = activeChatId != null ? String(activeChatId) : null;
+    const messageId = message?.messageId ? String(message.messageId) : undefined;
+
+    if (media.type === "widget" && media.widgetCode) {
+      stopPlayback();
+      setVideoUrl(null);
+      setCurrentMediaMeta({
+        artifactId: media.artifactId,
+        gcsPath: media.gcsPath,
+        type: "widget",
+      });
+      setVttUrl(null);
+      setSrtText(null);
+      setSubtitleLang(undefined);
+      setWidgetHtml(media.widgetCode);
+      if (persist && chatKey) {
+        persistMediaSelection({
+          chatId: chatKey,
+          messageId,
+          type: "widget",
+          widgetCode: media.widgetCode,
+          artifactId: media.artifactId,
+          gcsPath: media.gcsPath,
+          title: media.title,
+          updatedAt: Date.now(),
+        });
+      }
+      return;
+    }
+
+    if (!media.url) return;
+    let mediaUrl = toPlayableMediaUrl(media.url) || "";
+    if (!desktopLocal && !skipSignedRefresh && (media.artifactId || media.gcsPath)) {
+      try {
+        const refreshed = await apiRefreshArtifact({
+          artifactId: media.artifactId,
+          gcsPath: media.gcsPath,
+          subtitle: true,
+        });
+        if (refreshed?.signed_video_url) {
+          mediaUrl = refreshed.signed_video_url;
+        }
+      } catch {}
+    }
+
+    setWidgetHtml(null);
+    setCurrentMediaMeta({
+      artifactId: media.artifactId,
+      gcsPath: media.gcsPath,
+      type: media.type,
+    });
+    setVttUrl(null);
+    setSrtText(null);
+    const subtitleUrl = toPlayableMediaUrl(media.subtitleUrl);
+    await fetchCaptions(mediaUrl, subtitleUrl, media.artifactId, media.gcsPath);
+    setVideoUrl(mediaUrl);
+    if (autoplay) {
+      setTimeout(() => {
+        const el = videoRef.current as HTMLVideoElement | HTMLAudioElement | null;
+        if (!el) return;
+        try {
+          const p = el.play();
+          if (p && typeof (p as any).catch === "function") {
+            (p as any).catch(() => {});
+          }
+        } catch {}
+      }, 120);
+    }
+
+    if (persist && chatKey) {
+      persistMediaSelection({
+        chatId: chatKey,
+        messageId,
+        type: media.type,
+        url: mediaUrl,
+        subtitleUrl,
+        artifactId: media.artifactId,
+        gcsPath: media.gcsPath,
+        title: media.title,
+        updatedAt: Date.now(),
+      });
+    }
+  };
+
+  useEffect(() => {
+    const chatKey = activeChatId != null ? String(activeChatId) : "";
+    if (!chatKey) return;
+    if (widgetHtml) {
+      persistMediaSelection({
+        chatId: chatKey,
+        type: "widget",
+        widgetCode: widgetHtml,
+        artifactId: currentMediaMeta?.artifactId,
+        gcsPath: currentMediaMeta?.gcsPath,
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+    if (videoUrl && currentMediaMeta?.type && currentMediaMeta.type !== "widget") {
+      persistMediaSelection({
+        chatId: chatKey,
+        type: currentMediaMeta.type,
+        url: videoUrl,
+        artifactId: currentMediaMeta.artifactId,
+        gcsPath: currentMediaMeta.gcsPath,
+        subtitleUrl: vttUrl || undefined,
+        updatedAt: Date.now(),
+      });
+    }
+  }, [activeChatId, widgetHtml, videoUrl, currentMediaMeta?.type, currentMediaMeta?.artifactId, currentMediaMeta?.gcsPath, vttUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const formatTime = (secs: number) => {
     if (!isFinite(secs) || secs < 0) secs = 0;
     const m = Math.floor(secs / 60);
@@ -548,8 +749,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               const msgs = (chatDetail.messages || []).map((m: any) => {
                 const media = m.media ? {
                   type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
-                  url: m.media.url as string | undefined,
-                  subtitleUrl: m.media.subtitleUrl as string | undefined,
+                  url: toPlayableMediaUrl(m.media.url as string | undefined),
+                  subtitleUrl: toPlayableMediaUrl(m.media.subtitleUrl as string | undefined),
                   artifactId: m.media.artifactId as string | undefined,
                   title: m.media.title as string | undefined,
                   gcsPath: m.media.gcsPath as string | undefined,
@@ -687,29 +888,61 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const activeChat = { ...baseChat, messages: activeChatMessages } as Chat;
 
   useEffect(() => {
-    const messages = Array.isArray(activeChat.messages) ? activeChat.messages : [];
-    const lastMediaMessage = [...messages].reverse().find((m: any) => m?.media);
+    let cancelled = false;
+    const restoreMediaContext = async () => {
+      const chatKey = activeChatId != null ? String(activeChatId) : "";
+      const messages = Array.isArray(activeChat.messages) ? activeChat.messages : [];
+      if (!chatKey || !messages.length) {
+        setWidgetHtml(null);
+        setVideoUrl(null);
+        setCurrentMediaMeta(null);
+        return;
+      }
 
-    if (!lastMediaMessage?.media) {
-      setWidgetHtml(null);
-      return;
-    }
-
-    if (lastMediaMessage.media.type === 'widget' && lastMediaMessage.media.widgetCode) {
-      stopPlayback();
-      setVideoUrl(null);
-      setCurrentMediaMeta({ type: 'widget' });
-      setVttUrl(null);
-      setSrtText(null);
-      setSubtitleLang(undefined);
-      setWidgetHtml((prev) => (
-        prev === lastMediaMessage.media.widgetCode ? prev : lastMediaMessage.media.widgetCode
-      ));
-      return;
-    }
-
-    setWidgetHtml(null);
-  }, [activeChatId, activeChat.messages]);
+      const persisted = loadPersistedMediaSelections()[chatKey];
+      let target: any | undefined;
+      if (persisted?.messageId) {
+        target = messages.find((m: any) => String(m?.messageId || "") === persisted.messageId && m?.media);
+      }
+      if (!target && persisted?.type === "widget" && persisted?.widgetCode) {
+        target = { messageId: persisted.messageId, media: { type: "widget", widgetCode: persisted.widgetCode, artifactId: persisted.artifactId, gcsPath: persisted.gcsPath, title: persisted.title } };
+      }
+      if (!target && persisted?.url && (persisted?.type === "video" || persisted?.type === "audio")) {
+        target = {
+          messageId: persisted.messageId,
+          media: {
+            type: persisted.type,
+            url: persisted.url,
+            subtitleUrl: persisted.subtitleUrl,
+            artifactId: persisted.artifactId,
+            gcsPath: persisted.gcsPath,
+            title: persisted.title,
+          },
+        };
+      }
+      if (!target) {
+        target = [...messages].reverse().find((m: any) => m?.media);
+      }
+      if (!target?.media) {
+        setWidgetHtml(null);
+        setVideoUrl(null);
+        setCurrentMediaMeta(null);
+        return;
+      }
+      if (!cancelled) {
+        await openMediaFromMessage(target, {
+          persist: false,
+          // In desktop-local mode URLs are local and should not refresh;
+          // in cloud mode let it refresh signed URLs.
+          skipSignedRefresh: desktopLocal,
+        });
+      }
+    };
+    void restoreMediaContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatId, activeChat.messages]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // Render helper: support [text](url) markdown links, then autolink any leftover plain URLs
@@ -945,7 +1178,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }, [user.email]);
 
   // Simple outbox for offline/idempotent writes
-  const outboxKey = user?.uid ? `app.outbox.${user.uid}` : null;
+  const persistenceUserKey = desktopLocal
+    ? (user?.email ? String(user.email).trim().toLowerCase() : null)
+    : user?.uid || null;
+  const outboxKey = persistenceUserKey ? `app.outbox.${persistenceUserKey}` : null;
   const enqueueOutbox = (item: any) => {
     try {
       if (!outboxKey) return;
@@ -991,45 +1227,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]);
+  }, [outboxKey]);
 
   // Ensure we have a server-side chat before persisting messages or generating media
   const ensurePersistedActiveChat = async (titleHint?: string): Promise<string | undefined> => {
-    if (!user?.uid) {
-      // Local desktop mode: create/use a local chat id instead of server persistence.
-      if (
-        typeof activeChatId === "string" &&
-        !String(activeChatId).startsWith("draft-") &&
-        String(activeChatId).trim() !== ""
-      ) {
-        return String(activeChatId);
-      }
-      const raw = titleHint && titleHint.trim() ? titleHint : "New Chat";
-      const normalized = raw.replace(/\s+/g, " ").replace(/[\?!.,;:]+$/, "").trim();
-      const title = normalized.slice(0, 40) || "New Chat";
-      const sid =
-        typeof crypto !== "undefined" && (crypto as any).randomUUID
-          ? (crypto as any).randomUUID()
-          : `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const localId =
-        typeof crypto !== "undefined" && (crypto as any).randomUUID
-          ? `local-${(crypto as any).randomUUID()}`
-          : `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const localChat: Chat = {
-        id: localId,
-        name: title,
-        messages: [],
-        sessionId: sid,
-        model,
-        updatedAt: Date.now(),
-      };
-      updateUserChats([localChat, ...chats], { bumpId: String(localChat.id) });
-      setActiveChatId(localId);
-      try {
-        sessionStorage.removeItem("app.forceBlank");
-      } catch {}
-      return localId;
-    }
+    const canPersistViaBackend = desktopLocal || !!user?.uid;
+    if (!canPersistViaBackend) return undefined;
+
     // If we already have a persisted Firestore chat id (not local-*), return it
     if (typeof activeChatId === 'string' && !String(activeChatId).startsWith('local-') && !String(activeChatId).startsWith('draft-')) {
       return String(activeChatId);
@@ -1081,7 +1285,43 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await new Promise(resolve => setTimeout(resolve, 50));
       // URL will update via effect hook
       return newId;
-    } catch { return undefined; }
+    } catch {
+      // Cloud mode without auth should not create local-only IDs.
+      if (!desktopLocal) return undefined;
+      // Desktop-local fallback only if backend call fails unexpectedly.
+      if (
+        typeof activeChatId === "string" &&
+        !String(activeChatId).startsWith("draft-") &&
+        String(activeChatId).trim() !== ""
+      ) {
+        return String(activeChatId);
+      }
+      const raw = titleHint && titleHint.trim() ? titleHint : "New Chat";
+      const normalized = raw.replace(/\s+/g, " ").replace(/[\?!.,;:]+$/, "").trim();
+      const title = normalized.slice(0, 40) || "New Chat";
+      const sid =
+        typeof crypto !== "undefined" && (crypto as any).randomUUID
+          ? (crypto as any).randomUUID()
+          : `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const localId =
+        typeof crypto !== "undefined" && (crypto as any).randomUUID
+          ? `local-${(crypto as any).randomUUID()}`
+          : `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const localChat: Chat = {
+        id: localId,
+        name: title,
+        messages: [],
+        sessionId: sid,
+        model,
+        updatedAt: Date.now(),
+      };
+      updateUserChats([localChat, ...chats], { bumpId: String(localChat.id) });
+      setActiveChatId(localId);
+      try {
+        sessionStorage.removeItem("app.forceBlank");
+      } catch {}
+      return localId;
+    }
   };
 
   // Keep local chats in sync if parent users change (e.g., after login or restore)
@@ -1174,7 +1414,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // ignore
       }
     }
-    if (user?.uid) {
+    const canPersistViaBackend = desktopLocal || !!user?.uid;
+    if (canPersistViaBackend) {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => { void syncChats(); }, 80);
     } else {
@@ -1191,7 +1432,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
     return () => clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]);
+  }, [desktopLocal, user?.uid, user?.email]);
 
   // One-time migration: if user just authenticated and we have local-only chats, push them to Firestore
   useEffect(() => {
@@ -1756,7 +1997,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const { data, raw } = await parseResponse(res);
       if (res.ok && data?.status === "ok" && data?.video_url) {
         // Use signed URL if available, otherwise use regular URL
-        const audioUrl = data.signed_video_url || data.video_url;
+        const audioUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(audioUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -1766,7 +2007,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'audio',
           url: audioUrl, // Use signed URL for persistence
-          subtitleUrl: data.signed_subtitle_url,
+          subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
           title: `Podcast: ${prompt.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
@@ -2112,6 +2353,51 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   };
 
   const handleLogout = () => setModal({ isOpen: true, type: "logout", data: null });
+
+  const handleUpdateDisplayName = (nextName: string) => {
+    const trimmed = String(nextName || "").trim();
+    if (!trimmed) return;
+    setUser({ ...user, name: trimmed });
+    setUsers(users.map((u) => (u.email === user.email ? { ...u, name: trimmed } : u)));
+    if (desktopLocal) {
+      try {
+        localStorage.setItem("app.localUser", JSON.stringify({ name: trimmed, email: user.email }));
+      } catch {}
+    }
+  };
+
+  const handleResetLocalData = async () => {
+    if (!desktopLocal) return;
+    const ok = window.confirm(
+      "Reset all local desktop data? This removes local chats, media history, settings, and saved keys on this device."
+    );
+    if (!ok) return;
+
+    try {
+      try {
+        await apiDeleteAccount();
+      } catch {}
+      try {
+        await clearApiKeysForUser(user.email);
+      } catch {}
+      try {
+        Object.keys(localStorage).forEach((key) => {
+          if (key.startsWith("app.")) localStorage.removeItem(key);
+        });
+      } catch {}
+      try {
+        sessionStorage.removeItem("app.forceBlank");
+      } catch {}
+      setSettingsOpen(false);
+      window.location.assign("/home");
+    } catch (e: any) {
+      toast({
+        title: "Reset failed",
+        description: e?.message || "Could not reset local data.",
+        variant: "destructive",
+      });
+    }
+  };
 
   const confirmLogout = async () => {
     if (desktopLocal) {
@@ -2671,7 +2957,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         }
 
         // Use signed URL if available, otherwise use regular URL
-        const videoUrl = data.signed_video_url || data.video_url;
+        const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -2689,7 +2975,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'video',
           url: videoUrl,
-          subtitleUrl: data.signed_subtitle_url,
+          subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
           title: `Video: ${prompt.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
@@ -2978,7 +3264,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const { data } = await parseResponse(res);
 
       if (res.ok && data?.status === "ok" && data?.video_url) {
-        const videoUrl = data.signed_video_url || data.video_url;
+        const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
@@ -2986,7 +3272,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'video',
           url: videoUrl,
-          subtitleUrl: data.signed_subtitle_url,
+          subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
           title: `Edited Video: ${editInstructions.slice(0, 30)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
@@ -3229,8 +3515,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const mapped = (msgs || []).map((m: any) => {
           const media = m.media ? {
             type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
-            url: m.media.url as string | undefined,
-            subtitleUrl: m.media.subtitleUrl as string | undefined,
+            url: toPlayableMediaUrl(m.media.url as string | undefined),
+            subtitleUrl: toPlayableMediaUrl(m.media.subtitleUrl as string | undefined),
             artifactId: m.media.artifactId as string | undefined,
             gcsPath: m.media.gcsPath as string | undefined,
             title: m.media.title as string | undefined,
@@ -3453,8 +3739,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const mapped = (older || []).map((m: any) => {
         const media = m.media ? {
           type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
-          url: m.media.url as string | undefined,
-          subtitleUrl: m.media.subtitleUrl as string | undefined,
+          url: toPlayableMediaUrl(m.media.url as string | undefined),
+          subtitleUrl: toPlayableMediaUrl(m.media.subtitleUrl as string | undefined),
           artifactId: m.media.artifactId as string | undefined,
           gcsPath: m.media.gcsPath as string | undefined,
           title: m.media.title as string | undefined,
@@ -3882,6 +4168,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setIsQuizMode(false);
       setQuotedMessage(null);
       setWidgetHtml(null);
+      setVideoUrl(null);
+      setCurrentMediaMeta(null);
+      setVttUrl(null);
+      setSrtText(null);
       // Immediately update activeChatId - URL will sync via effect
       setActiveChatId(id);
       // Also update URL immediately to prevent race conditions and auto-refresh issues
@@ -3923,6 +4213,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         handleRenameChat={handleRenameChat}
         handleDeleteChat={handleDeleteChat}
         onToggleShare={handleToggleShare}
+        desktopLocal={desktopLocal}
       />
 
       <div className="flex-1 flex">
@@ -3981,60 +4272,32 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 onExpand={async () => {
                                   // Don't allow playing videos while generating
                                   if (busy) return;
-
-                                  // Refresh signed URL if we have artifact info
-                                  let mediaUrl = msg.media!.url;
-                                  if (!desktopLocal && (msg.media!.artifactId || msg.media!.gcsPath)) {
-                                    try {
-                                      const refreshed = await apiRefreshArtifact({
-                                        artifactId: msg.media!.artifactId,
-                                        gcsPath: msg.media!.gcsPath,
-                                        subtitle: true
-                                      });
-                                      if (refreshed?.signed_video_url) {
-                                        mediaUrl = refreshed.signed_video_url;
-                                        // Update the message with refreshed URL
-                                        const updatedChats = chats.map(c => {
-                                          if (c.id === activeChatId) {
-                                            const updatedMessages = c.messages.map(m => {
-                                              if ((m as any).messageId === (msg as any).messageId && m.media) {
-                                                return { ...m, media: { ...m.media, url: mediaUrl } };
-                                              }
-                                              return m;
-                                            });
-                                            return { ...c, messages: updatedMessages };
-                                          }
-                                          return c;
-                                        });
-                                        updateUserChats(updatedChats);
-                                      }
-                                    } catch (e) {
-                                      // Fall back to original URL if refresh fails
-                                    }
-                                  }
-                                  // Set the current video URL to expand in sidebar player
-                                  // Clear captions first to prevent old ones showing
-                                  setVttUrl(null);
-                                  setSrtText(null);
-                                  setCurrentMediaMeta({ artifactId: msg.media!.artifactId, gcsPath: msg.media!.gcsPath, type: msg.media!.type });
-                                  // Load captions BEFORE setting video URL to ensure they're ready
-                                  await fetchCaptions(mediaUrl, msg.media!.subtitleUrl, msg.media!.artifactId, msg.media!.gcsPath);
-                                  setWidgetHtml(null);
-                                  setVideoUrl(mediaUrl);
-                                  // Force video reload after captions are set to ensure track is attached
-                                  await new Promise(resolve => setTimeout(resolve, 50));
-                                  const vid = videoRef.current;
-                                  if (vid && vid instanceof HTMLVideoElement) {
-                                    try { vid.load(); } catch {}
-                                  }
+                                  await openMediaFromMessage(msg, { autoplay: true });
                                 }}
                               />
                             </div>
                           )}
                           {/* Copy button - appears on hover */}
                           {msg.media && msg.media.type === 'widget' && msg.media.widgetCode && (
-                            <div className="mt-3 text-xs text-muted-foreground">
-                              Interactive widget shown in the right panel.
+                            <div
+                              className={`mt-3 bg-card border rounded-lg p-3 cursor-pointer hover:bg-accent transition-colors ${busy ? 'opacity-50 pointer-events-none' : ''}`}
+                              onClick={() => { if (!busy && !podcastLoading && !quizLoading && !widgetLoading) void openMediaFromMessage(msg); }}
+                              title="Open widget"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${getThemeGradient(colorTheme)}`}>
+                                  <Zap className="w-5 h-5 text-white" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium text-sm truncate">
+                                    {msg.media.title || "Interactive Widget"}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Click to open in right panel
+                                  </p>
+                                </div>
+                                <ExternalLink className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                              </div>
                             </div>
                           )}
                           {msg.content && (
@@ -4721,6 +4984,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             apiKeys={apiKeys}
             setApiKeys={(k) => applyApiKeys(k)}
             asDialog
+            onUpdateName={handleUpdateDisplayName}
+            desktopLocal={desktopLocal}
+            onResetLocalData={desktopLocal ? handleResetLocalData : undefined}
           />
         </div>
       )}

@@ -166,7 +166,11 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               <button
                 type="button"
                 onClick={() => handleDownloadClick("windows", windowsDownloadUrl)}
-                className="min-w-[240px] px-6 py-4 rounded-xl border border-teal-500 text-base font-semibold hover:bg-teal-500 hover:text-white transition-colors inline-flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`min-w-[240px] px-6 py-4 rounded-xl border text-base font-semibold transition-colors inline-flex items-center justify-center gap-3 disabled:cursor-not-allowed ${
+                  isDark
+                    ? "border-teal-500 text-white hover:bg-teal-500 hover:text-white disabled:bg-slate-800 disabled:text-slate-400 disabled:border-slate-600"
+                    : "border-teal-500 text-slate-900 hover:bg-teal-500 hover:text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:border-slate-300"
+                }`}
                 disabled={!windowsDownloadUrl}
                 title={windowsDownloadUrl ? "Download for Windows" : "Windows download URL not configured"}
               >
@@ -178,7 +182,11 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               <button
                 type="button"
                 onClick={() => handleDownloadClick("mac", macDownloadUrl)}
-                className="min-w-[240px] px-6 py-4 rounded-xl border border-purple-500 text-base font-semibold hover:bg-purple-500 hover:text-white transition-colors inline-flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`min-w-[240px] px-6 py-4 rounded-xl border text-base font-semibold transition-colors inline-flex items-center justify-center gap-3 disabled:cursor-not-allowed ${
+                  isDark
+                    ? "border-purple-500 text-white hover:bg-purple-500 hover:text-white disabled:bg-slate-800 disabled:text-slate-400 disabled:border-slate-600"
+                    : "border-purple-500 text-slate-900 hover:bg-purple-500 hover:text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:border-slate-300"
+                }`}
                 disabled={!macDownloadUrl}
                 title={macDownloadUrl ? "Download for macOS" : "macOS download URL not configured"}
               >
@@ -188,7 +196,11 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               <button
                 type="button"
                 onClick={() => handleDownloadClick("linux", linuxDownloadUrl)}
-                className="min-w-[240px] px-6 py-4 rounded-xl border border-blue-500 text-base font-semibold hover:bg-blue-500 hover:text-white transition-colors inline-flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`min-w-[240px] px-6 py-4 rounded-xl border text-base font-semibold transition-colors inline-flex items-center justify-center gap-3 disabled:cursor-not-allowed ${
+                  isDark
+                    ? "border-blue-500 text-white hover:bg-blue-500 hover:text-white disabled:bg-slate-800 disabled:text-slate-400 disabled:border-slate-600"
+                    : "border-blue-500 text-slate-900 hover:bg-blue-500 hover:text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:border-slate-300"
+                }`}
                 disabled={!linuxDownloadUrl}
                 title={linuxDownloadUrl ? "Download for Linux" : "Linux download URL not configured"}
               >

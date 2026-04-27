@@ -6,7 +6,7 @@ const { spawnSync } = require("child_process");
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
 const RUNTIME_ROOT = path.join(ROOT_DIR, "desktop", "python-runtime");
-const VENV_DIR = path.join(RUNTIME_ROOT, "venv");
+const PYTHON_DIR = path.join(RUNTIME_ROOT, "python");
 const BIN_DIR = path.join(RUNTIME_ROOT, "bin");
 const REQUIREMENTS_FILE = path.join(ROOT_DIR, "desktop", "requirements-desktop.txt");
 
@@ -69,9 +69,11 @@ function resolvePythonCommand() {
 
 function getVenvPythonPath() {
   if (process.platform === "win32") {
-    return path.join(VENV_DIR, "Scripts", "python.exe");
+    return path.join(PYTHON_DIR, "python.exe");
   }
-  return path.join(VENV_DIR, "bin", "python3");
+  const py3 = path.join(PYTHON_DIR, "bin", "python3");
+  if (fs.existsSync(py3)) return py3;
+  return path.join(PYTHON_DIR, "bin", "python");
 }
 
 function ensureCleanRuntimeDir() {
@@ -80,6 +82,24 @@ function ensureCleanRuntimeDir() {
   }
   fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
   fs.mkdirSync(BIN_DIR, { recursive: true });
+}
+
+function copyPythonRuntime(command, prefixArgs) {
+  const basePrefix = runAndCaptureOrThrow(
+    command,
+    [...prefixArgs, "-c", "import sys; print(sys.base_prefix)"],
+    { cwd: ROOT_DIR }
+  );
+  if (!basePrefix || !fs.existsSync(basePrefix)) {
+    throw new Error(`Could not resolve Python base runtime at: ${basePrefix}`);
+  }
+
+  if (!fs.cpSync) {
+    throw new Error("Node runtime does not support fs.cpSync; need Node 16.7+.");
+  }
+
+  // Dereference symlinks so packaged app bundles do not contain host-specific link targets.
+  fs.cpSync(basePrefix, PYTHON_DIR, { recursive: true, force: true, dereference: true });
 }
 
 function main() {
@@ -104,15 +124,17 @@ function main() {
   }
 
   ensureCleanRuntimeDir();
-  // Use copies (not symlinks) so macOS codesign won't fail on bundled runtime links
-  // that point outside the app bundle.
-  runOrThrow(command, [...prefixArgs, "-m", "venv", "--copies", VENV_DIR], { cwd: ROOT_DIR });
+  // Build a portable Python runtime copy (not venv) so end-user machines
+  // do not depend on build host paths.
+  copyPythonRuntime(command, prefixArgs);
 
   const venvPython = getVenvPythonPath();
   if (!fs.existsSync(venvPython)) {
-    throw new Error(`Bundled runtime python not found at ${venvPython}`);
+    throw new Error(`Bundled runtime python not found at ${venvPython}.`);
   }
 
+  // Ensure pip is present in copied runtime.
+  runOrThrow(venvPython, ["-m", "ensurepip", "--upgrade"], { cwd: ROOT_DIR });
   runOrThrow(venvPython, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], {
     cwd: ROOT_DIR,
   });
@@ -138,7 +160,7 @@ function main() {
     fs.chmodSync(ffmpegTarget, 0o755);
   }
 
-  console.log(`[desktop] bundled Python runtime ready at ${VENV_DIR}`);
+  console.log(`[desktop] bundled Python runtime ready at ${PYTHON_DIR}`);
   console.log(`[desktop] bundled ffmpeg ready at ${ffmpegTarget}`);
 }
 

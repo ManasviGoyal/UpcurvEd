@@ -42,6 +42,7 @@ interface SidebarProps {
   setColorTheme: (theme: ColorTheme) => void;
   handleLogout: () => void;
   handleDeleteAccount: () => void;
+  desktopLocal?: boolean;
   isSidebarCollapsed: boolean;
   setIsSidebarCollapsed: (collapsed: boolean) => void;
   handleRenameChat: (id: string | number, name: string) => void;
@@ -63,6 +64,7 @@ export const Sidebar = ({
   setColorTheme,
   handleLogout,
   handleDeleteAccount,
+  desktopLocal = false,
   isSidebarCollapsed,
   setIsSidebarCollapsed,
   handleRenameChat,
@@ -367,23 +369,27 @@ export const Sidebar = ({
           {!isSidebarCollapsed && <span>Settings</span>}
         </button>
 
-        <button
-          onClick={handleLogout}
-          title="Logout"
-          className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
-        >
-          <LogOut className="w-5 h-5"/>
-          {!isSidebarCollapsed && <span>Logout</span>}
-        </button>
+        {!desktopLocal && (
+          <>
+            <button
+              onClick={handleLogout}
+              title="Logout"
+              className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
+            >
+              <LogOut className="w-5 h-5"/>
+              {!isSidebarCollapsed && <span>Logout</span>}
+            </button>
 
-        <button
-          onClick={handleDeleteAccount}
-          title="Delete Account"
-          className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-destructive hover:text-destructive-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
-        >
-          <UserX className="w-5 h-5"/>
-          {!isSidebarCollapsed && <span>Delete Account</span>}
-        </button>
+            <button
+              onClick={handleDeleteAccount}
+              title="Delete Account"
+              className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-destructive hover:text-destructive-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
+            >
+              <UserX className="w-5 h-5"/>
+              {!isSidebarCollapsed && <span>Delete Account</span>}
+            </button>
+          </>
+        )}
 
         <div className="border-t border-border my-1"></div>
 

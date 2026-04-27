@@ -13,6 +13,7 @@ import { onAuthStateChanged, setPersistence, browserLocalPersistence } from "fir
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { isDesktopLocalMode } from "./lib/runtime";
 import { loadApiKeysForUser } from "./lib/secureKeys";
+import { Analytics } from "@vercel/analytics/react";
 
 const queryClient = new QueryClient();
 const LOCAL_USER_KEY = "app.localUser";
@@ -107,6 +108,36 @@ const AppContent = () => {
     }
   };
 
+  const updateDisplayName = (nextName: string) => {
+    const trimmed = String(nextName || "").trim();
+    if (!trimmed) return;
+    setUser((prev) => (prev ? { ...prev, name: trimmed } : prev));
+    setUsers((prev) => prev.map((u) => (u.email === user?.email ? { ...u, name: trimmed } : u)));
+    if (desktopLocal) {
+      try {
+        const email = user?.email || "local@upcurved.desktop";
+        localStorage.setItem(LOCAL_USER_KEY, JSON.stringify({ name: trimmed, email }));
+      } catch {}
+    }
+  };
+
+  const resetLocalData = () => {
+    if (!desktopLocal) return;
+    const ok = window.confirm(
+      "Reset all local desktop data? This removes local chats, media history, settings, and saved keys on this device."
+    );
+    if (!ok) return;
+    try {
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith("app.")) localStorage.removeItem(key);
+      });
+    } catch {}
+    try {
+      sessionStorage.removeItem("app.forceBlank");
+    } catch {}
+    window.location.assign("/home");
+  };
+
   // Persist local desktop profile so refresh keeps user context.
   useEffect(() => {
     if (!desktopLocal) return;
@@ -150,6 +181,26 @@ const AppContent = () => {
               return [...prev, { name, email, chats: [] }];
             });
           }
+        } else {
+          const guestEmail = "local@upcurved.desktop";
+          const guestUser: User = {
+            name: "Local User",
+            email: guestEmail,
+            chats: [],
+          };
+          setUser(guestUser);
+          setUsers((prev) => {
+            const idx = prev.findIndex((u) => u.email === guestEmail);
+            if (idx >= 0) return prev;
+            return [...prev, guestUser];
+          });
+          localStorage.setItem(
+            LOCAL_USER_KEY,
+            JSON.stringify({
+              name: guestUser.name,
+              email: guestUser.email,
+            })
+          );
         }
       } catch {}
       setBooting(false);
@@ -247,7 +298,13 @@ const AppContent = () => {
       {/* Public routes (no auth required) */}
       <Route
         path="/home"
-        element={<Landing setView={setViewStr} />}
+        element={
+          desktopLocal ? (
+            <Navigate to={`/chat${location.search}`} replace />
+          ) : (
+            <Landing setView={setViewStr} />
+          )
+        }
       />
       <Route
         path="/login"
@@ -297,6 +354,9 @@ const AppContent = () => {
               user={user}
               apiKeys={apiKeys}
               setApiKeys={setApiKeys}
+              onUpdateName={updateDisplayName}
+              desktopLocal={desktopLocal}
+              onResetLocalData={desktopLocal ? resetLocalData : undefined}
             />
           ) : (
             <Navigate to="/home" replace />
@@ -354,6 +414,7 @@ const AppContent = () => {
 };
 
 const App = () => {
+  const desktopLocal = isDesktopLocalMode();
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -362,6 +423,7 @@ const App = () => {
         <div className="transition-colors duration-300">
           <BrowserRouter>
             <AppContent />
+            {!desktopLocal && <Analytics />}
           </BrowserRouter>
         </div>
       </TooltipProvider>
