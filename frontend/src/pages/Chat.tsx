@@ -177,6 +177,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Podcast generation visual progress (mirrors video progress UX)
   const [podcastProgress, setPodcastProgress] = useState(0);
   const podcastProgressTimer = useRef<number | null>(null);
+  const [widgetProgress, setWidgetProgress] = useState(0);
+  const widgetProgressTimer = useRef<number | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [podcastLoading, setPodcastLoading] = useState(false);
   const [widgetLoading, setWidgetLoading] = useState(false);
@@ -453,9 +455,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
     } catch {}
 
-    // Try to refresh signed subtitle URL from server (may return fresh .vtt or .srt)
+    // Try to refresh signed subtitle URL from server (cloud mode only; desktop-local uses local files).
     try {
-      if (metaArtifactId || metaGcsPath) {
+      if (!desktopLocal && (metaArtifactId || metaGcsPath)) {
         const refreshed = await apiRefreshArtifact({ artifactId: metaArtifactId, gcsPath: metaGcsPath, subtitle: true });
         const refreshedUrl: string | undefined = (refreshed?.signed_subtitle_url as any) || undefined;
         if (refreshedUrl) {
@@ -1987,6 +1989,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (!ensureLlmKey("quiz")) return; // reuse key check
 
     setWidgetLoading(true);
+    setWidgetProgress(5);
+    if (widgetProgressTimer.current) window.clearInterval(widgetProgressTimer.current);
+    widgetProgressTimer.current = window.setInterval(() => {
+      setWidgetProgress((p) => (p < 60 ? Math.min(p + 2, 60) : 60));
+    }, 700);
+    let aborted = false;
     let persistedId: string | undefined;
 
     try {
@@ -2027,7 +2035,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           widgetCode: data.widget_html,
           title: `Widget: ${prompt.slice(0, 50)}`,
         };
-        await processAndAddMessage("✅ Interactive widget generated.", false, mediaAttachment, String(finalChatId));
+        const widgetMessageId = await processAndAddMessage(
+          "✅ Interactive widget generated.",
+          false,
+          mediaAttachment,
+          String(finalChatId)
+        );
         setVideoUrl(null);
         setCurrentMediaMeta({ type: 'widget' });
         setSrtText(null);
@@ -2040,12 +2053,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch (err: any) {
       if (err?.name === "AbortError") {
         await processAndAddMessage("⏹️ Canceled widget generation.", false, undefined, persistedId);
+        aborted = true;
       } else {
         await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
         toast({ title: "Widget failed", description: err?.message || "Unknown error", duration: 4000 });
       }
     } finally {
       setWidgetLoading(false);
+      if (widgetProgressTimer.current) window.clearInterval(widgetProgressTimer.current);
+      setWidgetProgress(aborted ? 0 : 100);
       widgetAbortRef.current = null;
     }
   }
@@ -2693,8 +2709,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const msg =
           (data && typeof data === "object" && "message" in data && (data as any).message) ||
           "Video generation failed.";
+        const debugDetail =
+          (data && typeof data === "object" && "debug_detail" in data && String((data as any).debug_detail || "").trim()) ||
+          "";
         setApiError(msg);
         await processAndAddMessage("❌ Video generation failed.", false, undefined, chatIdForGeneration);
+        if (debugDetail) {
+          toast({
+            title: "Render detail",
+            description: debugDetail.slice(0, 220),
+            duration: 7000,
+          });
+        }
 
         console.debug("generate() error payload:", data);
       }
@@ -2768,13 +2794,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       // Extract transcript from VTT captions (stored in GCS bucket)
       let vttUrl = msg.media.subtitleUrl;
 
-      // Try to extract transcript, if it fails due to expired URL (400 error), refresh it
+      // Try to extract transcript; in cloud mode refresh expired signed URL if needed.
       let transcript = '';
       try {
         transcript = await extractTranscriptFromVtt(vttUrl);
       } catch (err: any) {
-        // If fetch failed with 400/403 (expired signed URL), try to refresh
-        if (err.message && (err.message.includes('400') || err.message.includes('403'))) {
+        // If fetch failed with 400/403 (expired signed URL), try to refresh in cloud mode.
+        if (!desktopLocal && err.message && (err.message.includes('400') || err.message.includes('403'))) {
           console.log('VTT URL expired, attempting to refresh...');
           try {
             const refreshed = await apiRefreshArtifact({
@@ -2795,7 +2821,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           }
         } else {
           // For podcasts, try fetching script from GCS as fallback
-          if (msg.media.type === 'audio') {
+          if (!desktopLocal && msg.media.type === 'audio') {
             if (msg.media.scriptGcsPath || msg.media.artifactId) {
               console.log('Attempting to fetch podcast script from GCS...');
               try {
@@ -3127,6 +3153,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const vid = videoRef.current;
     if (!vid) return;
     const onError = async () => {
+      // In desktop-local mode, media URLs are local static files and do not use signed URL refresh.
+      if (desktopLocal) return;
       // If we have meta info, try refresh
       if (!currentMediaMeta) return;
       try {
@@ -3956,7 +3984,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
                                   // Refresh signed URL if we have artifact info
                                   let mediaUrl = msg.media!.url;
-                                  if (msg.media!.artifactId || msg.media!.gcsPath) {
+                                  if (!desktopLocal && (msg.media!.artifactId || msg.media!.gcsPath)) {
                                     try {
                                       const refreshed = await apiRefreshArtifact({
                                         artifactId: msg.media!.artifactId,
@@ -4369,10 +4397,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                         <path className="text-muted stroke-current" strokeWidth="3" fill="none" d="M18 2 a 16 16 0 1 1 0 32 a 16 16 0 1 1 0 -32" opacity="0.2"/>
                         <path className="text-primary stroke-current" strokeWidth="3" fill="none" strokeLinecap="round"
                           d="M18 2 a 16 16 0 1 1 0 32 a 16 16 0 1 1 0 -32"
-                          strokeDasharray={`${busy ? videoProgress : podcastProgress}, 100`} />
+                          strokeDasharray={`${busy ? videoProgress : widgetLoading ? widgetProgress : podcastProgress}, 100`} />
                       </svg>
                       <div className="absolute inset-0 flex items-center justify-center text-sm font-medium">
-                        {widgetLoading ? <Zap className="w-6 h-6 animate-pulse" /> : busy ? `${videoProgress}%` : `${podcastProgress}%`}
+                        {widgetLoading ? `${widgetProgress}%` : busy ? `${videoProgress}%` : `${podcastProgress}%`}
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground">

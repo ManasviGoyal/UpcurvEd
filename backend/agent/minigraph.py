@@ -2,8 +2,6 @@
 import textwrap
 from typing import TypedDict
 
-from langgraph.graph import END, StateGraph
-
 
 class MiniState(TypedDict, total=False):
     user_prompt: str
@@ -37,20 +35,10 @@ def draft_code_node(state: MiniState) -> MiniState:
     return new_state
 
 
-def _build_graph():
-    g = StateGraph(MiniState)
-    g.add_node("draft_code", draft_code_node)
-    g.set_entry_point("draft_code")
-    g.add_edge("draft_code", END)
-    return g.compile()
-
-
-_GRAPH = _build_graph()
-
-
 def echo_manim_code(prompt: str) -> str:
-    result = _GRAPH.invoke({"user_prompt": prompt})
+    # Kept intentionally simple to avoid dragging workflow/runtime deps into desktop mode.
+    result = draft_code_node({"user_prompt": prompt})
     code = result.get("manim_code")
     if not code:
-        raise RuntimeError("LangGraph returned no 'manim_code'.")
+        raise RuntimeError("Mini graph returned no 'manim_code'.")
     return code

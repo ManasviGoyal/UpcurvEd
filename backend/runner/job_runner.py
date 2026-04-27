@@ -17,8 +17,9 @@ import sys
 import uuid
 from pathlib import Path
 
-# Root for artifacts; FastAPI should mount this at /static
-STORAGE = Path("storage")
+# Root for artifacts; FastAPI should mount this at /static.
+# In desktop mode this can be overridden to a user-data location so artifacts persist.
+STORAGE = Path(os.getenv("UPCURVED_STORAGE_DIR", "storage"))
 # Ensure storage/jobs exists early; prefer os.makedirs for robustness.
 try:
     os.makedirs(str(STORAGE / "jobs"), exist_ok=True)

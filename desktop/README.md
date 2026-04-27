@@ -18,6 +18,12 @@ npm --prefix frontend install
 
 ## Run In Desktop Dev Mode
 
+Install Python deps used by desktop backend (dev only):
+
+```bash
+npm run desktop:dev:setup
+```
+
 ```bash
 npm run desktop:dev
 ```
@@ -27,6 +33,13 @@ What this does:
 - Starts Vite frontend locally on `127.0.0.1:8080`
 - Opens an Electron desktop window
 - Runs with `APP_MODE=desktop-local` so Firebase auth is not required for local desktop usage
+- Uses stable backend startup without auto-reload by default (set `DESKTOP_BACKEND_RELOAD=1` to enable reload/watch mode)
+- Persists generated media under the desktop app user-data storage directory
+- Persists desktop-local chat/message state on disk (no cloud DB required)
+
+Dev safety note:
+- By default, desktop dev **reuses** existing services on ports `8000/8080` if present.
+- To enforce a strict clean startup (fail if ports are occupied), set `DESKTOP_REUSE_EXISTING_SERVERS=0`.
 
 ## Run As Built Desktop Runtime
 
@@ -64,6 +77,12 @@ Build macOS installer for Apple Silicon (`.dmg`):
 npm run desktop:dist:mac:arm64
 ```
 
+Build Linux installer (`.AppImage`, x64):
+
+```bash
+npm run desktop:dist:linux
+```
+
 Installer artifacts are written to the `release/` folder.
 
 Builder prerequisites:
@@ -72,7 +91,7 @@ Builder prerequisites:
 ## GitHub Releases Automation
 
 This repo includes `.github/workflows/release-desktop.yml` that:
-- builds Windows x64 + macOS x64 + macOS arm64 installers
+- builds Windows x64 + macOS x64 + macOS arm64 + Linux x64 installers
 - uploads artifacts
 - publishes them to GitHub Releases
 
@@ -92,4 +111,5 @@ git push origin v0.3.0
 - `VITE_APP_MODE=desktop-local` enables local-first auth/session behavior in the UI.
 - API keys are stored through Electron secure storage when available (`keytar`), with local fallback.
 - Desktop runtime defaults to `UPCURVED_DISABLE_LATEX=1` to avoid requiring a TeX installation.
+- WSL is supported when a GUI display is available (WSLg). If no display is detected, startup fails with a clear error.
 - Kubernetes is not required for desktop usage.

@@ -58,6 +58,9 @@ function resolvePythonCommand() {
     return { command: "python", prefixArgs: [] };
   }
 
+  if (canRun("python3.12", ["--version"])) {
+    return { command: "python3.12", prefixArgs: [] };
+  }
   if (canRun("python3", ["--version"])) {
     return { command: "python3", prefixArgs: [] };
   }
@@ -86,6 +89,19 @@ function main() {
 
   const { command, prefixArgs } = resolvePythonCommand();
   console.log(`[desktop] preparing bundled Python runtime with '${command}'`);
+
+  // Desktop runtime is validated for Python 3.12 to keep binary deps stable across OS builds.
+  const pickedVersion = runAndCaptureOrThrow(
+    command,
+    [...prefixArgs, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+    { cwd: ROOT_DIR }
+  );
+  if (pickedVersion !== "3.12") {
+    throw new Error(
+      `Python 3.12 is required for desktop runtime bundling. Found ${pickedVersion} via '${command}'. ` +
+        `This step is for installer/release builds. You can still run local desktop dev with 'npm run desktop:dev'.`
+    );
+  }
 
   ensureCleanRuntimeDir();
   runOrThrow(command, [...prefixArgs, "-m", "venv", VENV_DIR], { cwd: ROOT_DIR });

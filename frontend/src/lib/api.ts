@@ -2,14 +2,24 @@
 import { isDesktopLocalMode } from "@/lib/runtime";
 
 const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '';
-const API_BASE_URL = RAW_API_BASE_URL.replace(/\/+$/, '');
+const DESKTOP_LOCAL_DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
+
+function resolvedApiBaseUrl(): string {
+  const runtimeDesktopBase = String(window?.desktop?.apiBaseUrl || "").trim();
+  if (runtimeDesktopBase) return runtimeDesktopBase.replace(/\/+$/, "");
+  const configured = RAW_API_BASE_URL.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  if (isDesktopLocalMode()) return DESKTOP_LOCAL_DEFAULT_API_BASE_URL;
+  return "";
+}
 
 export function apiUrl(path: string): string {
   if (!path) return path;
   if (/^https?:\/\//i.test(path)) return path;
-  if (!API_BASE_URL) return path;
+  const apiBase = resolvedApiBaseUrl();
+  if (!apiBase) return path;
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  return `${API_BASE_URL}${normalized}`;
+  return `${apiBase}${normalized}`;
 }
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {

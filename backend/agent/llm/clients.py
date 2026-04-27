@@ -1,12 +1,6 @@
 # backend/agent/llm/clients.py
 from typing import Literal
 
-# Anthropic SDK
-import anthropic
-
-# Google Generative AI SDK
-import google.generativeai as genai
-
 Provider = Literal["claude", "gemini"]
 
 
@@ -28,6 +22,13 @@ def call_claude(
     Returns the concatenated text from response.content blocks.
     """
     try:
+        try:
+            import anthropic
+        except Exception as e:
+            raise LLMError(
+                "Claude SDK is not installed. Install 'anthropic' to use Claude."
+            ) from e
+
         client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=model,
@@ -61,6 +62,12 @@ def _with_genai_key(api_key: str):
     this is fine. If you add multi-user concurrency later, consider
     a per-request client (available in newer SDKs) or a key manager.
     """
+    try:
+        import google.generativeai as genai
+    except Exception as e:
+        raise LLMError(
+            "Gemini SDK is not installed. Install 'google-generativeai' to use Gemini."
+        ) from e
     genai.configure(api_key=api_key)
 
 
@@ -77,6 +84,13 @@ def call_gemini(
     We attach system instruction to the GenerativeModel.
     """
     try:
+        try:
+            import google.generativeai as genai
+        except Exception as e:
+            raise LLMError(
+                "Gemini SDK is not installed. Install 'google-generativeai' to use Gemini."
+            ) from e
+
         if not user or not str(user).strip():
             raise LLMError("Prompt is empty.")
 
@@ -162,6 +176,8 @@ def call_llm(
     system: str | None,
     user: str,
     temperature: float = 0.2,
+    max_tokens: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     """
     Dispatch to the chosen provider using sensible defaults.
@@ -171,12 +187,22 @@ def call_llm(
     if provider == "claude":
         model = model or "claude-sonnet-4-6"
         return call_claude(
-            api_key=api_key, model=model, system=system, user=user, temperature=temperature
+            api_key=api_key,
+            model=model,
+            system=system,
+            user=user,
+            temperature=temperature,
+            max_tokens=max_tokens or 2048,
         )
     elif provider == "gemini":
         model = model or "gemini-2.5-pro"
         return call_gemini(
-            api_key=api_key, model=model, system=system, user=user, temperature=temperature
+            api_key=api_key,
+            model=model,
+            system=system,
+            user=user,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens or 8192,
         )
     else:
         raise LLMError(f"Unknown provider: {provider}")

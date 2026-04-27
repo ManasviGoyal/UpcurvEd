@@ -6,6 +6,7 @@ export default function Landing({ setView }: { setView?: (view: string) => void 
   const [mutedStates, setMutedStates] = useState([true, true, true]);
   const windowsDownloadUrl = (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
   const macDownloadUrl = (import.meta.env.VITE_MAC_DOWNLOAD_URL as string | undefined) || "";
+  const linuxDownloadUrl = (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) || "";
 
   useEffect(() => {
     // Determine theme based on time of day
@@ -22,7 +23,7 @@ export default function Landing({ setView }: { setView?: (view: string) => void 
     });
   };
 
-  const handleDownloadClick = (platform: "windows" | "mac", url: string) => {
+  const handleDownloadClick = (platform: "windows" | "mac" | "linux", url: string) => {
     trackEvent("download_click", { platform, has_url: Boolean(url) });
     if (!url) return;
     window.open(url, "_blank", "noopener,noreferrer");
@@ -197,12 +198,21 @@ export default function Landing({ setView }: { setView?: (view: string) => void 
               >
                 Download for macOS
               </button>
+              <button
+                type="button"
+                onClick={() => handleDownloadClick("linux", linuxDownloadUrl)}
+                className="px-4 py-2 rounded-lg border border-blue-500 text-sm font-semibold hover:bg-blue-500 hover:text-white transition-colors"
+                disabled={!linuxDownloadUrl}
+                title={linuxDownloadUrl ? "Download for Linux" : "Linux download URL not configured"}
+              >
+                Download for Linux
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 0.2; }
           50% { opacity: 0.3; }

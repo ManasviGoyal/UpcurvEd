@@ -7,10 +7,8 @@ const BASE_STYLE = `
   html, body {
     margin: 0;
     padding: 0;
-    width: 100%;
-    min-height: 100%;
     background: #ffffff;
-    color: #111827;
+    color: #e5e7eb;
     font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   body {
@@ -22,12 +20,7 @@ const BASE_STYLE = `
   button, input, select, textarea, canvas, label, a {
     pointer-events: auto;
   }
-  img, canvas, svg {
-    max-width: 100%;
-  }
-  canvas {
-    display: block;
-  }
+  img, svg { max-width: 100%; }
   #upcurved-widget-error {
     display: none;
     position: fixed;
@@ -79,6 +72,25 @@ const ERROR_BRIDGE = `
 })();
 </script>`;
 
+const CANVAS_FIX = `
+<script id="upcurved-canvas-fix">
+window.addEventListener('load', () => {
+  document.querySelectorAll('canvas').forEach((canvas) => {
+    const c = canvas;
+    const needsFix =
+      c.width === 0 ||
+      c.height === 0 ||
+      (c.width === 300 && c.height === 150);
+    if (!needsFix) return;
+    const parent = c.parentElement;
+    if (!parent || parent.clientWidth <= 0) return;
+    c.width = parent.clientWidth;
+    c.height = parent.clientHeight > 0 ? parent.clientHeight : Math.round(parent.clientWidth * 0.6);
+    window.dispatchEvent(new Event('resize'));
+  });
+});
+</script>`;
+
 const hasFullHtmlDocument = (input: string) => /<!doctype html|<html[\s>]/i.test(input);
 
 const wrapFragment = (input: string) => `<!DOCTYPE html>
@@ -109,6 +121,6 @@ export const prepareWidgetHtmlForIframe = (
 ): string => {
   const trimmed = String(rawHtml || "").trim();
   let html = hasFullHtmlDocument(trimmed) ? trimmed : wrapFragment(trimmed);
-  html = injectIntoHead(html, `${BASE_STYLE}\n${ERROR_BRIDGE}`);
+  html = injectIntoHead(html, `${BASE_STYLE}\n${ERROR_BRIDGE}\n${CANVAS_FIX}`);
   return html;
 };

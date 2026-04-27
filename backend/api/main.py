@@ -4,6 +4,8 @@ import mimetypes
 import os
 import pathlib
 import re
+import time
+import json
 from difflib import SequenceMatcher
 from typing import Literal
 from uuid import uuid4
@@ -11,20 +13,12 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from firebase_admin import auth as fb_auth
-from google.cloud import firestore as gcf
 from pydantic import BaseModel, Field
 
 from backend.agent.code_sanitize import sanitize_minimally
-from backend.agent.graph import run_to_code
 from backend.agent.llm.clients import call_llm
 from backend.agent.minigraph import echo_manim_code
 from backend.agent.prompts import EDIT_SYSTEM, build_edit_user_prompt
-from backend.firebase_app import get_db, init_firebase
-from backend.gcs_utils import delete_folder, get_bucket_name, sign_url, upload_bytes
-from backend.mcp.podcast_logic import generate_podcast
-from backend.mcp.quiz_logic import generate_quiz_embedded
-from backend.mcp.widget_logic import generate_widget
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
 
 from backend.utils import app_logging  # noqa: F401
@@ -32,6 +26,168 @@ from backend.utils import app_logging  # noqa: F401
 logger = logging.getLogger(f"app.{__name__}")
 APP_MODE = os.environ.get("APP_MODE", "cloud").strip().lower()
 DESKTOP_LOCAL_MODE = APP_MODE == "desktop-local"
+try:
+    from google.cloud import firestore as gcf  # type: ignore
+except Exception:  # pragma: no cover
+    gcf = None
+
+_DESKTOP_STORE: dict[str, dict] = {}
+_DESKTOP_STATE_DIR = pathlib.Path(os.environ.get("UPCURVED_DESKTOP_STATE_DIR", ".desktop-state"))
+_DESKTOP_STATE_FILE = _DESKTOP_STATE_DIR / "desktop_store.json"
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _desktop_user(uid: str) -> dict:
+    return _DESKTOP_STORE.setdefault(uid, {"chats": {}})
+
+
+def _desktop_chat(uid: str, chat_id: str) -> dict | None:
+    return _desktop_user(uid)["chats"].get(chat_id)
+
+
+def _normalize_desktop_store(raw: dict | None) -> dict[str, dict]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for uid, user_data in raw.items():
+        if not isinstance(uid, str):
+            continue
+        chats = {}
+        if isinstance(user_data, dict):
+            chats_in = user_data.get("chats", {})
+            if isinstance(chats_in, dict):
+                chats = chats_in
+        out[uid] = {"chats": chats}
+    return out
+
+
+def _load_desktop_store() -> None:
+    global _DESKTOP_STORE
+    try:
+        _DESKTOP_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        if not _DESKTOP_STATE_FILE.exists():
+            _DESKTOP_STORE = {}
+            return
+        data = json.loads(_DESKTOP_STATE_FILE.read_text(encoding="utf-8"))
+        _DESKTOP_STORE = _normalize_desktop_store(data)
+    except Exception as e:
+        logger.warning("Failed to load desktop state from %s: %s", _DESKTOP_STATE_FILE, e)
+        _DESKTOP_STORE = {}
+
+
+def _save_desktop_store() -> None:
+    if not DESKTOP_LOCAL_MODE:
+        return
+    try:
+        _DESKTOP_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _DESKTOP_STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_DESKTOP_STORE, ensure_ascii=True), encoding="utf-8")
+        tmp.replace(_DESKTOP_STATE_FILE)
+    except Exception as e:
+        logger.warning("Failed to persist desktop state to %s: %s", _DESKTOP_STATE_FILE, e)
+
+
+if DESKTOP_LOCAL_MODE:
+    _load_desktop_store()
+
+
+def _run_to_code(
+    prompt: str,
+    provider_keys: dict | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> tuple[str, str | None, bool, int, list[str], str | None, str | None]:
+    if DESKTOP_LOCAL_MODE:
+        from backend.agent.graph_wo_rag_retry import run_to_code as _run_to_code_local
+
+        code = _run_to_code_local(
+            prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
+        )
+        job = run_job_from_code(code)
+        failure_detail = None
+        if not job.get("ok"):
+            failure_detail = (
+                job.get("error_log")
+                or job.get("compile_log")
+                or job.get("error")
+                or "render_failed"
+            )
+        return (
+            code,
+            job.get("video_url"),
+            bool(job.get("ok")),
+            1,
+            [job.get("job_id")] if job.get("job_id") else [],
+            job.get("job_id"),
+            failure_detail,
+        )
+
+    from backend.agent.graph import run_to_code as _run_to_code_cloud
+
+    return _run_to_code_cloud(
+        prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
+    ) + (None,)
+
+
+def _get_db():
+    from backend.firebase_app import get_db as _get_db_impl
+
+    return _get_db_impl()
+
+
+def _init_firebase():
+    from backend.firebase_app import init_firebase as _init_firebase_impl
+
+    return _init_firebase_impl()
+
+
+def _get_bucket_name() -> str:
+    try:
+        from backend.gcs_utils import get_bucket_name as _get_bucket_name_impl
+
+        return _get_bucket_name_impl() or ""
+    except Exception:
+        # Desktop-local bundles may intentionally omit GCS dependencies.
+        return ""
+
+
+def _upload_bytes(bucket: str, path: str, data: bytes, content_type: str) -> str:
+    from backend.gcs_utils import upload_bytes as _upload_bytes_impl
+
+    return _upload_bytes_impl(bucket, path, data, content_type)
+
+
+def _sign_url(bucket: str, path: str, minutes: int = 60) -> str:
+    from backend.gcs_utils import sign_url as _sign_url_impl
+
+    return _sign_url_impl(bucket, path, minutes)
+
+
+def _delete_folder(bucket: str, prefix: str) -> int:
+    from backend.gcs_utils import delete_folder as _delete_folder_impl
+
+    return _delete_folder_impl(bucket, prefix)
+
+
+def _generate_quiz_embedded(*args, **kwargs):
+    from backend.mcp.quiz_logic import generate_quiz_embedded as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _generate_podcast(*args, **kwargs):
+    from backend.mcp.podcast_logic import generate_podcast as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _generate_widget(*args, **kwargs):
+    from backend.mcp.widget_logic import generate_widget as _impl
+
+    return _impl(*args, **kwargs)
 
 
 def require_firebase_user(
@@ -48,7 +204,9 @@ def require_firebase_user(
         raise HTTPException(status_code=401, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
     try:
-        init_firebase()
+        from firebase_admin import auth as fb_auth
+
+        _init_firebase()
         decoded = fb_auth.verify_id_token(token)
         uid = decoded.get("uid")
         if not uid:
@@ -88,7 +246,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if not get_bucket_name():
+if not _get_bucket_name():
     app.mount("/static", StaticFiles(directory=str(STORAGE)), name="static")
 
 
@@ -213,7 +371,7 @@ class ChatDetailOut(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "mode": APP_MODE}
 
 
 @app.post("/echo")
@@ -234,8 +392,10 @@ def _save_artifact(
     fmt: str,
     derived: bool = False,
 ):
+    if DESKTOP_LOCAL_MODE or gcf is None:
+        return None
     try:
-        db = get_db()
+        db = _get_db()
         doc = db.collection("users").document(uid).collection("artifacts").document()
         doc.set(
             {
@@ -277,129 +437,144 @@ def _srt_to_vtt_text(srt_text: str) -> str:
 
 @app.post("/generate")
 def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
-    provider = body.provider
-    model = body.model
-    if not provider:
-        if body.keys.get("gemini"):
-            provider = "gemini"
-        elif body.keys.get("claude"):
-            provider = "claude"
-    if not model and provider == "gemini":
-        model = "gemini-2.5-pro"
-    if not model and provider == "claude":
-        model = "claude-sonnet-4-6"
-    logger.info("/generate called provider=%s model=%s", provider, model)
+    try:
+        provider = body.provider
+        model = body.model
+        if not provider:
+            if body.keys.get("gemini"):
+                provider = "gemini"
+            elif body.keys.get("claude"):
+                provider = "claude"
+        if not model and provider == "gemini":
+            model = "gemini-2.5-pro"
+        if not model and provider == "claude":
+            model = "claude-sonnet-4-6"
+        logger.info("/generate called provider=%s model=%s", provider, model)
 
-    code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id = run_to_code(
-        prompt=body.prompt,
-        provider_keys=body.keys,
-        provider=provider,
-        model=model,
-    )
+        code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id, failure_detail = _run_to_code(
+            prompt=body.prompt,
+            provider_keys=body.keys,
+            provider=provider,
+            model=model,
+        )
 
-    if render_ok and video_url:
-        gcs_bucket = get_bucket_name()
-        signed_video_url = None
-        signed_subtitle_url = None
-        saved_artifact_id = None
-        gcs_path = None
+        if render_ok and video_url:
+            gcs_bucket = _get_bucket_name()
+            signed_video_url = None
+            signed_subtitle_url = None
+            saved_artifact_id = None
+            gcs_path = None
 
-        relative_path = video_url.replace("/static/", "")
-        p = pathlib.Path(STORAGE) / relative_path
-        job_id = succeeded_job_id or body.jobId or "unknown"
-        if gcs_bucket:
-            try:
-                if p.exists():
-                    data = p.read_bytes()
-                    content_type = mimetypes.guess_type(p.name)[0] or "video/mp4"
-                    gcs_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.mp4"
-                    upload_bytes(gcs_bucket, gcs_path, data, content_type)
-                    signed_video_url = sign_url(gcs_bucket, gcs_path)
-                    saved_artifact_id = _save_artifact(
-                        uid, body.chatId, "video", gcs_path, len(data), content_type, derived=False
-                    )
-                    vtt_local = p.with_suffix(".vtt")
-                    if vtt_local.exists():
-                        try:
-                            vtt_bytes = vtt_local.read_bytes()
-                            chat_path = body.chatId or "uncategorized"
-                            vtt_path = f"{uid}/chats/{chat_path}/video_{job_id}.vtt"
-                            upload_bytes(gcs_bucket, vtt_path, vtt_bytes, "text/vtt")
-                            signed_subtitle_url = sign_url(gcs_bucket, vtt_path)
-                            _save_artifact(
-                                uid, body.chatId, "subtitle", vtt_path, len(vtt_bytes), "text/vtt", derived=True,
-                            )
-                        except Exception as e:
-                            logger.warning("VTT upload failed: %s", e)
-                    if code:
-                        py_bytes = code.encode("utf-8")
-                        py_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/scene_{job_id}.py"
-                        upload_bytes(gcs_bucket, py_path, py_bytes, "text/x-python")
-                        _save_artifact(uid, body.chatId, "script", py_path, len(py_bytes), "text/x-python", derived=True)
-            except Exception as e:
-                logger.warning("GCS upload failed: %s", e)
-
-            if signed_video_url and gcs_bucket:
+            relative_path = video_url.replace("/static/", "")
+            p = pathlib.Path(STORAGE) / relative_path
+            job_id = succeeded_job_id or body.jobId or "unknown"
+            if gcs_bucket:
                 try:
                     if p.exists():
-                        p.unlink()
-                    if signed_subtitle_url:
+                        data = p.read_bytes()
+                        content_type = mimetypes.guess_type(p.name)[0] or "video/mp4"
+                        gcs_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.mp4"
+                        _upload_bytes(gcs_bucket, gcs_path, data, content_type)
+                        signed_video_url = _sign_url(gcs_bucket, gcs_path)
+                        saved_artifact_id = _save_artifact(
+                            uid, body.chatId, "video", gcs_path, len(data), content_type, derived=False
+                        )
                         vtt_local = p.with_suffix(".vtt")
                         if vtt_local.exists():
-                            vtt_local.unlink()
-                    if code:
-                        job_dir = p.parent.parent
-                        py_local = job_dir / "scene.py"
-                        if py_local.exists():
-                            py_local.unlink()
-                    try:
-                        job_dir = p.parent.parent
-                        remaining_files = [f for f in job_dir.iterdir() if f.is_file()]
-                        if job_dir.exists() and len(remaining_files) == 0:
-                            for subdir in ["logs", "out"]:
-                                subdir_path = job_dir / subdir
-                                if subdir_path.exists():
-                                    try:
-                                        subdir_path.rmdir()
-                                    except Exception:
-                                        pass
                             try:
-                                job_dir.rmdir()
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                                vtt_bytes = vtt_local.read_bytes()
+                                chat_path = body.chatId or "uncategorized"
+                                vtt_path = f"{uid}/chats/{chat_path}/video_{job_id}.vtt"
+                                _upload_bytes(gcs_bucket, vtt_path, vtt_bytes, "text/vtt")
+                                signed_subtitle_url = _sign_url(gcs_bucket, vtt_path)
+                                _save_artifact(
+                                    uid, body.chatId, "subtitle", vtt_path, len(vtt_bytes), "text/vtt", derived=True,
+                                )
+                            except Exception as e:
+                                logger.warning("VTT upload failed: %s", e)
+                        if code:
+                            py_bytes = code.encode("utf-8")
+                            py_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/scene_{job_id}.py"
+                            _upload_bytes(gcs_bucket, py_path, py_bytes, "text/x-python")
+                            _save_artifact(uid, body.chatId, "script", py_path, len(py_bytes), "text/x-python", derived=True)
                 except Exception as e:
-                    logger.warning("Failed to clean up local files: %s", e)
+                    logger.warning("GCS upload failed: %s", e)
 
-        if gcs_bucket:
-            if not signed_video_url:
-                logger.error("GCS bucket configured but upload failed")
-                return {"ok": False, "status": "error", "error": "gcs_upload_failed", "message": "Video generated but GCS upload failed.", "video_url": None}
-            final_video_url = signed_video_url
-        else:
-            final_video_url = video_url
-            if not signed_subtitle_url and p.exists():
-                vtt_local = p.with_suffix(".vtt")
-                if vtt_local.exists():
-                    signed_subtitle_url = to_static_url(vtt_local)
+                if signed_video_url and gcs_bucket:
+                    try:
+                        if p.exists():
+                            p.unlink()
+                        if signed_subtitle_url:
+                            vtt_local = p.with_suffix(".vtt")
+                            if vtt_local.exists():
+                                vtt_local.unlink()
+                        if code:
+                            job_dir = p.parent.parent
+                            py_local = job_dir / "scene.py"
+                            if py_local.exists():
+                                py_local.unlink()
+                        try:
+                            job_dir = p.parent.parent
+                            remaining_files = [f for f in job_dir.iterdir() if f.is_file()]
+                            if job_dir.exists() and len(remaining_files) == 0:
+                                for subdir in ["logs", "out"]:
+                                    subdir_path = job_dir / subdir
+                                    if subdir_path.exists():
+                                        try:
+                                            subdir_path.rmdir()
+                                        except Exception:
+                                            pass
+                                try:
+                                    job_dir.rmdir()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning("Failed to clean up local files: %s", e)
 
-        res = {
-            "ok": True,
-            "status": "ok",
-            "video_url": final_video_url,
-            "signed_video_url": signed_video_url,
-            "signed_subtitle_url": signed_subtitle_url,
-            "artifact_id": saved_artifact_id,
-            "gcs_path": gcs_path if gcs_bucket and signed_video_url else None,
-            "scene_code": code,
-            "message": "Video generated.",
+            if gcs_bucket:
+                if not signed_video_url:
+                    logger.error("GCS bucket configured but upload failed")
+                    return {"ok": False, "status": "error", "error": "gcs_upload_failed", "message": "Video generated but GCS upload failed.", "video_url": None}
+                final_video_url = signed_video_url
+            else:
+                final_video_url = video_url
+                if not signed_subtitle_url and p.exists():
+                    vtt_local = p.with_suffix(".vtt")
+                    if vtt_local.exists():
+                        signed_subtitle_url = to_static_url(vtt_local)
+
+            res = {
+                "ok": True,
+                "status": "ok",
+                "video_url": final_video_url,
+                "signed_video_url": signed_video_url,
+                "signed_subtitle_url": signed_subtitle_url,
+                "artifact_id": saved_artifact_id,
+                "gcs_path": gcs_path if gcs_bucket and signed_video_url else None,
+                "scene_code": code,
+                "message": "Video generated.",
+            }
+            logger.info("/generate completed: ok (job_id=%s, tries=%s)", succeeded_job_id, tries)
+            return res
+
+        logger.warning("/generate failed: tries=%s attempts=%s", tries, attempt_job_ids)
+        debug = (failure_detail or "").strip()
+        if debug:
+            debug = debug[:500]
+        return {
+            "ok": False,
+            "status": "error",
+            "error": "render_failed",
+            "message": "Video generation failed.",
+            "video_url": None,
+            "debug_detail": debug or None,
         }
-        logger.info("/generate completed: ok (job_id=%s, tries=%s)", succeeded_job_id, tries)
-        return res
-
-    logger.warning("/generate failed: tries=%s attempts=%s", tries, attempt_job_ids)
-    return {"ok": False, "status": "error", "error": "render_failed", "message": "Video generation failed.", "video_url": None}
+    except Exception as e:
+        logger.exception("/generate failed with exception: %s", e)
+        msg = str(e) if str(e) else f"{type(e).__name__}"
+        raise HTTPException(status_code=500, detail=msg) from e
 
 
 def _apply_unified_diff(original: str, diff_text: str, apply_all_matches: bool = False) -> str | None:
@@ -554,7 +729,7 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
         job_id = render_result.get("job_id") or body.jobId or "unknown"
 
         if render_ok and video_url:
-            gcs_bucket = get_bucket_name()
+            gcs_bucket = _get_bucket_name()
             signed_video_url = None
             signed_subtitle_url = None
             saved_artifact_id = None
@@ -566,18 +741,18 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
                     data = p.read_bytes()
                     content_type = mimetypes.guess_type(p.name)[0] or "video/mp4"
                     gcs_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.mp4"
-                    upload_bytes(gcs_bucket, gcs_path, data, content_type)
-                    signed_video_url = sign_url(gcs_bucket, gcs_path)
+                    _upload_bytes(gcs_bucket, gcs_path, data, content_type)
+                    signed_video_url = _sign_url(gcs_bucket, gcs_path)
                     saved_artifact_id = _save_artifact(uid, body.chatId, "video", gcs_path, len(data), content_type, derived=False)
                     vtt_local = p.with_suffix(".vtt")
                     if vtt_local.exists():
                         vtt_bytes = vtt_local.read_bytes()
                         vtt_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.vtt"
-                        upload_bytes(gcs_bucket, vtt_path, vtt_bytes, "text/vtt")
-                        signed_subtitle_url = sign_url(gcs_bucket, vtt_path)
+                        _upload_bytes(gcs_bucket, vtt_path, vtt_bytes, "text/vtt")
+                        signed_subtitle_url = _sign_url(gcs_bucket, vtt_path)
                     py_bytes = code.encode("utf-8")
                     py_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/scene_{job_id}.py"
-                    upload_bytes(gcs_bucket, py_path, py_bytes, "text/x-python")
+                    _upload_bytes(gcs_bucket, py_path, py_bytes, "text/x-python")
                     try:
                         if p.exists():
                             p.unlink()
@@ -627,7 +802,7 @@ def quiz_embedded(body: QuizIn):
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
             model = "claude-sonnet-4-6"
-        quiz = generate_quiz_embedded(
+        quiz = _generate_quiz_embedded(
             prompt=body.prompt, num_questions=body.num_questions,
             difficulty=body.difficulty or "medium", provider=provider, model=model,
             provider_keys=body.keys, context=body.context,
@@ -662,7 +837,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
         num_questions = body.get("num_questions", 5)
         difficulty = body.get("difficulty", "medium")
         media_prompt = f"Generate quiz questions based ONLY on the following content (from captions):\n\n{transcript}"
-        quiz = generate_quiz_embedded(
+        quiz = _generate_quiz_embedded(
             prompt=media_prompt, num_questions=num_questions, difficulty=difficulty,
             provider=provider, model=model, provider_keys=provider_keys, context=context,
         )
@@ -686,9 +861,9 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
             model = "claude-sonnet-4-6"
-        result = generate_podcast(prompt=body.prompt, provider=provider, model=model, provider_keys=body.keys, job_id=body.jobId)
+        result = _generate_podcast(prompt=body.prompt, provider=provider, model=model, provider_keys=body.keys, job_id=body.jobId)
 
-        gcs_bucket = get_bucket_name()
+        gcs_bucket = _get_bucket_name()
         if gcs_bucket and result.get("video_url"):
             try:
                 job_id = result.get("job_id", "unknown")
@@ -698,8 +873,8 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                     data = p.read_bytes()
                     content_type = mimetypes.guess_type(p.name)[0] or "audio/mpeg"
                     gcs_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/podcast_{job_id}.mp3"
-                    upload_bytes(gcs_bucket, gcs_path, data, content_type)
-                    result["signed_video_url"] = sign_url(gcs_bucket, gcs_path)
+                    _upload_bytes(gcs_bucket, gcs_path, data, content_type)
+                    result["signed_video_url"] = _sign_url(gcs_bucket, gcs_path)
                     result["gcs_path"] = gcs_path
                     saved_artifact_id = _save_artifact(uid, body.chatId, "podcast", gcs_path, len(data), content_type, derived=False)
                     result["artifact_id"] = saved_artifact_id
@@ -707,7 +882,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                         script_bytes = result["script"].encode("utf-8")
                         chat_path = body.chatId or "uncategorized"
                         script_gcs_path = f"{uid}/chats/{chat_path}/podcast_{job_id}_script.txt"
-                        upload_bytes(gcs_bucket, script_gcs_path, script_bytes, "text/plain")
+                        _upload_bytes(gcs_bucket, script_gcs_path, script_bytes, "text/plain")
                         result["script_gcs_path"] = script_gcs_path
                         _save_artifact(uid, body.chatId, "script", script_gcs_path, len(script_bytes), "text/plain", derived=True)
                     if result.get("vtt_url"):
@@ -717,8 +892,8 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                             vtt_data = vtt_path_local.read_bytes()
                             chat_path = body.chatId or "uncategorized"
                             vtt_gcs_path = f"{uid}/chats/{chat_path}/podcast_{job_id}.vtt"
-                            upload_bytes(gcs_bucket, vtt_gcs_path, vtt_data, "text/vtt")
-                            result["signed_subtitle_url"] = sign_url(gcs_bucket, vtt_gcs_path)
+                            _upload_bytes(gcs_bucket, vtt_gcs_path, vtt_data, "text/vtt")
+                            result["signed_subtitle_url"] = _sign_url(gcs_bucket, vtt_gcs_path)
                             _save_artifact(uid, body.chatId, "subtitle", vtt_gcs_path, len(vtt_data), "text/vtt", derived=True)
                     if result.get("signed_video_url"):
                         try:
@@ -765,7 +940,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
 
     logger.info("/widget called provider=%s model=%s", provider, model)
     try:
-        result = generate_widget(prompt=body.prompt, provider=provider, model=model, provider_keys=body.keys)
+        result = _generate_widget(prompt=body.prompt, provider=provider, model=model, provider_keys=body.keys)
         logger.info("/widget completed: ok, html_len=%d", len(result.get("widget_html", "")))
         return {"ok": True, "status": "ok", "widget_html": result["widget_html"]}
     except Exception as e:
@@ -774,10 +949,36 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
 
 
 def _chat_doc(uid: str, chat_id: str):
-    return get_db().collection("users").document(uid).collection("chats").document(chat_id)
+    return _get_db().collection("users").document(uid).collection("chats").document(chat_id)
 
 
 def _paginate_messages(chat_id: str, uid: str, limit: int, before_ms: int | None) -> tuple[list[MessageOut], bool]:
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        messages = list(chat.get("messages", []))
+        if before_ms is not None:
+            messages = [m for m in messages if int(m.get("createdAt", 0) or 0) < before_ms]
+        messages.sort(key=lambda m: int(m.get("createdAt", 0) or 0))
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[-limit:]
+        out = [
+            MessageOut(
+                message_id=str(m.get("message_id")),
+                role=m.get("role", "assistant"),
+                content=m.get("content", ""),
+                createdAt=int(m.get("createdAt", 0) or 0),
+                media=m.get("media"),
+                quizAnchor=m.get("quizAnchor"),
+                quizTitle=m.get("quizTitle"),
+                quizData=m.get("quizData"),
+            )
+            for m in messages
+        ]
+        return out, has_more
+
     msgs_ref = _chat_doc(uid, chat_id).collection("messages")
     if before_ms:
         q = (
@@ -809,6 +1010,22 @@ def _paginate_messages(chat_id: str, uid: str, limit: int, before_ms: int | None
 
 
 def get_chat(chat_id: str, uid: str, limit: int = 200, before_ms: int | None = None):
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        msgs, _ = _paginate_messages(chat_id, uid, limit=limit, before_ms=before_ms)
+        return ChatDetailOut(
+            chat_id=chat_id,
+            title=chat.get("title", "Untitled"),
+            dts=int(chat.get("updatedAt", 0) or 0),
+            sessionId=chat.get("sessionId"),
+            messages=msgs,
+            shareable=bool(chat.get("shareable", False)),
+            share_token=chat.get("shareToken"),
+            model=chat.get("model"),
+        )
+
     chat_snap = _chat_doc(uid, chat_id).get()
     if not chat_snap.exists:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -822,10 +1039,51 @@ def get_chat(chat_id: str, uid: str, limit: int = 200, before_ms: int | None = N
 
 
 def append_message(chat_id: str, body: MessageCreateIn, uid: str):
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        now_ms = _now_ms()
+        message_id = body.message_id or uuid4().hex[:16]
+        media_dict = None
+        if body.media is not None:
+            try:
+                media_dict = body.media.dict(exclude_none=True)
+            except Exception:
+                media_dict = None
+        payload = {
+            "message_id": message_id,
+            "role": body.role,
+            "content": body.content,
+            "createdAt": now_ms,
+            "media": media_dict,
+            "quizAnchor": body.quizAnchor,
+            "quizTitle": body.quizTitle,
+            "quizData": body.quizData,
+        }
+        messages = chat.setdefault("messages", [])
+        existing_idx = next((i for i, m in enumerate(messages) if m.get("message_id") == message_id), -1)
+        if existing_idx >= 0:
+            messages[existing_idx] = payload
+        else:
+            messages.append(payload)
+        chat["updatedAt"] = now_ms
+        _save_desktop_store()
+        return MessageOut(
+            message_id=message_id,
+            role=body.role,
+            content=body.content,
+            createdAt=now_ms,
+            media=media_dict,
+            quizAnchor=body.quizAnchor,
+            quizTitle=body.quizTitle,
+            quizData=body.quizData,
+        )
+
     chat_ref = _chat_doc(uid, chat_id)
     if not chat_ref.get().exists:
         raise HTTPException(status_code=404, detail="Chat not found")
-    get_db()
+    _get_db()
     msg_ref = (
         chat_ref.collection("messages").document(body.message_id)
         if body.message_id
@@ -866,7 +1124,24 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
 
 
 def list_chats(uid: str, limit: int = 50):
-    db = get_db()
+    if DESKTOP_LOCAL_MODE:
+        chats = list(_desktop_user(uid)["chats"].items())
+        chats.sort(key=lambda it: int(it[1].get("updatedAt", 0) or 0), reverse=True)
+        out: list[ChatItemOut] = []
+        for chat_id, data in chats[:limit]:
+            out.append(
+                ChatItemOut(
+                    chat_id=chat_id,
+                    title=data.get("title", "Untitled"),
+                    dts=int(data.get("updatedAt", 0) or 0),
+                    sessionId=data.get("sessionId"),
+                    shareable=bool(data.get("shareable", False)),
+                    share_token=data.get("shareToken"),
+                )
+            )
+        return out
+
+    db = _get_db()
     chats_ref = db.collection("users").document(uid).collection("chats")
     q = chats_ref.order_by("updatedAt", direction=gcf.Query.DESCENDING).limit(limit)
     docs = q.stream()
@@ -882,7 +1157,32 @@ def list_chats(uid: str, limit: int = 50):
 
 
 def create_chat(body: ChatCreateIn, uid: str):
-    db = get_db()
+    if DESKTOP_LOCAL_MODE:
+        chat_id = uuid4().hex[:16]
+        now_ms = _now_ms()
+        shareable = bool(body.shareable)
+        share_token = body.share_token if shareable else None
+        _desktop_user(uid)["chats"][chat_id] = {
+            "title": body.title or "New Chat",
+            "model": body.model or None,
+            "sessionId": body.sessionId or None,
+            "createdAt": now_ms,
+            "updatedAt": now_ms,
+            "shareable": shareable,
+            "shareToken": share_token,
+            "messages": [],
+        }
+        _save_desktop_store()
+        return ChatItemOut(
+            chat_id=chat_id,
+            title=body.title or "New Chat",
+            dts=now_ms,
+            sessionId=body.sessionId,
+            shareable=shareable,
+            share_token=share_token,
+        )
+
+    db = _get_db()
     chat_ref = db.collection("users").document(uid).collection("chats").document()
     now = gcf.SERVER_TIMESTAMP
     shareable = bool(body.shareable)
@@ -916,13 +1216,15 @@ def refresh_artifact(
     subtitle: bool = Query(False),
     uid: str = Depends(require_firebase_user),
 ):
-    gcs_bucket = get_bucket_name()
+    if DESKTOP_LOCAL_MODE:
+        return ArtifactRefreshOut(ok=True, artifact_id=artifactId, gcs_path=gcsPath)
+    gcs_bucket = _get_bucket_name()
     if not gcs_bucket:
         raise HTTPException(status_code=400, detail="No GCS bucket configured")
     path = gcsPath
     if artifactId and not path:
         try:
-            db = get_db()
+            db = _get_db()
             snap = db.collection("users").document(uid).collection("artifacts").document(artifactId).get()
             if not snap.exists:
                 raise HTTPException(status_code=404, detail="Artifact not found")
@@ -935,18 +1237,25 @@ def refresh_artifact(
     if not path:
         raise HTTPException(status_code=400, detail="Missing artifactId or gcsPath")
     try:
-        signed_main = sign_url(gcs_bucket, path)
+        signed_main = _sign_url(gcs_bucket, path)
         signed_sub = None
         if subtitle:
             base, ext = os.path.splitext(path)
             vtt_path = base + ".vtt"
-            signed_sub = sign_url(gcs_bucket, vtt_path)
+            signed_sub = _sign_url(gcs_bucket, vtt_path)
         return ArtifactRefreshOut(ok=True, signed_video_url=signed_main, signed_subtitle_url=signed_sub, gcs_path=path, artifact_id=artifactId)
     except Exception as e:
         raise HTTPException(status_code=500, detail="Refresh failed") from e
 
 
 def list_messages(chat_id: str, uid: str, limit: int = 50, before_ms: int | None = None):
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        msgs, has_more = _paginate_messages(chat_id, uid, limit=limit, before_ms=before_ms)
+        return MessagesPage(messages=msgs, has_more=has_more)
+
     chat_snap = _chat_doc(uid, chat_id).get()
     if not chat_snap.exists:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -956,6 +1265,35 @@ def list_messages(chat_id: str, uid: str, limit: int = 50, before_ms: int | None
 
 @app.get("/api/chats/{chat_id}/export")
 def export_chat(chat_id: str, uid: str = Depends(require_firebase_user)):
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        messages = sorted(
+            list(chat.get("messages", [])),
+            key=lambda m: int(m.get("createdAt", 0) or 0),
+        )
+        msgs = [
+            {
+                "message_id": str(m.get("message_id")),
+                "role": m.get("role"),
+                "content": m.get("content"),
+                "createdAt": int(m.get("createdAt", 0) or 0),
+                "media": m.get("media") or None,
+            }
+            for m in messages
+        ]
+        return {
+            "chat": {
+                "chat_id": chat_id,
+                "title": chat.get("title", "Untitled"),
+                "createdAt": int(chat.get("createdAt", 0) or 0),
+                "updatedAt": int(chat.get("updatedAt", 0) or 0),
+            },
+            "messages": msgs,
+            "version": 1,
+        }
+
     chat_snap = _chat_doc(uid, chat_id).get()
     if not chat_snap.exists:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -977,6 +1315,22 @@ class ChatShareToggleIn(BaseModel):
 
 
 def rename_chat(chat_id: str, body: ChatRenameIn, uid: str):
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        chat["title"] = body.title
+        chat["updatedAt"] = _now_ms()
+        _save_desktop_store()
+        return ChatItemOut(
+            chat_id=chat_id,
+            title=chat["title"],
+            dts=chat["updatedAt"],
+            sessionId=chat.get("sessionId"),
+            shareable=bool(chat.get("shareable", False)),
+            share_token=chat.get("shareToken"),
+        )
+
     chat_ref = _chat_doc(uid, chat_id)
     snap = chat_ref.get()
     if not snap.exists:
@@ -990,6 +1344,27 @@ def rename_chat(chat_id: str, body: ChatRenameIn, uid: str):
 
 @app.patch("/api/chats/{chat_id}/share", response_model=ChatItemOut)
 def toggle_share(chat_id: str, body: ChatShareToggleIn, uid: str = Depends(require_firebase_user)):
+    if DESKTOP_LOCAL_MODE:
+        chat = _desktop_chat(uid, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        shareable = bool(body.shareable)
+        share_token = chat.get("shareToken")
+        if shareable and not share_token:
+            share_token = uuid4().hex[:16]
+        chat["shareable"] = shareable
+        chat["shareToken"] = share_token
+        chat["updatedAt"] = _now_ms()
+        _save_desktop_store()
+        return ChatItemOut(
+            chat_id=chat_id,
+            title=chat.get("title", "Untitled"),
+            dts=chat.get("updatedAt"),
+            sessionId=chat.get("sessionId"),
+            shareable=shareable,
+            share_token=share_token,
+        )
+
     chat_ref = _chat_doc(uid, chat_id)
     snap = chat_ref.get()
     if not snap.exists:
@@ -1012,7 +1387,36 @@ def toggle_share(chat_id: str, body: ChatShareToggleIn, uid: str = Depends(requi
 
 @app.get("/api/share/{token}", response_model=ChatDetailOut)
 def get_shared_chat(token: str, limit: int = Query(500, ge=1, le=1000)):
-    db = get_db()
+    if DESKTOP_LOCAL_MODE:
+        for _uid, user_data in _DESKTOP_STORE.items():
+            for chat_id, chat in user_data.get("chats", {}).items():
+                if chat.get("shareable") and chat.get("shareToken") == token:
+                    msgs = [
+                        MessageOut(
+                            message_id=str(m.get("message_id")),
+                            role=m.get("role", "assistant"),
+                            content=m.get("content", ""),
+                            createdAt=int(m.get("createdAt", 0) or 0),
+                            media=m.get("media"),
+                            quizAnchor=m.get("quizAnchor"),
+                            quizTitle=m.get("quizTitle"),
+                            quizData=m.get("quizData"),
+                        )
+                        for m in chat.get("messages", [])[:limit]
+                    ]
+                    return ChatDetailOut(
+                        chat_id=chat_id,
+                        title=chat.get("title", "Untitled"),
+                        dts=int(chat.get("updatedAt", 0) or 0),
+                        sessionId=chat.get("sessionId"),
+                        messages=msgs,
+                        shareable=True,
+                        share_token=token,
+                        model=chat.get("model"),
+                    )
+        raise HTTPException(status_code=404, detail="Shared chat not found")
+
+    db = _get_db()
     try:
         q = db.collection_group("chats").where("shareToken", "==", token).limit(1)
         docs = list(q.stream())
@@ -1070,16 +1474,7 @@ def continue_chat_route(chat_id: str, body: MessageCreateIn, uid: str = Depends(
     if idempotency_key and not body.message_id:
         body.message_id = idempotency_key
     append_message(chat_id, body, uid)
-    chat_snap = _chat_doc(uid, chat_id).get()
-    if not chat_snap.exists:
-        raise HTTPException(status_code=404, detail="Chat not found")
-    chat_data = chat_snap.to_dict() or {}
-    msgs, _ = _paginate_messages(chat_id, uid, limit=200, before_ms=None)
-    return ChatDetailOut(
-        chat_id=chat_id, title=chat_data.get("title", "Untitled"), dts=_to_ms(chat_data.get("updatedAt")),
-        sessionId=chat_data.get("sessionId"), messages=msgs, shareable=bool(chat_data.get("shareable", False)),
-        share_token=chat_data.get("shareToken"), model=chat_data.get("model"),
-    )
+    return get_chat(chat_id, uid, limit=200, before_ms=None)
 
 
 @app.get("/api/chats/{chat_id}/messages", response_model=MessagesPage)
@@ -1099,17 +1494,28 @@ def delete_chat_route(chat_id: str, uid: str = Depends(require_firebase_user)):
 
 @app.delete("/api/account")
 def delete_account_route(uid: str = Depends(require_firebase_user)):
-    if DESKTOP_LOCAL_MODE:
-        return {"ok": True, "uid": uid, "chats_removed": 0, "messages_removed": 0, "artifacts_removed": 0, "gcs_files_removed": 0}
     return _delete_account_impl(uid)
 
 
 def _delete_chat_impl(chat_id: str, uid: str):
+    if DESKTOP_LOCAL_MODE:
+        user = _desktop_user(uid)
+        chat = user["chats"].pop(chat_id, None)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        _save_desktop_store()
+        return {
+            "ok": True,
+            "deleted": chat_id,
+            "messages_removed": len(chat.get("messages", [])),
+            "gcs_files_removed": 0,
+        }
+
     chat_ref = _chat_doc(uid, chat_id)
     snap = chat_ref.get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Chat not found")
-    db = get_db()
+    db = _get_db()
     batch = db.batch()
     msgs = chat_ref.collection("messages").stream()
     count = 0
@@ -1118,18 +1524,31 @@ def _delete_chat_impl(chat_id: str, uid: str):
         count += 1
     batch.delete(chat_ref)
     batch.commit()
-    gcs_bucket = get_bucket_name()
+    gcs_bucket = _get_bucket_name()
     gcs_deleted = 0
     if gcs_bucket:
         try:
-            gcs_deleted = delete_folder(gcs_bucket, f"{uid}/chats/{chat_id}/")
+            gcs_deleted = _delete_folder(gcs_bucket, f"{uid}/chats/{chat_id}/")
         except Exception as e:
             logger.warning("Failed to delete GCS folder for chat %s: %s", chat_id, e)
     return {"ok": True, "deleted": chat_id, "messages_removed": count, "gcs_files_removed": gcs_deleted}
 
 
 def _delete_account_impl(uid: str):
-    db = get_db()
+    if DESKTOP_LOCAL_MODE:
+        user = _DESKTOP_STORE.pop(uid, {"chats": {}})
+        chats = list(user.get("chats", {}).values())
+        _save_desktop_store()
+        return {
+            "ok": True,
+            "uid": uid,
+            "chats_removed": len(chats),
+            "messages_removed": sum(len(c.get("messages", [])) for c in chats),
+            "artifacts_removed": 0,
+            "gcs_files_removed": 0,
+        }
+
+    db = _get_db()
 
     def delete_collection(coll_ref, batch_size=500):
         deleted = 0
@@ -1157,11 +1576,11 @@ def _delete_account_impl(uid: str):
         total_chats += 1
     artifacts_ref = db.collection("users").document(uid).collection("artifacts")
     total_artifacts = delete_collection(artifacts_ref)
-    gcs_bucket = get_bucket_name()
+    gcs_bucket = _get_bucket_name()
     if gcs_bucket:
         try:
-            total_gcs_files = delete_folder(gcs_bucket, f"{uid}/")
-            delete_folder(gcs_bucket, f"{uid}/chats/")
+            total_gcs_files = _delete_folder(gcs_bucket, f"{uid}/")
+            _delete_folder(gcs_bucket, f"{uid}/chats/")
         except Exception as e:
             logger.warning("Failed to delete GCS folder for user %s: %s", uid, e)
     try:
@@ -1178,6 +1597,8 @@ def _to_ms(ts) -> int | None:
     try:
         if ts is None:
             return None
+        if isinstance(ts, (int, float)):
+            return int(ts)
         seconds = getattr(ts, "seconds", None)
         nanos = getattr(ts, "nanoseconds", 0)
         if seconds is None:

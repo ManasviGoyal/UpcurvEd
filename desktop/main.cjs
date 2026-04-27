@@ -3,7 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const http = require("http");
 const net = require("net");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 let keytar = null;
 try {
@@ -25,11 +25,16 @@ const PYTHON_RUNTIME_VENV_DIR = IS_PACKAGED
 const PYTHON_RUNTIME_BIN_DIR = IS_PACKAGED
   ? path.join(process.resourcesPath, "python-runtime", "bin")
   : path.join(APP_DIR, "desktop", "python-runtime", "bin");
+const IS_WSL =
+  process.platform === "linux" &&
+  (Boolean(process.env.WSL_DISTRO_NAME) || fs.existsSync("/proc/sys/fs/binfmt_misc/WSLInterop"));
 
 const API_HOST = "127.0.0.1";
-const API_PORT = 8000;
+let API_PORT = Number(process.env.DESKTOP_API_PORT || 8000);
 const UI_HOST = "127.0.0.1";
 const UI_PORT = 8080;
+const REUSE_EXISTING_SERVERS = process.env.DESKTOP_REUSE_EXISTING_SERVERS !== "0";
+const BACKEND_RELOAD = process.env.DESKTOP_BACKEND_RELOAD === "1";
 
 let backendProcess = null;
 let frontendDevProcess = null;
@@ -115,6 +120,49 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function canRun(command, args) {
+  const result = spawnSync(command, args, {
+    stdio: "ignore",
+  });
+  return result.status === 0;
+}
+
+function httpGetJson(url, timeoutMs = 1200) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (err) {
+          reject(new Error("invalid_json_response"));
+        }
+      });
+    });
+    req.on("timeout", () => {
+      req.destroy(new Error("timeout"));
+    });
+    req.on("error", (err) => reject(err));
+  });
+}
+
+async function isHealthyBackendRunning() {
+  try {
+    const payload = await httpGetJson(`http://${API_HOST}:${API_PORT}/health`, 1200);
+    return Boolean(payload && payload.ok === true);
+  } catch {
+    return false;
+  }
+}
+
 function isPortOpen(port, host, timeoutMs = 600) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -136,6 +184,27 @@ function isPortOpen(port, host, timeoutMs = 600) {
   });
 }
 
+function canBindPort(port, host) {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.unref();
+    tester.once("error", () => resolve(false));
+    tester.listen(port, host, () => {
+      tester.close(() => resolve(true));
+    });
+  });
+}
+
+async function findOpenPort(startPort, host, maxAttempts = 25) {
+  let port = startPort;
+  for (let i = 0; i < maxAttempts; i += 1, port += 1) {
+    // Skip ports already in use quickly before trying bind probe.
+    if (await isPortOpen(port, host, 250)) continue;
+    if (await canBindPort(port, host)) return port;
+  }
+  throw new Error(`No free backend port found near ${startPort}.`);
+}
+
 async function waitForPort(port, host, timeoutMs, label) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -147,11 +216,25 @@ async function waitForPort(port, host, timeoutMs, label) {
   throw new Error(`${label} did not become available at ${host}:${port} in time.`);
 }
 
+async function waitForBackendStartup(proc, port, host, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await isPortOpen(port, host, 500)) return;
+    if (proc && proc.exitCode !== null) {
+      throw new Error(`Backend process exited early (code=${proc.exitCode}).`);
+    }
+    await sleep(250);
+  }
+  throw new Error(`Backend did not become available at ${host}:${port} in time.`);
+}
+
 function getPythonCommand() {
   if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
   const bundled = getBundledPythonPath();
   if (bundled) return bundled;
-  return process.platform === "win32" ? "python" : "python3";
+  if (process.platform === "win32") return "python";
+  if (canRun("python3.12", ["--version"])) return "python3.12";
+  return "python3";
 }
 
 function getBundledPythonPath() {
@@ -223,8 +306,38 @@ function spawnManagedProcess(command, args, name, options = {}) {
 function startBackend() {
   return (async () => {
     if (await isPortOpen(API_PORT, API_HOST, 500)) {
-      console.log(`[desktop] reusing backend at ${API_HOST}:${API_PORT}`);
-      return;
+      const healthy = await isHealthyBackendRunning();
+      if (!healthy) {
+        if (IS_DEV) {
+          const fallbackPort = await findOpenPort(API_PORT + 1, API_HOST);
+          console.warn(
+            `[desktop] port ${API_PORT} is busy with a non-UpcurvEd process; switching backend to ${API_HOST}:${fallbackPort}`
+          );
+          API_PORT = fallbackPort;
+        } else {
+          throw new Error(
+            `Port ${API_PORT} is occupied by a non-UpcurvEd or unhealthy process. Stop whatever is using ${API_HOST}:${API_PORT} and rerun desktop.`
+          );
+        }
+      }
+      if (healthy && IS_DEV && !REUSE_EXISTING_SERVERS) {
+        throw new Error(
+          `Backend port ${API_PORT} is already in use. Close existing dev servers and rerun desktop:dev, or set DESKTOP_REUSE_EXISTING_SERVERS=1 to allow reuse.`
+        );
+      }
+      if (healthy) {
+        console.log(`[desktop] reusing backend at ${API_HOST}:${API_PORT}`);
+        return;
+      }
+    }
+
+    // Final guard against bind races.
+    if (!(await canBindPort(API_PORT, API_HOST))) {
+      const fallbackPort = await findOpenPort(API_PORT + 1, API_HOST);
+      console.warn(
+        `[desktop] backend port ${API_PORT} became unavailable; switching to ${API_HOST}:${fallbackPort}`
+      );
+      API_PORT = fallbackPort;
     }
 
     const python = getPythonCommand();
@@ -237,13 +350,24 @@ function startBackend() {
       "--port",
       String(API_PORT),
     ];
-    if (IS_DEV) {
+    if (IS_DEV && BACKEND_RELOAD) {
       args.push("--reload", "--reload-dir", "backend");
     }
 
     const bundledPython = getBundledPythonPath();
     const bundledFfmpeg = getBundledFfmpegPath();
     const isUsingBundledPython = Boolean(bundledPython && bundledPython === python);
+    const desktopDataDir = app.getPath("userData");
+    const storageDir = path.join(desktopDataDir, "storage");
+    const desktopStateDir = path.join(desktopDataDir, "state");
+    try {
+      fs.mkdirSync(storageDir, { recursive: true });
+      fs.mkdirSync(desktopStateDir, { recursive: true });
+    } catch (_) {
+      // Best effort; backend will fall back if needed.
+    }
+    console.log(`[desktop] storage dir: ${storageDir}`);
+    console.log(`[desktop] state dir: ${desktopStateDir}`);
     const backendPath = isUsingBundledPython
       ? `${path.dirname(python)}${path.delimiter}${PYTHON_RUNTIME_BIN_DIR}${path.delimiter}${
           process.env.PATH || ""
@@ -264,16 +388,23 @@ function startBackend() {
           ? `${BACKEND_ROOT_DIR}${path.delimiter}${process.env.PYTHONPATH}`
           : BACKEND_ROOT_DIR,
         APP_MODE: process.env.APP_MODE || "desktop-local",
+        UPCURVED_STORAGE_DIR: process.env.UPCURVED_STORAGE_DIR || storageDir,
+        UPCURVED_DESKTOP_STATE_DIR: process.env.UPCURVED_DESKTOP_STATE_DIR || desktopStateDir,
       },
     });
 
-    await waitForPort(API_PORT, API_HOST, 90000, "Backend");
+    await waitForBackendStartup(backendProcess, API_PORT, API_HOST, 90000);
   })();
 }
 
 function startFrontendDevServer() {
   return (async () => {
     if (await isPortOpen(UI_PORT, UI_HOST, 500)) {
+      if (IS_DEV && !REUSE_EXISTING_SERVERS) {
+        throw new Error(
+          `Frontend dev server port ${UI_PORT} is already in use. Close existing Vite dev server and rerun desktop:dev, or set DESKTOP_REUSE_EXISTING_SERVERS=1 to allow reuse.`
+        );
+      }
       console.log(`[desktop] reusing frontend dev server at ${UI_HOST}:${UI_PORT}`);
       return;
     }
@@ -437,6 +568,7 @@ async function shutdown() {
 }
 
 function createWindow() {
+  const runtimeApiBaseUrl = `http://${API_HOST}:${API_PORT}`;
   const mainWindow = new BrowserWindow({
     width: 1500,
     height: 920,
@@ -448,6 +580,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: [`--upcurved-api-base-url=${runtimeApiBaseUrl}`],
     },
   });
 
@@ -459,6 +592,12 @@ function createWindow() {
 }
 
 async function bootstrap() {
+  // WSL needs a GUI display (typically via WSLg). Fail fast with a clear message.
+  if (IS_WSL && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    throw new Error(
+      "WSL GUI display not detected. Install/enable WSLg or use the native Windows installer."
+    );
+  }
   await startBackend();
   if (IS_DEV) {
     await startFrontendDevServer();

@@ -77,7 +77,12 @@ export async function persistApiKeysForUser(email: string, keys: ApiKeys): Promi
     model: keys.model || "",
   });
   try {
-    await window.desktop!.secureStore!.setApiKeys(email, normalizeKeys(keys));
+    const result = await window.desktop!.secureStore!.setApiKeys(email, normalizeKeys(keys));
+    // `setApiKeys` can resolve with `{ ok: false }` when secure storage is unavailable
+    // (for example keytar not installed). Treat that as failure and fall back.
+    if (!result?.ok) {
+      throw new Error(result?.reason || "secure_store_unavailable");
+    }
   } catch {
     // Fallback: if secure store fails, keep prior behavior so user is not blocked.
     writeLocalSettings(email, normalizeKeys(keys));
