@@ -1,3 +1,4 @@
+// desktop/preload.cjs
 const { contextBridge, ipcRenderer } = require("electron");
 
 function readArg(prefix) {

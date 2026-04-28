@@ -1,3 +1,5 @@
+// desktop/main.cjs
+
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
