@@ -21,7 +21,6 @@ This is the architecture that project docs and future cleanup work should optimi
 - remove outdated assumptions from the prior web-first / RAG version
 - maintain a single understandable generation path
 - preserve a smooth desktop development and packaging workflow
-- keep optional hosted/cloud paths secondary to the desktop-first model
 
 ## System Overview
 
@@ -68,8 +67,8 @@ Its responsibilities include:
 - handling generation and editing endpoints
 - managing the prompt-to-code flow
 - invoking rendering jobs
-- serving local artifacts when cloud storage is not configured
-- supporting desktop-local persistence and optional cloud-backed compatibility paths
+- serving local artifacts
+- supporting desktop-local persistence
 
 Canonical file:
 
@@ -111,11 +110,7 @@ For desktop-local workflows:
 
 - desktop state is stored locally on disk
 - job artifacts are stored locally on disk
-- artifacts are served through local backend routes when no bucket is configured
-
-### Optional cloud-backed paths
-
-Some backend code still supports cloud storage and Firebase/Firestore-backed flows. Those paths should be treated as compatibility layers, not as the primary product architecture.
+- artifacts are served through local backend routes
 
 ## Modes of Operation
 
@@ -139,22 +134,6 @@ Characteristics:
 - frontend runs directly in the browser
 - backend may still be run locally as a separate process
 - useful for UI iteration without launching the full desktop shell
-
-### 3. Optional hosted/cloud compatibility mode
-
-This mode exists in parts of the backend for compatibility, but it is not the primary architecture target.
-
-## Removed Components
-
-The following are no longer part of the active architecture:
-
-- RAG retrieval layer
-- ChromaDB
-- `rag-service`
-- `rag/` ETL/data pipeline
-- retrieval-driven repair flow as the canonical path
-
-If any code or docs still reference those systems, those references are stale.
 
 ## Ownership Boundaries
 
@@ -181,7 +160,7 @@ Owns:
 - prompt-to-code pipeline
 - render execution
 - artifact lifecycle
-- optional persistence/storage integrations
+- persistence and artifact storage integrations for the desktop-local runtime
 
 ## Cleanup Guidance
 

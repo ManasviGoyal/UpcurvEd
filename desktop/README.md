@@ -32,10 +32,10 @@ What this does:
 - Starts FastAPI backend locally on `127.0.0.1:8000`
 - Starts Vite frontend locally on `127.0.0.1:8080`
 - Opens an Electron desktop window
-- Runs with `APP_MODE=desktop-local` so Firebase auth is not required for local desktop usage
+- Runs with `APP_MODE=desktop-local` for local desktop usage
 - Uses stable backend startup without auto-reload by default (set `DESKTOP_BACKEND_RELOAD=1` to enable reload/watch mode)
 - Persists generated media under the desktop app user-data storage directory
-- Persists desktop-local chat/message state on disk (no cloud DB required)
+- Persists desktop-local chat/message state on disk
 
 Dev safety note:
 - By default, desktop dev **reuses** existing services on ports `8000/8080` if present.
@@ -88,23 +88,6 @@ Installer artifacts are written to the `release/` folder.
 Builder prerequisites:
 - Python 3.12+ (for creating the bundled runtime used by installers)
 
-## GitHub Releases Automation
-
-This repo includes `.github/workflows/release-desktop.yml` that:
-- builds Windows x64 + macOS x64 + macOS arm64 + Linux x64 installers
-- uploads artifacts
-- publishes them to GitHub Releases
-
-Trigger options:
-- Push a version tag:
-
-```bash
-git tag v0.3.0
-git push origin v0.3.0
-```
-
-- Or run manually via **Actions → Release Desktop Installers → Run workflow** and provide a tag.
-
 ## Notes
 
 - API calls are routed via `VITE_API_BASE_URL` for desktop mode.
@@ -112,4 +95,3 @@ git push origin v0.3.0
 - API keys are stored through Electron secure storage when available (`keytar`), with local fallback.
 - Desktop runtime defaults to `UPCURVED_DISABLE_LATEX=1` to avoid requiring a TeX installation.
 - WSL is supported when a GUI display is available (WSLg). If no display is detected, startup fails with a clear error.
-- Kubernetes is not required for desktop usage.

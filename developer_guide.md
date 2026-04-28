@@ -18,7 +18,7 @@ When project files disagree, use this priority order:
 3. `backend/runner/job_runner.py` for render execution and artifact handling
 4. this guide and the root `README.md` for project-level conventions
 
-Older Docker/RAG docs should be treated as legacy until explicitly refreshed.
+Older docs from earlier iterations should be treated as legacy and not as the current source of truth.
 
 ## Current Architecture Summary
 
@@ -106,7 +106,7 @@ Health check:
 curl -s http://127.0.0.1:8000/health
 ```
 
-The backend mounts local static files at `/static` when no cloud bucket is configured.
+The backend mounts local static files at `/static`.
 
 ## Frontend-Only Development
 
@@ -161,15 +161,11 @@ Desktop-local mode is the main local runtime path.
 In this mode:
 
 - the frontend behaves as a local desktop app
-- the backend can bypass Firebase auth requirements for local use
+- the backend can run in local-first mode for desktop usage
 - chat/message state is stored in a local JSON-backed desktop store
 - generated media is stored locally
 
-### Cloud / hosted compatibility paths
-
-Some backend code still supports cloud-backed behavior such as Firebase, Firestore, or GCS. Those paths exist for compatibility, but they are not the primary source of truth for desktop development.
-
-If you update those paths, keep them clearly separated from the desktop-local behavior so the desktop workflow stays easy to reason about.
+UpcurvEd’s supported runtime is **desktop-local**. Documentation and maintenance should optimize for the local Electron + FastAPI + Vite stack.
 
 ## State, Storage, and Artifacts
 
@@ -202,7 +198,7 @@ Artifacts typically include:
 
 ### Desktop auth behavior
 
-In desktop-local mode, the backend can use `X-Desktop-User` and local-user defaults instead of requiring Firebase bearer tokens.
+In desktop-local mode, the backend can use `X-Desktop-User` and local-user defaults.
 
 ### API key storage
 
@@ -255,27 +251,13 @@ When updating the repo, prefer these rules:
 
 1. keep the current folder structure unless there is a clear payoff to moving code
 2. keep one canonical generation path
-3. document desktop-first behavior before supporting optional legacy/cloud paths
+3. document desktop-first behavior before any secondary paths
 4. remove stale RAG references instead of explaining them away
-5. do not treat Docker files as official until they match the current architecture
-
-## Docker Status
-
-The existing Docker and compose files are legacy from the older web-first deployment model and are currently under refresh.
-
-They may still be useful as a starting point for reproducible environments, but they are not the official source of truth for the current developer workflow until updated.
+5. keep the desktop-first workflow as the source of truth
 
 ## Known Documentation Debt
 
 Still worth cleaning after this doc update:
 
-- stale Docker references
-- stale compose comments and mounts
 - stale backend metadata and dependency descriptions
 - any leftover references to `graph_wo_rag_retry`, retrieval, Chroma, or `rag/`
-
-## License
-
-This repository is currently unlicensed and private.
-
-All rights reserved © 2025 Isabela Yepes, Manasvi Goyal, Nico Fidalgo.

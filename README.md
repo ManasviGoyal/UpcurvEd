@@ -9,9 +9,8 @@ UpcurvEd is now maintained as a **desktop-first** project.
 - **Primary distribution path:** packaged Electron installers
 - **Primary development workflow:** run Electron locally and let it start the backend/UI services it needs
 - **Browser/frontend-only development:** still useful for UI work, but secondary
-- **RAG:** removed from the current architecture
 
-The repository still contains some legacy files from the older web-first / RAG-based version of the project. Those files should not be treated as the current source of truth unless they have been explicitly refreshed.
+This repository is maintained as a desktop-first application. Documentation should reflect the desktop-local workflow as the source of truth.
 
 ## Current Architecture
 
@@ -129,7 +128,7 @@ Installer bundling depends on the desktop Python runtime preparation flow in `de
 
 In desktop-local mode:
 
-- authentication can run in a local-first mode instead of requiring Firebase login
+- authentication can run in a local-first mode
 - generated media is stored on disk
 - chat/message state is stored locally on disk
 - API keys are stored through Electron secure storage when available, with a local fallback when unavailable
@@ -143,7 +142,7 @@ The Electron runtime is implemented primarily in:
 
 The backend runner writes generation artifacts under a storage directory. In local development this defaults to `storage/`, and in packaged desktop builds it is redirected to the app's user-data area.
 
-When no cloud bucket is configured, the backend serves local files through `/static`.
+The backend serves local files through `/static`.
 
 ## Health Check
 
@@ -153,54 +152,13 @@ The backend health endpoint is:
 curl -s http://127.0.0.1:8000/health
 ```
 
-## Optional Docker Development
-
-Docker is optional and is intended for reproducible development of the backend and browser-based frontend.
-It is not the primary workflow for the packaged Electron desktop app.
-
-Current Docker scope:
-- `backend`: FastAPI API and generation/render pipeline
-- `frontend`: Vite development server
-
-Docker no longer includes any RAG, ChromaDB, ETL, or `rag/` services.
-
-### Start backend only
-
-```bash
-docker compose --profile backend up --build
-```
-
-### Start backend and frontend
-
-```bash
-docker compose --profile backend --profile frontend up --build
-```
-
-### Stop containers
-
-```bash
-docker compose down
-```
-
-Notes:
-- backend uses `backend/Dockerfile.dev`
-- frontend uses `frontend/Dockerfile.dev`
-- backend startup is controlled by its image entrypoint
-- frontend startup is controlled by its image entrypoint
-
-For Electron desktop development, prefer the local host workflow documented in `desktop/README.md`.
-
-
 ## Documentation Map
 
 - `README.md` — high-level overview and the current supported workflow
 - `developer_guide.md` — engineering setup, runtime notes, testing, and maintenance details
 - `desktop/README.md` — Electron-specific runtime and packaging notes
-- `docs/ARCHITECTURE.md` — current architecture and ownership boundaries
-- `docs/PHASE_5_DOCKER_NOTES.md` — Docker notes
+- `ARCHITECTURE.md` — current architecture and ownership boundaries
 
 ## License
 
-This repository is currently unlicensed and private.
-
-All rights reserved © 2025 Isabela Yepes, Manasvi Goyal, Nico Fidalgo.
+MIT. See `LICENSE`.
