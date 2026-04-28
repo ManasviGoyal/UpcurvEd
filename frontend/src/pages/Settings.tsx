@@ -1,8 +1,8 @@
-// frontend/src/pages/Settings.tsx
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import type { ApiKeys, Provider, User } from "@/types";
 import {
   clearSecurelyStoredApiKeysForUser,
@@ -31,8 +31,8 @@ const PROVIDER_LABELS: Record<Provider, string> = {
 
 const PROVIDER_MODELS: Record<Provider, string[]> = {
   "": [],
-  "claude": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
-  "gemini": ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
+  claude: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
+  gemini: ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
 };
 
 export const SettingsPage = ({
@@ -53,6 +53,7 @@ export const SettingsPage = ({
     model: apiKeys.model || "",
   });
   const [secureStorageEnabled, setSecureStorageEnabled] = useState<boolean>(false);
+  const [useSecureStorage, setUseSecureStorage] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
 
@@ -62,8 +63,10 @@ export const SettingsPage = ({
     async function hydrate() {
       const loaded = await loadApiKeysForUser(user.email);
       if (!cancelled) {
+        const secureEnabled = desktopLocal ? isSecureStorageEnabledForUser(user.email) : false;
         setLocalKeys(loaded);
-        setSecureStorageEnabled(desktopLocal ? isSecureStorageEnabledForUser(user.email) : false);
+        setSecureStorageEnabled(secureEnabled);
+        setUseSecureStorage(secureEnabled);
       }
     }
 
@@ -82,52 +85,34 @@ export const SettingsPage = ({
 
     setBusy(true);
     setStatusMessage("");
+
     try {
-      await persistApiKeysForUser(user.email, localKeys);
-      setApiKeys(localKeys);
-      setSecureStorageEnabled(false);
-      setView("chat");
-    } finally {
-      setBusy(false);
-    }
-  };
+      if (desktopLocal && useSecureStorage) {
+        const result = await persistApiKeysSecurelyForUser(user.email, localKeys);
+        setApiKeys(localKeys);
 
-  const handleSaveSecurely = async () => {
-    const trimmedName = displayName.trim();
-    if (trimmedName && trimmedName !== user.name && onUpdateName) {
-      onUpdateName(trimmedName);
-    }
+        if (result.ok) {
+          setSecureStorageEnabled(true);
+          setUseSecureStorage(true);
+          setView("chat");
+          return;
+        }
 
-    setBusy(true);
-    setStatusMessage("");
-    try {
-      const result = await persistApiKeysSecurelyForUser(user.email, localKeys);
-      setApiKeys(localKeys);
-
-      if (result.ok) {
-        setSecureStorageEnabled(true);
+        setSecureStorageEnabled(false);
+        setUseSecureStorage(false);
+        setStatusMessage(
+          "Secure storage is unavailable on this device, so keys were saved locally instead."
+        );
         setView("chat");
         return;
       }
 
-      setSecureStorageEnabled(false);
-      setStatusMessage(
-        "Secure storage was unavailable, so the keys were saved locally on this device instead."
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRemoveSecure = async () => {
-    setBusy(true);
-    setStatusMessage("");
-    try {
       await clearSecurelyStoredApiKeysForUser(user.email);
       await persistApiKeysForUser(user.email, localKeys);
       setApiKeys(localKeys);
       setSecureStorageEnabled(false);
-      setStatusMessage("Securely saved keys were removed. Current values are now stored locally only.");
+      setUseSecureStorage(false);
+      setView("chat");
     } finally {
       setBusy(false);
     }
@@ -143,7 +128,11 @@ export const SettingsPage = ({
   };
 
   return (
-    <div className={`flex items-center justify-center min-h-screen ${asDialog ? "bg-transparent" : "bg-secondary"}`}>
+    <div
+      className={`flex items-center justify-center min-h-screen ${
+        asDialog ? "bg-transparent" : "bg-secondary"
+      }`}
+    >
       <Card className="w-full max-w-md p-8">
         <h2 className="text-2xl font-bold mb-6">Settings</h2>
 
@@ -201,7 +190,7 @@ export const SettingsPage = ({
               onChange={(e) => setLocalKeys({ ...localKeys, model: e.target.value })}
               disabled={!localKeys.provider}
             >
-              <option value="">{localKeys.provider ? "Choose…" : "Select provider first"}</option>
+              <option value="">{localKeys.provider ? "Choose..." : "Select provider first"}</option>
               {(PROVIDER_MODELS[localKeys.provider || ""] || []).map((m) => (
                 <option key={m} value={m}>
                   {m}
@@ -211,49 +200,56 @@ export const SettingsPage = ({
           </div>
 
           {desktopLocal && (
-            <div className="rounded border p-3 text-sm">
-              <p className="font-medium mb-1">Secure storage</p>
-              <p className="text-muted-foreground mb-2">
-                “Save” stores your API keys locally on this device.
-                “Save API Keys Securely” stores them in your OS keychain and may show a system prompt.
-              </p>
-              <p className="text-muted-foreground">
-                Status: {secureStorageEnabled ? "Using secure storage" : "Using local storage only"}
-              </p>
+            <div className="rounded border p-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Secure key storage</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Store API keys in your OS keychain when available. Saving may show a system
+                    prompt.
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Currently: {secureStorageEnabled ? "Secure OS storage" : "Local storage"}
+                  </p>
+                </div>
+                <Switch
+                  checked={useSecureStorage}
+                  onCheckedChange={setUseSecureStorage}
+                  disabled={busy}
+                />
+              </div>
             </div>
           )}
 
           {statusMessage && <p className="text-sm text-muted-foreground">{statusMessage}</p>}
         </div>
 
-        <div className="mt-6 flex flex-col gap-3">
+        <div className="mt-6 flex flex-col gap-4">
           <div className="flex gap-4">
             <Button onClick={handleSave} className="flex-1" disabled={busy}>
               Save
             </Button>
-            <Button onClick={() => setView("chat")} variant="outline" className="flex-1" disabled={busy}>
+            <Button
+              onClick={() => setView("chat")}
+              variant="outline"
+              className="flex-1"
+              disabled={busy}
+            >
               Cancel
             </Button>
           </div>
 
-          {desktopLocal && (
-            <>
-              <Button onClick={handleSaveSecurely} variant="secondary" className="w-full" disabled={busy}>
-                Save API Keys Securely
-              </Button>
-
-              {secureStorageEnabled && (
-                <Button onClick={handleRemoveSecure} variant="outline" className="w-full" disabled={busy}>
-                  Remove Securely Saved Keys
-                </Button>
-              )}
-            </>
-          )}
-
           {desktopLocal && onResetLocalData && (
-            <Button onClick={onResetLocalData} variant="destructive" className="w-full" disabled={busy}>
-              Reset local data
-            </Button>
+            <div className="pt-2 border-t">
+              <Button
+                onClick={onResetLocalData}
+                variant="destructive"
+                className="w-full"
+                disabled={busy}
+              >
+                Reset local data
+              </Button>
+            </div>
           )}
         </div>
       </Card>
