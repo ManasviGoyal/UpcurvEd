@@ -1,168 +1,281 @@
 # Developer Guide
 
-Engineering reference for setup, secrets, health checks, and local development. For a user-facing overview and how to run via Docker, see `README.md`.
+Engineering reference for UpcurvEd's current desktop-first architecture.
 
-## Environment Setup
+This guide reflects the **current** supported workflow:
 
-- **Frontend:** requires Firebase web configuration (`frontend/.env`)
-- **Backend:** uses same Firebase project (for token verification) and optional GCP key (`rag/secrets/service-account.json`)
-- **RAG:** reads `.env` in `rag/` for GCS bucket info and paths
+- Electron desktop app as the primary product
+- local FastAPI backend for generation and rendering
+- React/Vite frontend for the UI
+- no RAG layer in the active architecture
 
-See `frontend/.env.example` and `rag/.env.example` for templates.
+## Source of Truth
 
-## Pre-commit Hooks
+When project files disagree, use this priority order:
 
-Install pre-commit hooks to automatically run linting and formatting before commits:
+1. `desktop/README.md` and `desktop/main.cjs` for desktop runtime behavior
+2. `backend/api/main.py` and `backend/agent/graph.py` for generation flow
+3. `backend/runner/job_runner.py` for render execution and artifact handling
+4. this guide and the root `README.md` for project-level conventions
 
-```bash
-# Install pre-commit (if not already installed)
-pip install pre-commit
+Older Docker/RAG docs should be treated as legacy until explicitly refreshed.
 
-# Install git hooks (one-time setup per developer)
-pre-commit install
-```
+## Current Architecture Summary
 
-After installation, pre-commit will automatically run `ruff` (linting and formatting) on Python files before each commit. If errors are found, they will be auto-fixed when possible, or the commit will be blocked for manual fixes.
+### Runtime layers
 
-## Secrets
+- `desktop/` runs Electron and bridges secure/local desktop capabilities into the UI
+- `frontend/` contains the React/Vite application
+- `backend/` contains the FastAPI API, generation logic, render runner, and supporting services
 
-The following secrets are required for authenticated access to Google Cloud services.
+### Current generation path
 
-### Service Account Key
+The main prompt-to-video flow is:
 
-**Path:**
-`rag/secrets/service-account.json`
+1. frontend sends a request to `/generate`
+2. `backend/api/main.py` calls the backend generation path
+3. `backend/agent/graph.py` handles draft → render → failure logging / retry
+4. `backend/runner/job_runner.py` runs Manim, captures logs, writes artifacts, and returns a stable result shape
 
-**Description:**
-Google Cloud **Service Account** key with permissions for cloud storage and optional compute access.
+### Removed architecture pieces
 
-**Required IAM Roles:**
-- `Storage Admin` – for uploading and downloading embeddings and video assets to GCS
-- `Service Account Token Creator` – for generating signed URLs (signBlob permission)
-- `Viewer` or `Editor` – as required for project-level operations
+The current architecture does **not** include:
 
-**Container Mount Path:**
-`/secrets/service-account.json`
+- RAG retrieval
+- ChromaDB
+- a separate rag-service
+- a `rag/` directory
 
-### ⚠️ Security Notes
+Any remaining references to those systems are stale and should be cleaned as part of ongoing maintenance.
 
-- These files **must never be committed** to version control.
-- Add the service account path to `.gitignore`:
+## Prerequisites
 
+Recommended local environment:
 
----
-### Apply CORS to your GCS Artifacts bucket
+- Node.js 20+
+- Python 3.12
+- npm
 
-Apply the following `cors.json` configuration to the artifacts bucket.
+Python 3.12 is especially important for installer builds, because bundled desktop runtime preparation depends on it.
 
-```json
-[
-  {
-    "origin": ["*"],
-    "method": ["GET", "HEAD", "OPTIONS"],
-    "responseHeader": [
-      "Content-Type",
-      "Content-Length",
-      "Range",
-      "Accept-Ranges",
-      "Content-Disposition",
-      "Access-Control-Allow-Origin",
-      "Content-Range"
-    ],
-    "maxAgeSeconds": 3600
-  }
-]
-```
+## Local Setup
 
-Next, run this command to apply the CORS configuration:
-
-```
-gsutil cors set cors.json gs://your-artifacts-bucket-name
-```
----
-
-## Health Checks
+From the repo root:
 
 ```bash
-curl -s http://localhost:8000/health        # Backend
-curl -s http://localhost:8001/health        # RAG service
-curl -s http://localhost:8001/collection/info # RAG service, 333 document count
-```
-
----
-
-## Local Development (no containers)
-
-If you prefer to run the app directly on your machine (for quick debugging or development without Docker):
-
-```bash
-# In project root
-python3 -m venv venv
-source venv/bin/activate
-# Upgrade pip/build tools and install project deps from requirements.txt
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
-```
-
-#### 1. Backend (FastAPI)
-
-# Run FastAPI backend
-cd backend
-uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Then visit:
-```
-http://localhost:8000/health
-```
-
-#### 2. Frontend (Vite + React)
-
-```bash
-cd ../frontend
 npm install
-npm run dev
+npm --prefix frontend install
+npm run desktop:dev:setup
 ```
 
-Then open:
-```
-http://localhost:8080
-```
+`desktop:dev:setup` installs the Python packages listed in `desktop/requirements-desktop.txt`, which is the dependency set currently used by the desktop workflow.
 
-#### Notes
+## Primary Development Workflow: Desktop
 
-- This setup runs the backend and frontend only; the RAG microservice and ChromaDB are not available.
-- Features that rely on semantic retrieval (for example, retries using RAG documentation) will gracefully fall back to standard generation.
-- Ensure your `frontend/.env` Firebase project ID matches your backend service account for authentication to succeed.
-
-## Linting & Tests (local)
-
-Minimal commands to lint/fix with `ruff` and run tests locally:
+Run the application in desktop development mode:
 
 ```bash
-# Run ruff to check (no changes):
-ruff check backend/ tests/
-
-# Auto-fix problems (formatting, some lint fixes):
-ruff check backend/ tests/ --fix
-
-# Alternatively run ruff format to reformat files in place:
-ruff format backend/ tests/
-
-# Run tests (repo root) - quick run:
-python -m pytest -q
-
-# Run tests with coverage:
-python -m pytest --cov=backend --cov-report=term-missing -q
-
-# Run only unit tests with coverage:
-python -m pytest tests/unit --cov=backend --cov-report=term-missing -q
+npm run desktop:dev
 ```
+
+Expected behavior:
+
+- Electron launches the app shell
+- the backend starts locally
+- the frontend starts locally in Vite dev mode
+- the UI talks to the backend over localhost
+
+### Useful desktop environment variables
+
+- `DESKTOP_BACKEND_RELOAD=1` — enable backend reload/watch mode
+- `DESKTOP_REUSE_EXISTING_SERVERS=0` — fail instead of reusing already-running local services
+- `DESKTOP_API_PORT=<port>` — override the default backend port
+- `PYTHON_BIN=<path>` — force a specific Python interpreter
+
+## Backend-Only Development
+
+To work only on the backend API:
+
+```bash
+python -m uvicorn backend.api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```bash
+curl -s http://127.0.0.1:8000/health
+```
+
+The backend mounts local static files at `/static` when no cloud bucket is configured.
+
+## Frontend-Only Development
+
+To work only on the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 8080
+```
+
+When running outside Electron, make sure the frontend is pointed at a running backend.
+
+## Installer Builds
+
+Build the desktop frontend bundle:
+
+```bash
+npm run desktop:build:frontend
+```
+
+Build installers:
+
+```bash
+npm run desktop:dist:win
+npm run desktop:dist:mac:x64
+npm run desktop:dist:mac:arm64
+npm run desktop:dist:linux
+```
+
+The packaging configuration lives in `electron-builder.yml`.
+
+### Bundled Python runtime
+
+Installer builds use `desktop/scripts/prepare-python-runtime.cjs` to construct a bundled runtime.
+
+That flow:
+
+- copies a Python 3.12 runtime
+- installs desktop Python dependencies
+- bundles Playwright Chromium
+- bundles ffmpeg
+
+This is the main reason release builds should be done with Python 3.12.
+
+## Runtime Modes
+
+### Desktop-local mode
+
+Desktop-local mode is the main local runtime path.
+
+In this mode:
+
+- the frontend behaves as a local desktop app
+- the backend can bypass Firebase auth requirements for local use
+- chat/message state is stored in a local JSON-backed desktop store
+- generated media is stored locally
+
+### Cloud / hosted compatibility paths
+
+Some backend code still supports cloud-backed behavior such as Firebase, Firestore, or GCS. Those paths exist for compatibility, but they are not the primary source of truth for desktop development.
+
+If you update those paths, keep them clearly separated from the desktop-local behavior so the desktop workflow stays easy to reason about.
+
+## State, Storage, and Artifacts
+
+### Local state
+
+Desktop-local chat state is persisted to a JSON file under the desktop state directory.
+
+Relevant environment variables and defaults:
+
+- `UPCURVED_DESKTOP_STATE_DIR` — desktop state directory
+- `UPCURVED_STORAGE_DIR` — artifact storage directory
+
+In packaged desktop builds, Electron redirects these to the app user-data area.
+
+### Render artifacts
+
+`backend/runner/job_runner.py` writes artifacts under:
+
+- `storage/jobs/<job_id>/...` in local/dev workflows
+- the desktop user-data storage area in packaged desktop workflows
+
+Artifacts typically include:
+
+- `scene.py`
+- render logs
+- `video.mp4`
+- optional subtitle files such as `video.vtt`
+
+## Auth and API Keys
+
+### Desktop auth behavior
+
+In desktop-local mode, the backend can use `X-Desktop-User` and local-user defaults instead of requiring Firebase bearer tokens.
+
+### API key storage
+
+The Electron runtime uses `keytar` when available for secure key storage. If `keytar` is unavailable, the app falls back to local settings storage.
+
+When changing this behavior, preserve the current hierarchy:
+
+1. secure desktop storage when available
+2. explicit local fallback when secure storage is unavailable
+
+## Canonical Files to Check First
+
+When debugging the current architecture, start here:
+
+### Desktop
+
+- `desktop/main.cjs`
+- `desktop/preload.cjs`
+- `desktop/README.md`
+
+### Backend
+
+- `backend/api/main.py`
+- `backend/agent/graph.py`
+- `backend/runner/job_runner.py`
+- `backend/config.py`
+
+### Frontend
+
+- `frontend/src/App.tsx`
+- `frontend/src/main.tsx`
+- `frontend/package.json`
+
+## Testing and Linting
+
+Common local commands:
+
+```bash
+ruff check backend/ tests/
+ruff format backend/ tests/
+python -m pytest -q
+python -m pytest --cov=backend --cov-report=term-missing -q
+```
+
+If you rely on these tools in CI or pre-commit, make sure they are installed in your current Python environment.
+
+## Maintenance Rules
+
+When updating the repo, prefer these rules:
+
+1. keep the current folder structure unless there is a clear payoff to moving code
+2. keep one canonical generation path
+3. document desktop-first behavior before supporting optional legacy/cloud paths
+4. remove stale RAG references instead of explaining them away
+5. do not treat Docker files as official until they match the current architecture
+
+## Docker Status
+
+The existing Docker and compose files are legacy from the older web-first deployment model and are currently under refresh.
+
+They may still be useful as a starting point for reproducible environments, but they are not the official source of truth for the current developer workflow until updated.
+
+## Known Documentation Debt
+
+Still worth cleaning after this doc update:
+
+- stale Docker references
+- stale compose comments and mounts
+- stale backend metadata and dependency descriptions
+- any leftover references to `graph_wo_rag_retry`, retrieval, Chroma, or `rag/`
 
 ## License
 
 This repository is currently unlicensed and private.
 
 All rights reserved © 2025 Isabela Yepes, Manasvi Goyal, Nico Fidalgo.
-
-Access is granted only to authorized course staff for evaluation purposes.

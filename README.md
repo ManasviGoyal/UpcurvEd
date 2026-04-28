@@ -1,209 +1,206 @@
 # UpcurvEd
 
-This project builds an AI-powered desktop-first application that generates educational content, including short educational videos, podcasts, and quizzes, from natural language prompts using **LangGraph**, **MCP** and a **Retrieval-Augmented Generation (RAG)** backend.
-
----
-
-## Overview
-
-Users enter a text prompt or upload a file describing a concept (e.g., "show a circle expanding" or "explain reinforcement learning").  
-The backend generates Manim Python code, renders the animation, uses RAG manim documentation on retries, adds voiceover, and returns a playable video.
-
----
-
-## Repository Structure
-
-```
-UpcurvEd/
-├── backend/               # FastAPI app (main API, RAG client, agent logic)
-├── frontend/              # React (Vite) UI
-├── desktop/               # Electron desktop runtime
-├── rag/                   # RAG ETL pipeline + Docker setup
-├── img/                   # Architecture diagrams, screenshots
-├── pdf/                   # Proposal & reports
-├── storage/               # Local output videos (bind-mounted volume)
-├── docker-compose.yaml    # Unified compose (frontend, backend, rag, chroma)
-└── README.md              # Project overview
-```
-
----
+UpcurvEd is a desktop-first application for generating educational media from natural-language prompts. The current product centers on an Electron app that runs a local FastAPI backend and a React/Vite frontend, then uses Manim-based generation and rendering to produce outputs such as short explainer videos, podcasts, quizzes, and interactive widgets.
 
 ## Current Product Model
 
-- **Desktop is the primary distribution path**: users download installer artifacts (`.exe` / `.dmg`) and run locally.
-- **No Kubernetes deployment in this repository**.
-- **Web usage is optional** and intended for the landing page and lightweight browser access.
+UpcurvEd is now maintained as a **desktop-first** project.
 
-For desktop users, there are no build/setup steps after install. The app starts local services automatically.
+- **Primary distribution path:** packaged Electron installers
+- **Primary development workflow:** run Electron locally and let it start the backend/UI services it needs
+- **Browser/frontend-only development:** still useful for UI work, but secondary
+- **RAG:** removed from the current architecture
 
----
+The repository still contains some legacy files from the older web-first / RAG-based version of the project. Those files should not be treated as the current source of truth unless they have been explicitly refreshed.
 
-## Containers and Profiles
+## Current Architecture
 
-| Service | Port | Description |
-|----------|------|-------------|
-| **frontend** | 8080 | React/Vite development server |
-| **backend** | 8000 | FastAPI API for generation, rendering, and Firebase auth |
-| **rag-service** | 8001 | FastAPI microservice for vector retrieval from ChromaDB |
-| **chroma** | 8000 internal | Vector database (embeddings store) |
-| **llm-rag-job** | — | One-shot ETL: fetch, preprocess, embed, upload/download to GCS |
+At a high level, the app works like this:
 
-![System Architecture](img/11-15-25_sys_arch.png)
+1. The Electron runtime in `desktop/` starts the local backend and loads the frontend UI.
+2. The React/Vite frontend in `frontend/` sends generation requests to the backend.
+3. The FastAPI backend in `backend/` turns prompts into Manim code, renders media, and returns artifacts.
+4. Generated media is stored locally for desktop use and served back to the UI.
 
-Profiles group services for flexible startup:
+### Generation Path
 
-```bash
-# Run backend + rag stack
-docker compose --profile backend --profile rag up -d
+The current generation flow is centered on the backend graph in `backend/agent/graph.py`:
 
-# Include frontend
-docker compose --profile frontend --profile backend --profile rag up -d
+- draft code
+- render with Manim
+- log failure if rendering fails
+- retry or end
+
+Rendering is handled by `backend/runner/job_runner.py`, which writes job artifacts under storage, runs Manim, captures logs, and returns a uniform job result.
+
+## Repository Structure
+
+```text
+UpcurvEd/
+├── backend/               # FastAPI backend, generation graph, runner, MCP logic
+├── frontend/              # React/Vite UI used by desktop and browser-based dev
+├── desktop/               # Electron runtime, preload bridge, bundled Python tooling
+├── docs/                  # Project architecture and developer docs
+├── img/                   # Images and diagrams
+├── pdf/                   # Reports and course/project PDFs
+├── storage/               # Local render artifacts for non-packaged/dev workflows
+├── tests/                 # Automated tests
+├── package.json           # Root desktop/electron scripts
+├── electron-builder.yml   # Electron packaging config
+├── README.md              # Project overview
+└── developer_guide.md     # Engineering setup and maintenance notes
 ```
 
----
+## Supported Workflows
 
-## Environment Setup
+### 1. Desktop development (official workflow)
 
-- **Frontend (web mode):** uses Firebase web configuration (`frontend/.env`) for browser auth routes.
-- **Frontend (desktop mode):** local-first mode, no mandatory Firebase dependency for landing/home flow.
-- **Backend:** optional Firebase token verification in cloud/web mode; desktop-local mode bypasses mandatory Firebase token checks.
-- **RAG:** reads `.env` in `rag/` for GCS bucket info and paths
+This is the main development path and the best way to work on the product end to end.
 
-See `frontend/.env.example` and `rag/.env.example` for templates.
+Prerequisites:
 
-## RAG Architecture Summary
+- Node.js 20+
+- Python 3.12 recommended
 
-The RAG system consists of three coordinated components:
-
-1. **ChromaDB (chroma)** – a vector database that stores embeddings of Manim documentation and example scenes.
-
-2. **llm-rag-job** – a one-shot ETL (Extract–Transform–Load) container that builds embeddings from source repositories, stores them in ChromaDB, and optionally uploads/downloads them to a GCS bucket for persistence.
-
-3. **rag-service** – a FastAPI microservice that queries ChromaDB for semantically relevant documents and exposes them via an HTTP API for the main backend to consume.
-
-- Within the main backend, the rag_client module automatically connects to the rag-service microservice to retrieve relevant context during code generation.
-
-- **Data versioning:** RAG embeddings are versioned on GCS with per-version manifests. See `docs/DATA_VERSIONING.md` for details.
----
-
-## Quick Start
-
-### NPM Setup (Maintainers)
-
-Run these once from repo root:
+Install dependencies from the repo root:
 
 ```bash
 npm install
 npm --prefix frontend install
+npm run desktop:dev:setup
 ```
 
-Use these npm scripts during development/release:
+Then start the desktop app:
 
 ```bash
-# Run desktop app in dev mode
 npm run desktop:dev
+```
 
-# Build frontend for desktop mode
+This starts:
+
+- a local FastAPI backend, usually at `127.0.0.1:8000`
+- a local Vite dev server, usually at `127.0.0.1:8080`
+- an Electron window as the application shell
+
+### 2. Frontend-only UI development
+
+You can still run the frontend directly in a browser for UI work:
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 8080
+```
+
+### 3. Backend-only development
+
+You can run the backend directly without Electron when debugging backend behavior:
+
+```bash
+python -m uvicorn backend.api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+## Build Desktop Installers
+
+Packaged desktop builds bundle the frontend, backend, and bundled Python runtime.
+
+Build the frontend for desktop mode:
+
+```bash
 npm run desktop:build:frontend
+```
 
-# Build installers
+Build installers:
+
+```bash
 npm run desktop:dist:win
 npm run desktop:dist:mac:x64
 npm run desktop:dist:mac:arm64
+npm run desktop:dist:linux
 ```
 
-### Desktop Start (Recommended)
+Artifacts are written to `release/`.
+
+### Build note
+
+Installer bundling depends on the desktop Python runtime preparation flow in `desktop/scripts/prepare-python-runtime.cjs`, which requires **Python 3.12**.
+
+## Desktop Runtime Notes
+
+In desktop-local mode:
+
+- authentication can run in a local-first mode instead of requiring Firebase login
+- generated media is stored on disk
+- chat/message state is stored locally on disk
+- API keys are stored through Electron secure storage when available, with a local fallback when unavailable
+
+The Electron runtime is implemented primarily in:
+
+- `desktop/main.cjs`
+- `desktop/preload.cjs`
+
+## Storage and Artifacts
+
+The backend runner writes generation artifacts under a storage directory. In local development this defaults to `storage/`, and in packaged desktop builds it is redirected to the app's user-data area.
+
+When no cloud bucket is configured, the backend serves local files through `/static`.
+
+## Health Check
+
+The backend health endpoint is:
 
 ```bash
-# From repo root
-npm install
-npm --prefix frontend install
-npm run desktop:dev
+curl -s http://127.0.0.1:8000/health
 ```
 
-Desktop mode runs locally:
-- backend at `127.0.0.1:8000`
-- frontend at `127.0.0.1:8080`
-- Electron window as the app shell
+## Optional Docker Development
 
-### Build Desktop Installers
+Docker is optional and is intended for reproducible development of the backend and browser-based frontend.
+It is not the primary workflow for the packaged Electron desktop app.
+
+Current Docker scope:
+- `backend`: FastAPI API and generation/render pipeline
+- `frontend`: Vite development server
+
+Docker no longer includes any RAG, ChromaDB, ETL, or `rag/` services.
+
+### Start backend only
 
 ```bash
-# Windows installer
-npm run desktop:dist:win
-
-# macOS Intel
-npm run desktop:dist:mac:x64
-
-# macOS Apple Silicon
-npm run desktop:dist:mac:arm64
+docker compose --profile backend up --build
 ```
 
-Installer artifacts are generated in `release/`.
-
-### End User Steps (No Build/Setup)
-
-For end users, no npm commands are required.
-
-1. Go to the landing page.
-2. Click **Download for Windows** or **Download for macOS**.
-3. Run the downloaded installer (`.exe` or `.dmg`).
-4. Open the installed UpcurvEd app.
-5. Use the app locally (the desktop runtime starts required local services automatically).
-
-### Containerized Start (Optional Web Stack)
+### Start backend and frontend
 
 ```bash
-# Clone
-git clone https://github.com/<org>/UpcurvEd.git
-cd UpcurvEd
+docker compose --profile backend --profile frontend up --build
+```
 
-# Build and run (backend + rag + frontend)
-docker compose --profile frontend --profile backend --profile rag up -d --build
+### Stop containers
 
-# Stop all
+```bash
 docker compose down
 ```
 
-Visit **http://localhost:8080** to open the web app.
+Notes:
+- backend uses `backend/Dockerfile.dev`
+- frontend uses `frontend/Dockerfile.dev`
+- backend startup is controlled by its image entrypoint
+- frontend startup is controlled by its image entrypoint
 
-### Landing Page Hosting (Vercel)
+For Electron desktop development, prefer the local host workflow documented in `desktop/README.md`.
 
-Use `frontend/` as the Vercel root project:
 
-- Framework preset: **Vite**
-- Build command: `npm run build`
-- Output directory: `dist`
-- Node version: `20`
+## Documentation Map
 
-Set these environment variables for download buttons on `/home`:
-
-- `VITE_WINDOWS_DOWNLOAD_URL`
-- `VITE_MAC_DOWNLOAD_URL`
-- `VITE_ANALYTICS_ENDPOINT` (optional)
-
-Add SPA rewrite support via `frontend/vercel.json`:
-
-```json
-{
-	"$schema": "https://openapi.vercel.sh/vercel.json",
-	"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
-}
-```
-
---- 
-
-## Deployment Note
-
-Kubernetes and Pulumi deployment flows have been removed from this repository. The maintained paths are:
-
-- desktop installer releases
-- optional web/landing hosting (for download distribution)
+- `README.md` — high-level overview and the current supported workflow
+- `developer_guide.md` — engineering setup, runtime notes, testing, and maintenance details
+- `desktop/README.md` — Electron-specific runtime and packaging notes
+- `docs/ARCHITECTURE.md` — current architecture and ownership boundaries
+- `docs/PHASE_5_DOCKER_NOTES.md` — Docker notes
 
 ## License
 
 This repository is currently unlicensed and private.
 
 All rights reserved © 2025 Isabela Yepes, Manasvi Goyal, Nico Fidalgo.
-
-Access is granted only to authorized course staff for evaluation purposes.

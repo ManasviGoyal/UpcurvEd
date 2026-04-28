@@ -1,54 +1,52 @@
-# docker-compose.yaml
-name: ac215-group1
+name: upcurved
 
 services:
-
-  # ---------- BACKEND PROFILE ----------
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile.dev
-    image: ac215/backend:dev
-    container_name: backend
+    image: upcurved/backend:dev
+    container_name: upcurved-backend
     profiles: ["backend"]
     working_dir: /app
     env_file:
       - ./backend/.env
     environment:
-      GOOGLE_APPLICATION_CREDENTIALS: /secrets/service-account.json
+      APP_MODE: ${APP_MODE:-cloud}
       DEV: "1"
     volumes:
       - ./backend:/app/backend:cached
       - ./storage:/app/storage
-      - type: bind
-        source: ./rag/secrets/service-account.json
-        target: /secrets/service-account.json
-        read_only: true
+      - ./tests:/app/tests:cached
     ports:
-      - "8000:8000"  # optional; NGINX will proxy to backend:8000 internally
+      - "8000:8000"
     networks:
       - app_net
     restart: unless-stopped
 
-  # ---------- FRONTEND PROFILE ----------
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
-    image: ac215/frontend:dev
-    container_name: frontend
+    image: upcurved/frontend:dev
+    container_name: upcurved-frontend
     profiles: ["frontend"]
     working_dir: /app
     volumes:
-      - ./frontend:/app
+      - ./frontend:/app:cached
       - /app/node_modules
     environment:
       CHOKIDAR_USEPOLLING: "true"
-    command: sh -lc "npm install && npm run dev"
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_APP_MODE: ${VITE_APP_MODE:-cloud}
     ports:
-      - "8080:8080"  # optional; NGINX will proxy to frontend:8080 internally
+      - "8080:8080"
     depends_on:
       backend:
         condition: service_started
     networks:
       - app_net
+
+networks:
+  app_net:
+    driver: bridge
