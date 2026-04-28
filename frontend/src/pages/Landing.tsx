@@ -7,8 +7,9 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
   const windowsDownloadUrl = (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
   const macDownloadUrl = (import.meta.env.VITE_MAC_DOWNLOAD_URL as string | undefined) || "";
   const linuxDownloadUrl = (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) || "";
-  const appleLogo = "https://cdn.simpleicons.org/apple/FFFFFF";
-  const linuxLogo = "https://cdn.simpleicons.org/linux/FFFFFF";
+  const iconColor = isDark ? "FFFFFF" : "0F172A";
+  const appleLogo = `https://cdn.simpleicons.org/apple/${iconColor}`;
+  const linuxLogo = `https://cdn.simpleicons.org/linux/${iconColor}`;
 
   useEffect(() => {
     // Determine theme based on time of day

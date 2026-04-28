@@ -84,6 +84,37 @@ interface ChatInterfaceProps {
   setApiKeys: (keys: ApiKeys) => void;
 }
 
+interface WidgetFrameProps {
+  widgetCode: string;
+  title?: string;
+  className?: string;
+  height?: string;
+}
+
+const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, height }) => {
+  const preparedHtml = useMemo(() => prepareWidgetHtmlForIframe(widgetCode), [widgetCode]);
+
+  const widgetUrl = useMemo(() => {
+    const blob = new Blob([preparedHtml], { type: "text/html" });
+    return URL.createObjectURL(blob);
+  }, [preparedHtml]);
+
+  useEffect(() => {
+    return () => URL.revokeObjectURL(widgetUrl);
+  }, [widgetUrl]);
+
+  return (
+    <iframe
+      src={widgetUrl}
+      sandbox="allow-scripts"
+      className={className || "w-full border-0"}
+      style={height ? { height } : undefined}
+      title={title || "Interactive Widget"}
+      loading="eager"
+    />
+  );
+};
+
 export const ChatInterface: FC<ChatInterfaceProps> = ({
   setView,
   user,
@@ -4090,38 +4121,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }, [activeScript, videoUrl]);
 
   // (Removed duplicate captions toggle effect to avoid thrash/reset)
-
-  interface WidgetFrameProps {
-    widgetCode: string;
-    title?: string;
-    className?: string;
-    height?: string;
-  }
-
-  const WidgetFrame: React.FC<WidgetFrameProps> = ({ widgetCode, title, className, height }) => {
-    const preparedHtml = useMemo(() => prepareWidgetHtmlForIframe(widgetCode), [widgetCode]);
-
-    const widgetUrl = useMemo(() => {
-      const blob = new Blob([preparedHtml], { type: "text/html" });
-      return URL.createObjectURL(blob);
-    }, [preparedHtml]);
-
-    useEffect(() => {
-      return () => URL.revokeObjectURL(widgetUrl);
-    }, [widgetUrl]);
-
-    return (
-      <iframe
-        key={widgetUrl}
-        src={widgetUrl}
-        sandbox="allow-scripts"
-        className={className || "w-full border-0"}
-        style={height ? { height } : undefined}
-        title={title || "Interactive Widget"}
-        loading="eager"
-      />
-    );
-  };
 
   return (
     <div className="h-screen flex bg-background">

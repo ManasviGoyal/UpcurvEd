@@ -42,6 +42,7 @@ const AppContent = () => {
     try { if (colorKey) { const v = localStorage.getItem(colorKey); if (v === 'blue' || v === 'rose' || v === 'green' || v === 'orange') return v as ColorTheme; } } catch {}
     return "blue";
   });
+  const [themeHydratedForEmail, setThemeHydratedForEmail] = useState<string | null>(null);
 
   // Include provider/model so Settings can optionally set them; "" means "auto"
   const [apiKeys, setApiKeys] = useState<ApiKeys>({
@@ -58,9 +59,12 @@ const AppContent = () => {
     // clear old theme-* classes
     [...(root.classList as any)].forEach((c: string) => c.startsWith("theme-") && root.classList.remove(c));
     root.classList.add(`theme-${colorTheme}`);
-    try { if (themeKey) localStorage.setItem(themeKey, theme); } catch {}
-    try { if (colorKey) localStorage.setItem(colorKey, colorTheme); } catch {}
-  }, [theme, colorTheme, themeKey, colorKey]);
+    // Prevent startup race: don't overwrite stored values before we've hydrated this user once.
+    if (user?.email && themeHydratedForEmail === user.email) {
+      try { if (themeKey) localStorage.setItem(themeKey, theme); } catch {}
+      try { if (colorKey) localStorage.setItem(colorKey, colorTheme); } catch {}
+    }
+  }, [theme, colorTheme, themeKey, colorKey, user?.email, themeHydratedForEmail]);
 
   // Load persisted theme/color after user becomes available (initial mount or user switch)
   useEffect(() => {
@@ -73,6 +77,7 @@ const AppContent = () => {
       if (storedTheme === 'light' || storedTheme === 'dark') setTheme(storedTheme as Theme);
       if (storedColor && ['blue','rose','green','orange'].includes(storedColor)) setColorTheme(storedColor as ColorTheme);
     } catch {}
+    setThemeHydratedForEmail(user.email);
   }, [user?.email]);
 
   // Load provider/model + API keys for active user (desktop secure storage or local fallback).
