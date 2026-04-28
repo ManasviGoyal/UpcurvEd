@@ -1,3 +1,4 @@
+// frontend/src/App.tsx
 import { useState, useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -12,7 +13,7 @@ import { getFirebaseAuth } from "./firebase";
 import { onAuthStateChanged, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { isDesktopLocalMode } from "./lib/runtime";
-import { loadApiKeysForUser } from "./lib/secureKeys";
+import { EMPTY_KEYS, loadApiKeysForUser } from "./lib/secureKeys";
 import { Analytics } from "@vercel/analytics/react";
 
 const queryClient = new QueryClient();
@@ -80,24 +81,32 @@ const AppContent = () => {
     setThemeHydratedForEmail(user.email);
   }, [user?.email]);
 
-  // Load provider/model + API keys for active user (desktop secure storage or local fallback).
+  // Load API keys for the active user.
+  // By default this reads local settings only.
+  // Secure storage is read only after the user explicitly opts in from Settings.
   useEffect(() => {
     let cancelled = false;
+
     async function hydrateApiKeys() {
-      if (!user?.email) return;
-      const loaded = await loadApiKeysForUser(user.email, apiKeys);
+      if (!user?.email) {
+        if (!cancelled) {
+          setApiKeys({ ...EMPTY_KEYS });
+        }
+        return;
+      }
+
+      const loaded = await loadApiKeysForUser(user.email);
+
       if (!cancelled) {
-        setApiKeys((prev) => ({
-          ...prev,
-          ...loaded,
-        }));
+        setApiKeys(loaded);
       }
     }
+
     void hydrateApiKeys();
+
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.email]);
 
   const setViewStr = (v: string) => {
