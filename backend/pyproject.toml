@@ -1,7 +1,7 @@
 [project]
-name = "ac215-backend"
+name = "upcurved-backend"
 version = "0.1.0"
-description = "FastAPI backend for AC215 Group 1 (Manim + RAG)"
+description = "FastAPI backend"
 requires-python = ">=3.12"
 # Runtime deps (migrated from your requirements.txt)
 dependencies = [

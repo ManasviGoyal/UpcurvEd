@@ -1,4 +1,3 @@
-# backend/agent/nodes/render.py
 from __future__ import annotations
 
 import re
@@ -9,7 +8,6 @@ from backend.utils.failure_log import cleanup_job_dir
 from ...runner.job_runner import run_job_from_code
 from ..state import AgentState
 
-# Regexes to parse traceback/exception lines
 _FINAL_EXC_RE = re.compile(r"^\s*([A-Za-z_]\w*(?:Error|Exception)):\s*(.*)$", re.M)
 _FILE_LINE_RE = re.compile(r'File "([^"]+)", line (\d+)', re.I)
 
@@ -17,7 +15,7 @@ _FILE_LINE_RE = re.compile(r'File "([^"]+)", line (\d+)', re.I)
 def _slice_from_last_manim(stderr: str) -> str:
     """
     Return stderr slice starting at the last manim-internal frame,
-    else from the last 'File \"...\", line N' frame, else the whole stderr.
+    else from the last 'File "...", line N' frame, else the whole stderr.
     """
     if not stderr:
         return ""
@@ -50,7 +48,7 @@ def _first_nonempty_line(text: str) -> str:
 def _build_error_context(stderr: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
     """
     ERROR CONTEXT focused on the tail of the traceback:
-      - Title = last \"XError: message\" if present in the slice, else first non-empty tail line.
+      - Title = last "XError: message" if present in the slice, else first non-empty tail line.
       - Body = content immediately BEFORE that exception line (or the slice itself),
                truncated from the START so we keep the tail closest to the error.
     """
@@ -72,13 +70,12 @@ def _build_error_context(stderr: str, max_chars: int = MAX_CONTEXT_CHARS) -> str
     if not max_chars or max_chars <= 0:
         return f"{title}\n\n{body_src}".strip()
 
-    remaining = max_chars - len(title) - 2  # reserve for title + blank line
+    remaining = max_chars - len(title) - 2
     if remaining <= 0:
         return title[:max_chars].rstrip()
 
-    # Tail-first truncation of body
     if len(body_src) > remaining:
-        body = "…" + body_src[-remaining:]
+        body = "..." + body_src[-remaining:]
     else:
         body = body_src
 
@@ -103,47 +100,35 @@ def render_manim_node(state: AgentState) -> AgentState:
         )
         return new_state
 
-    # Run the job and collect logs (runner never raises)
-    job = run_job_from_code(code)  # returns {ok, video_url, compile_log, error_log, job_dir, ...}
+    job = run_job_from_code(code)
     ok = bool(job.get("ok"))
     video_url = job.get("video_url")
     compile_log = job.get("compile_log") or ""
     error_log = job.get("error_log") or ""
     job_dir = job.get("job_dir")
     job_id = job.get("job_id")
-    error_code = job.get("error")  # e.g., 'render_failed', 'render_timeout', etc.
+    error_code = job.get("error")
 
     render_ok = ok and bool(video_url)
 
-    # Always keep the last attempt code (Markovian repair)
     new_state["previous_code"] = code
     new_state["compile_log"] = compile_log
     new_state["error_log"] = "" if render_ok else (error_log or compile_log)
     new_state["render_ok"] = render_ok
     new_state["video_url"] = video_url if render_ok else None
-    # Keep identifiers and error code in state for the logger node
     if job_id:
         new_state["job_id"] = job_id
 
-    # Track all render attempts
-    ids = list(state.get("attempt_job_ids", []))
-    if job_id:
-        ids.append(job_id)
-    new_state["attempt_job_ids"] = ids
     if render_ok:
-        new_state["succeeded_job_id"] = job_id
-        # Clear any stale diagnostics so draft node won't include them
         new_state["error_context"] = ""
         new_state.pop("error", None)
         return new_state
 
-    # Failure: build ERROR CONTEXT for the draft prompt
     stderr = error_log or compile_log or ""
     error_context = _build_error_context(stderr, MAX_CONTEXT_CHARS)
     new_state["error_context"] = error_context
     new_state["error"] = error_code or "render_failed"
 
-    # Optionally delete failed job directory
     if CLEANUP_FAILED_JOBS and job_dir:
         try:
             cleanup_job_dir(job_dir)

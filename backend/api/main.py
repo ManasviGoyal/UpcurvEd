@@ -1,4 +1,3 @@
-# backend/api/main.py
 import json
 import logging
 import mimetypes
@@ -98,40 +97,14 @@ def _run_to_code(
     provider_keys: dict | None = None,
     provider: str | None = None,
     model: str | None = None,
-) -> tuple[str, str | None, bool, int, list[str], str | None, str | None]:
-    if DESKTOP_LOCAL_MODE:
-        from backend.agent.graph_wo_rag_retry import run_to_code as _run_to_code_local
+) -> tuple[str, str | None, bool, str | None, str | None]:
+    from backend.agent.graph import run_to_code as _run_to_code_canonical
 
-        code = _run_to_code_local(
-            prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
-        )
-        job = run_job_from_code(code)
-        failure_detail = None
-        if not job.get("ok"):
-            failure_detail = (
-                job.get("error_log")
-                or job.get("compile_log")
-                or job.get("error")
-                or "render_failed"
-            )
-        return (
-            code,
-            job.get("video_url"),
-            bool(job.get("ok")),
-            1,
-            [job.get("job_id")] if job.get("job_id") else [],
-            job.get("job_id"),
-            failure_detail,
-        )
-
-    from backend.agent.graph import run_to_code as _run_to_code_cloud
-
-    return _run_to_code_cloud(
+    return _run_to_code_canonical(
         prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
-    ) + (None,)
+    )
 
 
-# Public compatibility wrapper used by tests and monkeypatching hooks.
 def run_to_code(
     prompt: str,
     provider_keys: dict | None = None,
@@ -161,7 +134,6 @@ def _get_bucket_name() -> str:
 
         return _get_bucket_name_impl() or ""
     except Exception:
-        # Desktop-local bundles may intentionally omit GCS dependencies.
         return ""
 
 
@@ -355,7 +327,7 @@ class MessageMedia(BaseModel):
     title: str | None = None
     gcsPath: str | None = None
     sceneCode: str | None = None
-    widgetCode: str | None = None  # ← BUG FIX: was missing, caused Pydantic to strip widget HTML
+    widgetCode: str | None = None
 
 
 class MessageCreateIn(BaseModel):
@@ -504,18 +476,12 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                 "video_url": None,
             }
         else:
-            run_result = run_to_code(
+            code, video_url, render_ok, generated_job_id, failure_detail = run_to_code(
                 prompt=body.prompt,
                 provider_keys=body.keys,
                 provider=provider,
                 model=model,
             )
-            # Backward compatibility with older tests/mocks that return 6 fields.
-            if len(run_result) == 7:
-                code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id, failure_detail = run_result
-            else:
-                code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id = run_result
-                failure_detail = None
 
         if render_ok and video_url:
             gcs_bucket = _get_bucket_name()
@@ -526,7 +492,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
 
             relative_path = video_url.replace("/static/", "")
             p = pathlib.Path(STORAGE) / relative_path
-            job_id = succeeded_job_id or body.jobId or "unknown"
+            job_id = generated_job_id or body.jobId or "unknown"
             if gcs_bucket:
                 try:
                     if p.exists():
@@ -547,7 +513,13 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                                 _upload_bytes(gcs_bucket, vtt_path, vtt_bytes, "text/vtt")
                                 signed_subtitle_url = _sign_url(gcs_bucket, vtt_path)
                                 _save_artifact(
-                                    uid, body.chatId, "subtitle", vtt_path, len(vtt_bytes), "text/vtt", derived=True,
+                                    uid,
+                                    body.chatId,
+                                    "subtitle",
+                                    vtt_path,
+                                    len(vtt_bytes),
+                                    "text/vtt",
+                                    derived=True,
                                 )
                             except Exception as e:
                                 logger.warning("VTT upload failed: %s", e)
@@ -555,7 +527,15 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                             py_bytes = code.encode("utf-8")
                             py_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/scene_{job_id}.py"
                             _upload_bytes(gcs_bucket, py_path, py_bytes, "text/x-python")
-                            _save_artifact(uid, body.chatId, "script", py_path, len(py_bytes), "text/x-python", derived=True)
+                            _save_artifact(
+                                uid,
+                                body.chatId,
+                                "script",
+                                py_path,
+                                len(py_bytes),
+                                "text/x-python",
+                                derived=True,
+                            )
                 except Exception as e:
                     logger.warning("GCS upload failed: %s", e)
 
@@ -595,7 +575,13 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             if gcs_bucket:
                 if not signed_video_url:
                     logger.error("GCS bucket configured but upload failed")
-                    return {"ok": False, "status": "error", "error": "gcs_upload_failed", "message": "Video generated but GCS upload failed.", "video_url": None}
+                    return {
+                        "ok": False,
+                        "status": "error",
+                        "error": "gcs_upload_failed",
+                        "message": "Video generated but GCS upload failed.",
+                        "video_url": None,
+                    }
                 final_video_url = signed_video_url
             else:
                 final_video_url = video_url
@@ -616,10 +602,10 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                 "generation_mode": gen_mode,
                 "message": "Video generated.",
             }
-            logger.info("/generate completed: ok (job_id=%s, tries=%s)", succeeded_job_id, tries)
+            logger.info("/generate completed: ok (job_id=%s)", generated_job_id)
             return res
 
-        logger.warning("/generate failed: tries=%s attempts=%s", tries, attempt_job_ids)
+        logger.warning("/generate failed (job_id=%s)", generated_job_id)
         debug = (failure_detail or "").strip()
         if debug:
             debug = debug[:500]
@@ -683,7 +669,7 @@ def _apply_unified_diff(original: str, diff_text: str, apply_all_matches: bool =
                     continue
                 if any(start <= idx < end for start, end in applied_ranges):
                     continue
-                candidate = "\n".join(result_lines[idx: idx + len(search_pattern)])
+                candidate = "\n".join(result_lines[idx : idx + len(search_pattern)])
                 score = SequenceMatcher(None, search_text.strip(), candidate.strip()).ratio()
                 if score > base_threshold:
                     matches.append((idx, score))
@@ -693,7 +679,7 @@ def _apply_unified_diff(original: str, diff_text: str, apply_all_matches: bool =
                         continue
                     if any(start <= idx < end for start, end in applied_ranges):
                         continue
-                    candidate = "\n".join(result_lines[idx: idx + len(search_pattern)])
+                    candidate = "\n".join(result_lines[idx : idx + len(search_pattern)])
                     score = SequenceMatcher(None, search_text.strip(), candidate.strip()).ratio()
                     if score > 0.6:
                         matches.append((idx, score))
@@ -704,18 +690,34 @@ def _apply_unified_diff(original: str, diff_text: str, apply_all_matches: bool =
                 matches.sort(key=lambda x: x[0], reverse=True)
                 for match_idx, match_score in matches:
                     if remove_lines:
-                        result_lines = result_lines[:match_idx] + add_lines + result_lines[match_idx + len(remove_lines):]
+                        result_lines = (
+                            result_lines[:match_idx]
+                            + add_lines
+                            + result_lines[match_idx + len(remove_lines) :]
+                        )
                         applied_ranges.append((match_idx, match_idx + len(add_lines)))
                     else:
-                        result_lines = result_lines[: match_idx + 1] + add_lines + result_lines[match_idx + 1:]
+                        result_lines = (
+                            result_lines[: match_idx + 1]
+                            + add_lines
+                            + result_lines[match_idx + 1 :]
+                        )
                         applied_ranges.append((match_idx, match_idx + 1 + len(add_lines)))
             else:
                 best_match_idx, best_match_score = max(matches, key=lambda x: x[1])
                 if remove_lines:
-                    result_lines = result_lines[:best_match_idx] + add_lines + result_lines[best_match_idx + len(remove_lines):]
+                    result_lines = (
+                        result_lines[:best_match_idx]
+                        + add_lines
+                        + result_lines[best_match_idx + len(remove_lines) :]
+                    )
                     applied_ranges.append((best_match_idx, best_match_idx + len(add_lines)))
                 else:
-                    result_lines = result_lines[: best_match_idx + 1] + add_lines + result_lines[best_match_idx + 1:]
+                    result_lines = (
+                        result_lines[: best_match_idx + 1]
+                        + add_lines
+                        + result_lines[best_match_idx + 1 :]
+                    )
                     applied_ranges.append((best_match_idx, best_match_idx + 1 + len(add_lines)))
         return "\n".join(result_lines)
     except Exception as e:
@@ -750,8 +752,31 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
         raise HTTPException(status_code=400, detail=f"Missing API key for '{provider}'")
 
     instructions_lower = body.edit_instructions.lower()
-    wants_all = any(kw in instructions_lower for kw in ["all ", "every ", "throughout", "everywhere", "each ", "whole "])
-    wants_overlap_fix = any(kw in instructions_lower for kw in ["overlap", "overlapping", "collision", "collide", "stack", "stacking", "on top", "cover", "obscure", "hidden", "behind", "cleanup", "clear", "fadeout", "fade out", "remove previous"])
+    wants_all = any(
+        kw in instructions_lower
+        for kw in ["all ", "every ", "throughout", "everywhere", "each ", "whole "]
+    )
+    wants_overlap_fix = any(
+        kw in instructions_lower
+        for kw in [
+            "overlap",
+            "overlapping",
+            "collision",
+            "collide",
+            "stack",
+            "stacking",
+            "on top",
+            "cover",
+            "obscure",
+            "hidden",
+            "behind",
+            "cleanup",
+            "clear",
+            "fadeout",
+            "fade out",
+            "remove previous",
+        ]
+    )
 
     edit_system = EDIT_SYSTEM
     edit_user = build_edit_user_prompt(
@@ -762,7 +787,14 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
     )
 
     try:
-        raw = call_llm(provider=provider, api_key=key, model=model, system=edit_system, user=edit_user, temperature=0.1)
+        raw = call_llm(
+            provider=provider,
+            api_key=key,
+            model=model,
+            system=edit_system,
+            user=edit_user,
+            temperature=0.1,
+        )
         code = None
         diff_applied = False
         diff_match = re.search(r"```diff\s*(.*?)```", raw, re.IGNORECASE | re.DOTALL)
@@ -803,7 +835,9 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
                     gcs_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.mp4"
                     _upload_bytes(gcs_bucket, gcs_path, data, content_type)
                     signed_video_url = _sign_url(gcs_bucket, gcs_path)
-                    saved_artifact_id = _save_artifact(uid, body.chatId, "video", gcs_path, len(data), content_type, derived=False)
+                    saved_artifact_id = _save_artifact(
+                        uid, body.chatId, "video", gcs_path, len(data), content_type, derived=False
+                    )
                     vtt_local = p.with_suffix(".vtt")
                     if vtt_local.exists():
                         vtt_bytes = vtt_local.read_bytes()
@@ -825,7 +859,12 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
 
             if gcs_bucket:
                 if not signed_video_url:
-                    return {"ok": False, "status": "error", "error": "gcs_upload_failed", "message": "Edited video generated but GCS upload failed."}
+                    return {
+                        "ok": False,
+                        "status": "error",
+                        "error": "gcs_upload_failed",
+                        "message": "Edited video generated but GCS upload failed.",
+                    }
                 final_video_url = signed_video_url
             else:
                 final_video_url = video_url
@@ -835,14 +874,26 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
                         signed_subtitle_url = to_static_url(vtt_local)
 
             return {
-                "ok": True, "status": "ok", "video_url": final_video_url,
-                "signed_video_url": signed_video_url, "signed_subtitle_url": signed_subtitle_url,
-                "artifact_id": saved_artifact_id, "gcs_path": gcs_path, "scene_code": code,
+                "ok": True,
+                "status": "ok",
+                "video_url": final_video_url,
+                "signed_video_url": signed_video_url,
+                "signed_subtitle_url": signed_subtitle_url,
+                "artifact_id": saved_artifact_id,
+                "gcs_path": gcs_path,
+                "scene_code": code,
                 "message": "Video edited successfully.",
             }
         else:
             error_detail = render_result.get("error") or render_result.get("stderr") or "Unknown render error"
-            return {"ok": False, "status": "error", "error": "render_failed", "message": f"Edited video failed to render: {error_detail[:500]}", "video_url": None, "render_result": render_result}
+            return {
+                "ok": False,
+                "status": "error",
+                "error": "render_failed",
+                "message": f"Edited video failed to render: {error_detail[:500]}",
+                "video_url": None,
+                "render_result": render_result,
+            }
     except Exception as e:
         logger.exception("/edit failed with exception: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -863,9 +914,13 @@ def quiz_embedded(body: QuizIn):
         if not model and provider == "claude":
             model = "claude-sonnet-4-6"
         quiz = _generate_quiz_embedded(
-            prompt=body.prompt, num_questions=body.num_questions,
-            difficulty=body.difficulty or "medium", provider=provider, model=model,
-            provider_keys=body.keys, context=body.context,
+            prompt=body.prompt,
+            num_questions=body.num_questions,
+            difficulty=body.difficulty or "medium",
+            provider=provider,
+            model=model,
+            provider_keys=body.keys,
+            context=body.context,
         )
         return {"status": "ok", "quiz": quiz}
     except Exception as e:
@@ -896,10 +951,18 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
         context = body.get("sceneCode")
         num_questions = body.get("num_questions", 5)
         difficulty = body.get("difficulty", "medium")
-        media_prompt = f"Generate quiz questions based ONLY on the following content (from captions):\n\n{transcript}"
+        media_prompt = (
+            "Generate quiz questions based ONLY on the following content (from captions):\n\n"
+            f"{transcript}"
+        )
         quiz = _generate_quiz_embedded(
-            prompt=media_prompt, num_questions=num_questions, difficulty=difficulty,
-            provider=provider, model=model, provider_keys=provider_keys, context=context,
+            prompt=media_prompt,
+            num_questions=num_questions,
+            difficulty=difficulty,
+            provider=provider,
+            model=model,
+            provider_keys=provider_keys,
+            context=context,
         )
         return {"status": "ok", "quiz": quiz}
     except Exception as e:
@@ -943,7 +1006,9 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                     _upload_bytes(gcs_bucket, gcs_path, data, content_type)
                     result["signed_video_url"] = _sign_url(gcs_bucket, gcs_path)
                     result["gcs_path"] = gcs_path
-                    saved_artifact_id = _save_artifact(uid, body.chatId, "podcast", gcs_path, len(data), content_type, derived=False)
+                    saved_artifact_id = _save_artifact(
+                        uid, body.chatId, "podcast", gcs_path, len(data), content_type, derived=False
+                    )
                     result["artifact_id"] = saved_artifact_id
                     if result.get("script"):
                         script_bytes = result["script"].encode("utf-8")
@@ -951,7 +1016,15 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                         script_gcs_path = f"{uid}/chats/{chat_path}/podcast_{job_id}_script.txt"
                         _upload_bytes(gcs_bucket, script_gcs_path, script_bytes, "text/plain")
                         result["script_gcs_path"] = script_gcs_path
-                        _save_artifact(uid, body.chatId, "script", script_gcs_path, len(script_bytes), "text/plain", derived=True)
+                        _save_artifact(
+                            uid,
+                            body.chatId,
+                            "script",
+                            script_gcs_path,
+                            len(script_bytes),
+                            "text/plain",
+                            derived=True,
+                        )
                     if result.get("vtt_url"):
                         vtt_relative = result["vtt_url"].replace("/static/", "")
                         vtt_path_local = pathlib.Path(STORAGE) / vtt_relative
@@ -961,7 +1034,15 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                             vtt_gcs_path = f"{uid}/chats/{chat_path}/podcast_{job_id}.vtt"
                             _upload_bytes(gcs_bucket, vtt_gcs_path, vtt_data, "text/vtt")
                             result["signed_subtitle_url"] = _sign_url(gcs_bucket, vtt_gcs_path)
-                            _save_artifact(uid, body.chatId, "subtitle", vtt_gcs_path, len(vtt_data), "text/vtt", derived=True)
+                            _save_artifact(
+                                uid,
+                                body.chatId,
+                                "subtitle",
+                                vtt_gcs_path,
+                                len(vtt_data),
+                                "text/vtt",
+                                derived=True,
+                            )
                     if result.get("signed_video_url"):
                         try:
                             if p.exists():
@@ -973,14 +1054,20 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
             except Exception as e:
                 logger.warning("GCS podcast upload failed: %s", e)
                 if gcs_bucket:
-                    raise HTTPException(status_code=500, detail="Podcast generated but GCS upload failed. Please try again.") from e
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Podcast generated but GCS upload failed. Please try again.",
+                    ) from e
         else:
             if result.get("vtt_url"):
                 result["signed_subtitle_url"] = result["vtt_url"]
 
         if gcs_bucket:
             if not result.get("signed_video_url"):
-                raise HTTPException(status_code=500, detail="GCS bucket configured but upload failed. Please try again.")
+                raise HTTPException(
+                    status_code=500,
+                    detail="GCS bucket configured but upload failed. Please try again.",
+                )
             result["video_url"] = result["signed_video_url"]
 
         return result
@@ -1003,7 +1090,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
     if not model and provider == "gemini":
         model = "gemini-2.5-pro"
     if not model and provider == "claude":
-        model = "claude-sonnet-4-6"  # ← BUG FIX: was "claude-sonnet-4-20250514"
+        model = "claude-sonnet-4-6"
 
     logger.info("/widget called provider=%s model=%s", provider, model)
     try:
@@ -1024,7 +1111,9 @@ def _chat_doc(uid: str, chat_id: str):
     return _get_db().collection("users").document(uid).collection("chats").document(chat_id)
 
 
-def _paginate_messages(chat_id: str, uid: str, limit: int, before_ms: int | None) -> tuple[list[MessageOut], bool]:
+def _paginate_messages(
+    chat_id: str, uid: str, limit: int, before_ms: int | None
+) -> tuple[list[MessageOut], bool]:
     if DESKTOP_LOCAL_MODE:
         chat = _desktop_chat(uid, chat_id)
         if not chat:
@@ -1072,12 +1161,18 @@ def _paginate_messages(chat_id: str, uid: str, limit: int, before_ms: int | None
     out: list[MessageOut] = []
     for m in snaps:
         md = m.to_dict() or {}
-        out.append(MessageOut(
-            message_id=m.id, role=md.get("role", "assistant"), content=md.get("content", ""),
-            createdAt=_to_ms(md.get("createdAt")), media=md.get("media") or None,
-            quizAnchor=md.get("quizAnchor") or None, quizTitle=md.get("quizTitle") or None,
-            quizData=md.get("quizData") or None,
-        ))
+        out.append(
+            MessageOut(
+                message_id=m.id,
+                role=md.get("role", "assistant"),
+                content=md.get("content", ""),
+                createdAt=_to_ms(md.get("createdAt")),
+                media=md.get("media") or None,
+                quizAnchor=md.get("quizAnchor") or None,
+                quizTitle=md.get("quizTitle") or None,
+                quizData=md.get("quizData") or None,
+            )
+        )
     return out, has_more
 
 
@@ -1104,9 +1199,14 @@ def get_chat(chat_id: str, uid: str, limit: int = 200, before_ms: int | None = N
     chat_data = chat_snap.to_dict() or {}
     msgs, _ = _paginate_messages(chat_id, uid, limit=limit, before_ms=before_ms)
     return ChatDetailOut(
-        chat_id=chat_id, title=chat_data.get("title", "Untitled"), dts=_to_ms(chat_data.get("updatedAt")),
-        sessionId=chat_data.get("sessionId"), messages=msgs, shareable=bool(chat_data.get("shareable", False)),
-        share_token=chat_data.get("shareToken"), model=chat_data.get("model"),
+        chat_id=chat_id,
+        title=chat_data.get("title", "Untitled"),
+        dts=_to_ms(chat_data.get("updatedAt")),
+        sessionId=chat_data.get("sessionId"),
+        messages=msgs,
+        shareable=bool(chat_data.get("shareable", False)),
+        share_token=chat_data.get("shareToken"),
+        model=chat_data.get("model"),
     )
 
 
@@ -1134,7 +1234,9 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
             "quizData": body.quizData,
         }
         messages = chat.setdefault("messages", [])
-        existing_idx = next((i for i, m in enumerate(messages) if m.get("message_id") == message_id), -1)
+        existing_idx = next(
+            (i for i, m in enumerate(messages) if m.get("message_id") == message_id), -1
+        )
         if existing_idx >= 0:
             messages[existing_idx] = payload
         else:
@@ -1188,9 +1290,13 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
     snap = msg_ref.get()
     data = snap.to_dict() or {}
     return MessageOut(
-        message_id=msg_ref.id, role=data.get("role", body.role), content=data.get("content", body.content),
-        createdAt=_to_ms(data.get("createdAt")), media=data.get("media") or None,
-        quizAnchor=data.get("quizAnchor") or None, quizTitle=data.get("quizTitle") or None,
+        message_id=msg_ref.id,
+        role=data.get("role", body.role),
+        content=data.get("content", body.content),
+        createdAt=_to_ms(data.get("createdAt")),
+        media=data.get("media") or None,
+        quizAnchor=data.get("quizAnchor") or None,
+        quizTitle=data.get("quizTitle") or None,
         quizData=data.get("quizData") or None,
     )
 
@@ -1220,11 +1326,16 @@ def list_chats(uid: str, limit: int = 50):
     out: list[ChatItemOut] = []
     for d in docs:
         data = d.to_dict() or {}
-        out.append(ChatItemOut(
-            chat_id=d.id, title=data.get("title", "Untitled"), dts=_to_ms(data.get("updatedAt")),
-            sessionId=data.get("sessionId"), shareable=bool(data.get("shareable", False)),
-            share_token=data.get("shareToken"),
-        ))
+        out.append(
+            ChatItemOut(
+                chat_id=d.id,
+                title=data.get("title", "Untitled"),
+                dts=_to_ms(data.get("updatedAt")),
+                sessionId=data.get("sessionId"),
+                shareable=bool(data.get("shareable", False)),
+                share_token=data.get("shareToken"),
+            )
+        )
     return out
 
 
@@ -1259,16 +1370,25 @@ def create_chat(body: ChatCreateIn, uid: str):
     now = gcf.SERVER_TIMESTAMP
     shareable = bool(body.shareable)
     share_token = body.share_token if shareable else None
-    chat_ref.set({
-        "title": body.title or "New Chat", "model": body.model or None,
-        "sessionId": body.sessionId or None, "createdAt": now, "updatedAt": now,
-        "shareable": shareable, "shareToken": share_token,
-    })
+    chat_ref.set(
+        {
+            "title": body.title or "New Chat",
+            "model": body.model or None,
+            "sessionId": body.sessionId or None,
+            "createdAt": now,
+            "updatedAt": now,
+            "shareable": shareable,
+            "shareToken": share_token,
+        }
+    )
     snap = chat_ref.get()
     data = snap.to_dict() or {}
     return ChatItemOut(
-        chat_id=chat_ref.id, title=data.get("title", "New Chat"), dts=_to_ms(data.get("updatedAt")),
-        sessionId=data.get("sessionId"), shareable=bool(data.get("shareable", False)),
+        chat_id=chat_ref.id,
+        title=data.get("title", "New Chat"),
+        dts=_to_ms(data.get("updatedAt")),
+        sessionId=data.get("sessionId"),
+        shareable=bool(data.get("shareable", False)),
         share_token=data.get("shareToken"),
     )
 
@@ -1297,7 +1417,13 @@ def refresh_artifact(
     if artifactId and not path:
         try:
             db = _get_db()
-            snap = db.collection("users").document(uid).collection("artifacts").document(artifactId).get()
+            snap = (
+                db.collection("users")
+                .document(uid)
+                .collection("artifacts")
+                .document(artifactId)
+                .get()
+            )
             if not snap.exists:
                 raise HTTPException(status_code=404, detail="Artifact not found")
             doc = snap.to_dict() or {}
@@ -1315,7 +1441,13 @@ def refresh_artifact(
             base, ext = os.path.splitext(path)
             vtt_path = base + ".vtt"
             signed_sub = _sign_url(gcs_bucket, vtt_path)
-        return ArtifactRefreshOut(ok=True, signed_video_url=signed_main, signed_subtitle_url=signed_sub, gcs_path=path, artifact_id=artifactId)
+        return ArtifactRefreshOut(
+            ok=True,
+            signed_video_url=signed_main,
+            signed_subtitle_url=signed_sub,
+            gcs_path=path,
+            artifact_id=artifactId,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail="Refresh failed") from e
 
@@ -1370,12 +1502,34 @@ def export_chat(chat_id: str, uid: str = Depends(require_firebase_user)):
     if not chat_snap.exists:
         raise HTTPException(status_code=404, detail="Chat not found")
     chat_data = chat_snap.to_dict() or {}
-    snaps = _chat_doc(uid, chat_id).collection("messages").order_by("createdAt", direction=gcf.Query.ASCENDING).stream()
+    snaps = (
+        _chat_doc(uid, chat_id)
+        .collection("messages")
+        .order_by("createdAt", direction=gcf.Query.ASCENDING)
+        .stream()
+    )
     msgs = []
     for m in snaps:
         d = m.to_dict() or {}
-        msgs.append({"message_id": m.id, "role": d.get("role"), "content": d.get("content"), "createdAt": _to_ms(d.get("createdAt")), "media": d.get("media") or None})
-    return {"chat": {"chat_id": chat_id, "title": chat_data.get("title", "Untitled"), "createdAt": _to_ms(chat_data.get("createdAt")), "updatedAt": _to_ms(chat_data.get("updatedAt"))}, "messages": msgs, "version": 1}
+        msgs.append(
+            {
+                "message_id": m.id,
+                "role": d.get("role"),
+                "content": d.get("content"),
+                "createdAt": _to_ms(d.get("createdAt")),
+                "media": d.get("media") or None,
+            }
+        )
+    return {
+        "chat": {
+            "chat_id": chat_id,
+            "title": chat_data.get("title", "Untitled"),
+            "createdAt": _to_ms(chat_data.get("createdAt")),
+            "updatedAt": _to_ms(chat_data.get("updatedAt")),
+        },
+        "messages": msgs,
+        "version": 1,
+    }
 
 
 class ChatRenameIn(BaseModel):
@@ -1411,11 +1565,21 @@ def rename_chat(chat_id: str, body: ChatRenameIn, uid: str):
     chat_ref.update({"title": body.title, "updatedAt": now})
     snap = chat_ref.get()
     data = snap.to_dict() or {}
-    return ChatItemOut(chat_id=chat_id, title=data.get("title", body.title), dts=_to_ms(data.get("updatedAt")), shareable=bool(data.get("shareable", False)), share_token=data.get("shareToken"))
+    return ChatItemOut(
+        chat_id=chat_id,
+        title=data.get("title", body.title),
+        dts=_to_ms(data.get("updatedAt")),
+        shareable=bool(data.get("shareable", False)),
+        share_token=data.get("shareToken"),
+    )
 
 
 @app.patch("/api/chats/{chat_id}/share", response_model=ChatItemOut)
-def toggle_share(chat_id: str, body: ChatShareToggleIn, uid: str = Depends(require_firebase_user)):
+def toggle_share(
+    chat_id: str,
+    body: ChatShareToggleIn,
+    uid: str = Depends(require_firebase_user),
+):
     if DESKTOP_LOCAL_MODE:
         chat = _desktop_chat(uid, chat_id)
         if not chat:
@@ -1451,9 +1615,12 @@ def toggle_share(chat_id: str, body: ChatShareToggleIn, uid: str = Depends(requi
     snap = chat_ref.get()
     updated = snap.to_dict() or {}
     return ChatItemOut(
-        chat_id=chat_id, title=updated.get("title", data.get("title", "Untitled")),
-        dts=_to_ms(updated.get("updatedAt")), sessionId=updated.get("sessionId"),
-        shareable=bool(updated.get("shareable", False)), share_token=updated.get("shareToken"),
+        chat_id=chat_id,
+        title=updated.get("title", data.get("title", "Untitled")),
+        dts=_to_ms(updated.get("updatedAt")),
+        sessionId=updated.get("sessionId"),
+        shareable=bool(updated.get("shareable", False)),
+        share_token=updated.get("shareToken"),
     )
 
 
@@ -1501,34 +1668,58 @@ def get_shared_chat(token: str, limit: int = Query(500, ge=1, le=1000)):
     if not chat_data.get("shareable"):
         raise HTTPException(status_code=404, detail="Shared chat not found")
     chat_id = doc.id
-    msgs_snap = doc.reference.collection("messages").order_by("createdAt", direction=gcf.Query.ASCENDING).limit(limit).stream()
+    msgs_snap = (
+        doc.reference.collection("messages")
+        .order_by("createdAt", direction=gcf.Query.ASCENDING)
+        .limit(limit)
+        .stream()
+    )
     msgs: list[MessageOut] = []
     for m in msgs_snap:
         md = m.to_dict() or {}
-        msgs.append(MessageOut(
-            message_id=m.id, role=md.get("role", "assistant"), content=md.get("content", ""),
-            createdAt=_to_ms(md.get("createdAt")), media=md.get("media") or None,
-            quizAnchor=md.get("quizAnchor") or None, quizTitle=md.get("quizTitle") or None, quizData=md.get("quizData") or None,
-        ))
+        msgs.append(
+            MessageOut(
+                message_id=m.id,
+                role=md.get("role", "assistant"),
+                content=md.get("content", ""),
+                createdAt=_to_ms(md.get("createdAt")),
+                media=md.get("media") or None,
+                quizAnchor=md.get("quizAnchor") or None,
+                quizTitle=md.get("quizTitle") or None,
+                quizData=md.get("quizData") or None,
+            )
+        )
     return ChatDetailOut(
-        chat_id=chat_id, title=chat_data.get("title", "Untitled"), dts=_to_ms(chat_data.get("updatedAt")),
-        sessionId=chat_data.get("sessionId"), messages=msgs, shareable=True, share_token=token, model=chat_data.get("model"),
+        chat_id=chat_id,
+        title=chat_data.get("title", "Untitled"),
+        dts=_to_ms(chat_data.get("updatedAt")),
+        sessionId=chat_data.get("sessionId"),
+        messages=msgs,
+        shareable=True,
+        share_token=token,
+        model=chat_data.get("model"),
     )
 
 
 @app.get("/api/chats", response_model=list[ChatItemOut])
-def list_chats_route(limit: int = Query(50, ge=1, le=200), uid: str = Depends(require_firebase_user)):
+def list_chats_route(
+    limit: int = Query(50, ge=1, le=200), uid: str = Depends(require_firebase_user)
+):
     return list_chats(uid, limit)
 
 
 @app.post("/api/chats", response_model=ChatItemOut)
-def create_chat_route(body: ChatCreateIn, uid: str = Depends(require_firebase_user), x_session_id: str | None = Header(None, alias="X-Session-ID")):
+def create_chat_route(
+    body: ChatCreateIn,
+    uid: str = Depends(require_firebase_user),
+    x_session_id: str | None = Header(None, alias="X-Session-ID"),
+):
     if x_session_id and not body.sessionId:
         body.sessionId = x_session_id
     if body.content:
         result = create_chat(body, uid)
         try:
-            msg_body = MessageCreateIn(role="user", content=body.content, timestamp=body.timestamp if hasattr(body, "timestamp") else None)
+            msg_body = MessageCreateIn(role="user", content=body.content)
             append_message(result.chat_id, msg_body, uid)
         except Exception:
             pass
@@ -1537,12 +1728,23 @@ def create_chat_route(body: ChatCreateIn, uid: str = Depends(require_firebase_us
 
 
 @app.get("/api/chats/{chat_id}", response_model=ChatDetailOut)
-def get_chat_route(chat_id: str, uid: str = Depends(require_firebase_user), limit: int = Query(200, ge=1, le=500), before: int | None = Query(None)):
+def get_chat_route(
+    chat_id: str,
+    uid: str = Depends(require_firebase_user),
+    limit: int = Query(200, ge=1, le=500),
+    before: int | None = Query(None),
+):
     return get_chat(chat_id, uid, limit, before)
 
 
 @app.post("/api/chats/{chat_id}", response_model=ChatDetailOut)
-def continue_chat_route(chat_id: str, body: MessageCreateIn, uid: str = Depends(require_firebase_user), x_session_id: str | None = Header(None, alias="X-Session-ID"), idempotency_key: str | None = Header(None, alias="Idempotency-Key")):
+def continue_chat_route(
+    chat_id: str,
+    body: MessageCreateIn,
+    uid: str = Depends(require_firebase_user),
+    x_session_id: str | None = Header(None, alias="X-Session-ID"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+):
     if idempotency_key and not body.message_id:
         body.message_id = idempotency_key
     append_message(chat_id, body, uid)
@@ -1550,7 +1752,12 @@ def continue_chat_route(chat_id: str, body: MessageCreateIn, uid: str = Depends(
 
 
 @app.get("/api/chats/{chat_id}/messages", response_model=MessagesPage)
-def list_messages_route(chat_id: str, uid: str = Depends(require_firebase_user), limit: int = Query(50, ge=1, le=200), before: int | None = Query(None)):
+def list_messages_route(
+    chat_id: str,
+    uid: str = Depends(require_firebase_user),
+    limit: int = Query(50, ge=1, le=200),
+    before: int | None = Query(None),
+):
     return list_messages(chat_id, uid, limit, before)
 
 
@@ -1603,7 +1810,12 @@ def _delete_chat_impl(chat_id: str, uid: str):
             gcs_deleted = _delete_folder(gcs_bucket, f"{uid}/chats/{chat_id}/")
         except Exception as e:
             logger.warning("Failed to delete GCS folder for chat %s: %s", chat_id, e)
-    return {"ok": True, "deleted": chat_id, "messages_removed": count, "gcs_files_removed": gcs_deleted}
+    return {
+        "ok": True,
+        "deleted": chat_id,
+        "messages_removed": count,
+        "gcs_files_removed": gcs_deleted,
+    }
 
 
 def _delete_account_impl(uid: str):
@@ -1641,7 +1853,6 @@ def _delete_account_impl(uid: str):
     chats_ref = db.collection("users").document(uid).collection("chats")
     chats = list(chats_ref.stream())
     for chat in chats:
-        chat_id = chat.id
         msg_count = delete_collection(chat.reference.collection("messages"))
         total_messages += msg_count
         chat.reference.delete()
@@ -1662,7 +1873,14 @@ def _delete_account_impl(uid: str):
             user_ref.delete()
     except Exception as e:
         logger.error("Failed to delete Firestore user document for %s: %s", uid, e)
-    return {"ok": True, "uid": uid, "chats_removed": total_chats, "messages_removed": total_messages, "artifacts_removed": total_artifacts, "gcs_files_removed": total_gcs_files}
+    return {
+        "ok": True,
+        "uid": uid,
+        "chats_removed": total_chats,
+        "messages_removed": total_messages,
+        "artifacts_removed": total_artifacts,
+        "gcs_files_removed": total_gcs_files,
+    }
 
 
 def _to_ms(ts) -> int | None:
