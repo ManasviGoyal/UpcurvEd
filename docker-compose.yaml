@@ -9,8 +9,6 @@ services:
     container_name: upcurved-backend
     profiles: ["backend"]
     working_dir: /app
-    env_file:
-      - ./backend/.env
     environment:
       APP_MODE: ${APP_MODE:-cloud}
       DEV: "1"
