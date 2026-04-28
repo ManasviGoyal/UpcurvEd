@@ -216,7 +216,7 @@ class TestGraphWoRagRetryE2E:
                 "prompt": "Create animation without RAG: visualize sorting algorithms",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
             },
         )
         assert r.status_code in [200, 500]
@@ -232,7 +232,7 @@ class TestGraphWoRagRetryE2E:
                 "prompt": "No RAG: demonstrate Pythagorean theorem",
                 "keys": {"gemini": "test-key"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
         )
         assert r.status_code in [200, 500]
@@ -242,7 +242,7 @@ class TestGraphWoRagRetryE2E:
         """Test no-RAG with all providers."""
         providers = [
             ("claude", "claude-3-5-sonnet"),
-            ("gemini", "gemini-2.5-pro"),
+            ("gemini", "gemini-3-flash-preview"),
             ("claude", "claude-3-opus"),
         ]
 
@@ -405,7 +405,7 @@ class TestCompleteUserJourneysE2E:
                 "prompt": "Detailed podcast",
                 "keys": {"gemini": "k"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
                 "lang": "fr",
                 "context": "Historical context",
                 "temperature": 0.8,

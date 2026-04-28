@@ -350,7 +350,7 @@ def _generate_scene_draw_js(
 ) -> str:
     use_model = model
     if not use_model and provider == "claude":
-        use_model = "claude-haiku-4-5-20251001"
+        use_model = "claude-haiku-4-5"
     host_options = ", ".join(sorted(HOST_PRESETS.keys()))
     theme_options = ", ".join(sorted(THEME_PRESETS.keys()))
     user = (

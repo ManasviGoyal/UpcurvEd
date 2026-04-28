@@ -250,7 +250,7 @@ class TestQuizLogicIntegration:
 
     def test_quiz_with_models(self, client):
         """Test quiz with different models."""
-        models = ["claude-3-5-sonnet", "gemini-2.5-pro", "claude-3-opus"]
+        models = ["claude-3-5-sonnet", "gemini-3-flash-preview", "claude-3-opus"]
         for model in models:
             r = client.post(
                 "/quiz/embedded",
@@ -317,7 +317,7 @@ class TestGraphWoRagRetryIntegration:
     @patch("backend.api.main.run_to_code")
     def test_no_rag_with_models(self, mock_run, client):
         """Test no-RAG with different models."""
-        models = ["claude-3-5-sonnet", "gemini-2.5-pro", "claude-3-opus"]
+        models = ["claude-3-5-sonnet", "gemini-3-flash-preview", "claude-3-opus"]
         for model in models:
             mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
             r = client.post(

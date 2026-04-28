@@ -26,7 +26,7 @@ class TestAllEndpointVariations:
 
         # Test matrix of parameters
         providers = [None, "claude", "gemini"]
-        models = [None, "claude-3-5-sonnet", "gemini-2.5-pro"]
+        models = [None, "claude-3-5-sonnet", "gemini-3-flash-preview"]
         temps = [None, 0.5, 1.0]
 
         for provider in providers:
@@ -96,7 +96,7 @@ class TestAllEndpointVariations:
         combos = [
             ("claude", "claude-3-5-sonnet"),
             ("claude", None),
-            ("gemini", "gemini-2.5-pro"),
+            ("gemini", "gemini-3-flash-preview"),
             ("gemini", None),
         ]
 

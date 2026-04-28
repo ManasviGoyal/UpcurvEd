@@ -332,7 +332,7 @@ class TestLLMClientsExhaustive:
         mock_model.generate_content.return_value = mock_resp
         mock_genai.GenerativeModel.return_value = mock_model
 
-        result = call_llm("gemini", "key", "gemini-2.5-pro", "sys", "user")
+        result = call_llm("gemini", "key", "gemini-3-flash-preview", "sys", "user")
         assert result == "gemini response"
 
     @patch("backend.agent.llm.clients.genai")

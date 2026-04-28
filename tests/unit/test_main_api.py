@@ -1042,7 +1042,7 @@ class TestQuizFromTranscriptEndpoint:
                 "transcript": "The video discusses machine learning concepts.",
                 "sceneCode": "print('hello')",
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
                 "provider_keys": {"gemini": "test-key"},
                 "num_questions": 5,
                 "difficulty": "medium",
@@ -1173,7 +1173,7 @@ class TestQuizFromTranscriptEndpoint:
         call_kwargs = mock_generate.call_args[1]
         # Check defaults
         assert call_kwargs["provider"] == "gemini"
-        assert call_kwargs["model"] == "gemini-2.5-pro"
+        assert call_kwargs["model"] == "gemini-3-flash-preview"
         assert call_kwargs["num_questions"] == 5
         assert call_kwargs["difficulty"] == "medium"
 

@@ -37,7 +37,7 @@ class TestGraphWoRagRetryE2E:
                 "prompt": "Create animation explaining binary search without RAG",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
                 "chatId": "session-rag-001",
             },
         )
@@ -54,7 +54,7 @@ class TestGraphWoRagRetryE2E:
                 "prompt": "Visualize quicksort algorithm without RAG",
                 "keys": {"gemini": "test-key"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
         )
         assert r.status_code in [200, 500]
@@ -82,7 +82,7 @@ class TestGraphWoRagRetryE2E:
             {
                 "prompt": "Animate mathematical functions",
                 "keys": {"gemini": "k"},
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
             {"prompt": "Simple visualization", "keys": {"claude": "k"}},
         ]
@@ -111,7 +111,7 @@ class TestLLMClientsE2E:
                 ),
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
             },
         )
         assert r.status_code in [200, 500]
@@ -127,7 +127,7 @@ class TestLLMClientsE2E:
                 ),
                 "keys": {"gemini": "test-key"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
         )
         assert r.status_code in [200, 500]

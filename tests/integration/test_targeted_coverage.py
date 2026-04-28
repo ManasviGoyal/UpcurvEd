@@ -43,7 +43,7 @@ class TestGraphIntegration:
     def test_graph_integration_03(self, mock_run, client):
         """Test graph with models."""
         mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
-        for model in ["claude-3-5-sonnet", "gemini-2.5-pro"]:
+        for model in ["claude-3-5-sonnet", "gemini-3-flash-preview"]:
             r = client.post(
                 "/generate",
                 json={"prompt": "Test", "keys": {"claude": "k"}, "model": model},
@@ -65,7 +65,7 @@ class TestLLMClientsIntegration:
                 "prompt": "Draw circle",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
             },
         )
         assert r.status_code in [200, 500]
@@ -78,7 +78,7 @@ class TestLLMClientsIntegration:
                 "prompt": "Draw square",
                 "keys": {"gemini": "test-key"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
         )
         assert r.status_code in [200, 500]
@@ -229,7 +229,7 @@ class TestGraphWoRagRetryIntegration:
     @patch("backend.api.main.run_to_code")
     def test_no_rag_path_02(self, mock_run, client):
         """Test no-RAG with different models."""
-        for model in ["claude-3-5-sonnet", "gemini-2.5-pro"]:
+        for model in ["claude-3-5-sonnet", "gemini-3-flash-preview"]:
             mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
             r = client.post(
                 "/generate",

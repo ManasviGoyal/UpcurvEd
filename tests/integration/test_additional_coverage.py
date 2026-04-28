@@ -28,7 +28,7 @@ class TestAPIMainExtensive:
                 "prompt": "Variation A",
                 "keys": {"claude": "k1"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
                 "temperature": 0.5,
             },
         )
@@ -45,7 +45,7 @@ class TestAPIMainExtensive:
                 "prompt": "Variation B",
                 "keys": {"gemini": "k2"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
         )
         assert r.status_code in [200, 500]
@@ -226,5 +226,5 @@ class TestLLMClientsCoverage:
         mock_model.generate_content.return_value = mock_resp
         mock_genai.GenerativeModel.return_value = mock_model
 
-        result = call_llm("gemini", "key", "gemini-2.5-pro", "sys", "user")
+        result = call_llm("gemini", "key", "gemini-3-flash-preview", "sys", "user")
         assert result is not None or mock_model.generate_content.called

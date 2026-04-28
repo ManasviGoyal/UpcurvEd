@@ -40,7 +40,7 @@ class TestGraphWoRagRetryIntegration:
     @patch("backend.api.main.run_to_code")
     def test_no_rag_with_models(self, mock_run, client):
         """Test no-RAG with different models."""
-        for model in ["claude-3-5-sonnet", "gemini-2.5-pro", "claude-3-opus"]:
+        for model in ["claude-3-5-sonnet", "gemini-3-flash-preview", "claude-3-opus"]:
             mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
             r = client.post(
                 "/generate",
@@ -73,7 +73,7 @@ class TestLLMClientsIntegration:
                 "prompt": "Test 1",
                 "keys": {"claude": "k"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
             },
             {
                 "prompt": "Test 2",
@@ -93,7 +93,7 @@ class TestLLMClientsIntegration:
                 "prompt": "Test 1",
                 "keys": {"gemini": "k"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
             },
             {
                 "prompt": "Test 2",
@@ -241,7 +241,7 @@ class TestComprehensiveIntegration:
         """Test full pipeline with various configurations."""
         configs = [
             {"provider": "claude", "model": "claude-3-5-sonnet"},
-            {"provider": "gemini", "model": "gemini-2.5-pro"},
+            {"provider": "gemini", "model": "gemini-3-flash-preview"},
             {"provider": "claude", "model": "claude-3-opus"},
         ]
         for config in configs:

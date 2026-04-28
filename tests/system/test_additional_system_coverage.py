@@ -26,7 +26,7 @@ class TestSystemCoverageBoost:
                 "prompt": "Create a mathematical animation showing the Pythagorean theorem",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
                 "temperature": 0.7,
                 "chatId": "session-001",
             },
@@ -44,7 +44,7 @@ class TestSystemCoverageBoost:
                 "prompt": "Visualize sorting algorithms",
                 "keys": {"gemini": "test-key"},
                 "provider": "gemini",
-                "model": "gemini-2.5-pro",
+                "model": "gemini-3-flash-preview",
                 "jobId": "custom-job-123",
             },
         )

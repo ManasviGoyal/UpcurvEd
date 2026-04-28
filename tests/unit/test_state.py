@@ -23,7 +23,7 @@ class TestAgentState:
             "user_prompt": "Draw a circle",
             "provider_keys": {"claude": "key1", "gemini": "key2"},
             "provider": "gemini",
-            "model": "gemini-2.5-pro",
+            "model": "gemini-3-flash-preview",
             "retrieved_docs": "Some docs",
             "manim_code": "class Scene...",
             "previous_code": "old code",

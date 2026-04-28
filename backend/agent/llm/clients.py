@@ -185,7 +185,7 @@ def call_llm(
     Recommended: 0.2 for code, 0.4-0.5 for quizzes, 0.5-0.7 for creative content.
     """
     if provider == "claude":
-        model = model or "claude-sonnet-4-6"
+        model = model or "claude-haiku-4-5"
         return call_claude(
             api_key=api_key,
             model=model,
@@ -195,7 +195,7 @@ def call_llm(
             max_tokens=max_tokens or 2048,
         )
     elif provider == "gemini":
-        model = model or "gemini-2.5-pro"
+        model = model or "gemini-3-flash-preview"
         return call_gemini(
             api_key=api_key,
             model=model,

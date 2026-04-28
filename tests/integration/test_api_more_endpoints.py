@@ -138,7 +138,7 @@ class TestPodcastVariations:
 
     def test_podcast_with_different_models(self, client):
         """Test podcast with different model selections."""
-        for model in ["claude-3-5-sonnet", "gemini-2.5-pro"]:
+        for model in ["claude-3-5-sonnet", "gemini-3-flash-preview"]:
             response = client.post(
                 "/podcast",
                 json={

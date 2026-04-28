@@ -78,7 +78,7 @@ class TestQuizLogicIntegration:
 
     def test_quiz_all_models(self, client):
         """Test quiz with various models."""
-        models = ["claude-3-5-sonnet", "gemini-2.5-pro", "claude-3-opus", "gemini-2.0-flash"]
+        models = ["claude-3-5-sonnet", "gemini-3-flash-preview", "claude-3-opus", "gemini-2.0-flash"]
         for model in models:
             r = client.post(
                 "/quiz/embedded",
@@ -160,9 +160,9 @@ class TestLLMClientsIntegration:
     def test_llm_all_combinations(self, client):
         """Test LLM with all provider/model combinations."""
         combinations = [
-            ("claude", "claude-sonnet-4-6"),
+            ("claude", "claude-haiku-4-5"),
             ("claude", "claude-3-opus"),
-            ("gemini", "gemini-2.5-pro"),
+            ("gemini", "gemini-3-flash-preview"),
             ("gemini", "gemini-2.0-flash"),
         ]
 
@@ -198,7 +198,7 @@ class TestGraphWoRagRetryIntegration:
         """Test no-RAG with all variations."""
         variations = [
             {"provider": "claude", "model": "claude-3-5-sonnet"},
-            {"provider": "gemini", "model": "gemini-2.5-pro"},
+            {"provider": "gemini", "model": "gemini-3-flash-preview"},
             {"provider": "claude"},
             {"provider": "gemini"},
         ]
@@ -229,7 +229,7 @@ class TestAPIMainMassive:
             {"chatId": "session-1"},
             {"jobId": "job-1"},
             {"provider": "claude", "model": "claude-3-opus"},
-            {"provider": "gemini", "model": "gemini-2.5-pro", "temperature": 0.8},
+            {"provider": "gemini", "model": "gemini-3-flash-preview", "temperature": 0.8},
         ]
 
         for variation in variations:

@@ -139,11 +139,11 @@ class TestGenerateEndpoint:
                 "prompt": "Test",
                 "keys": {"claude": "key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
             },
         )
         assert response.status_code == 200
-        assert captured_kwargs.get("model") == "claude-sonnet-4-6"
+        assert captured_kwargs.get("model") == "claude-haiku-4-5"
 
     def test_generate_infers_provider_from_keys(self, client, mock_auth, monkeypatch):
         """Generate should infer provider if not specified."""
@@ -227,7 +227,7 @@ class TestGenerateEndpoint:
             },
         )
         assert response.status_code == 200
-        assert captured_kwargs.get("model") == "gemini-2.5-pro"
+        assert captured_kwargs.get("model") == "gemini-3-flash-preview"
 
     def test_generate_default_model_for_claude(self, client, mock_auth, monkeypatch):
         """Generate should use default model for Claude."""
@@ -250,4 +250,4 @@ class TestGenerateEndpoint:
             },
         )
         assert response.status_code == 200
-        assert captured_kwargs.get("model") == "claude-sonnet-4-6"
+        assert captured_kwargs.get("model") == "claude-haiku-4-5"

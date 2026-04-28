@@ -24,8 +24,8 @@ const PROVIDER_LABELS: Record<Provider, string> = {
 
 const PROVIDER_MODELS: Record<Provider, string[]> = {
   "": [],
-  "claude": ["claude-sonnet-4-6", "claude-3-5-haiku-20241022", "claude-sonnet-4-5-20250929"],
-  "gemini": ["gemini-2.5-pro"],
+  "claude": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
+  "gemini": ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
 };
 
 export const SettingsPage = ({

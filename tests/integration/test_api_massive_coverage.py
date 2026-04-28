@@ -85,7 +85,7 @@ class TestGenerateMassive:
 
         monkeypatch.setattr(main_mod, "run_to_code", fake)
         r = client.post(
-            "/generate", json={"prompt": "H", "keys": {"gemini": "k"}, "model": "gemini-2.5-pro"}
+            "/generate", json={"prompt": "H", "keys": {"gemini": "k"}, "model": "gemini-3-flash-preview"}
         )
         assert r.status_code in [200, 500]
 

@@ -445,9 +445,9 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             elif body.keys.get("claude"):
                 provider = "claude"
         if not model and provider == "gemini":
-            model = "gemini-2.5-pro"
+            model = "gemini-3-flash-preview"
         if not model and provider == "claude":
-            model = "claude-sonnet-4-6"
+            model = "claude-haiku-4-5"
         logger.info("/generate called provider=%s model=%s mode=%s", provider, model, gen_mode)
 
         if gen_mode == "story":
@@ -742,9 +742,9 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
         elif body.keys.get("claude"):
             provider = "claude"
     if not model and provider == "gemini":
-        model = "gemini-2.5-pro"
+        model = "gemini-3-flash-preview"
     if not model and provider == "claude":
-        model = "claude-sonnet-4-6"
+        model = "claude-haiku-4-5"
     logger.info("/edit using provider=%s model=%s", provider, model)
 
     key = body.keys.get(provider) if provider else None
@@ -910,9 +910,9 @@ def quiz_embedded(body: QuizIn):
             elif body.keys.get("claude"):
                 provider = "claude"
         if not model and provider == "gemini":
-            model = "gemini-2.5-pro"
+            model = "gemini-3-flash-preview"
         if not model and provider == "claude":
-            model = "claude-sonnet-4-6"
+            model = "claude-haiku-4-5"
         quiz = _generate_quiz_embedded(
             prompt=body.prompt,
             num_questions=body.num_questions,
@@ -945,9 +945,9 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
             else:
                 provider = "gemini"
         if not model and provider == "gemini":
-            model = "gemini-2.5-pro"
+            model = "gemini-3-flash-preview"
         if not model and provider == "claude":
-            model = "claude-sonnet-4-6"
+            model = "claude-haiku-4-5"
         context = body.get("sceneCode")
         num_questions = body.get("num_questions", 5)
         difficulty = body.get("difficulty", "medium")
@@ -981,9 +981,9 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
             elif body.keys.get("claude"):
                 provider = "claude"
         if not model and provider == "gemini":
-            model = "gemini-2.5-pro"
+            model = "gemini-3-flash-preview"
         if not model and provider == "claude":
-            model = "claude-sonnet-4-6"
+            model = "claude-haiku-4-5"
         result = _generate_podcast(
             prompt=body.prompt,
             provider=provider,
@@ -1088,9 +1088,9 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
         elif body.keys.get("claude"):
             provider = "claude"
     if not model and provider == "gemini":
-        model = "gemini-2.5-pro"
+        model = "gemini-3-flash-preview"
     if not model and provider == "claude":
-        model = "claude-sonnet-4-6"
+        model = "claude-haiku-4-5"
 
     logger.info("/widget called provider=%s model=%s", provider, model)
     try:

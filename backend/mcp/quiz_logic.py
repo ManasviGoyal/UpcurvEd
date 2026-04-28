@@ -9,7 +9,7 @@ from typing import Any
 
 from backend.agent.llm.clients import call_llm
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 
 
 def _pick_provider_and_key(
@@ -404,9 +404,9 @@ def _generate_quiz_json_with_call_llm(
     provider_keys: dict[str, str] | None,
 ) -> dict[str, Any]:
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
-    # For Gemini, let the unified client choose its preferred default (gemini-2.5-pro).
+    # For Gemini, let the unified client choose its preferred default (gemini-3-flash-preview).
     # For Claude, keep a sensible default.
-    use_model = model or ("claude-sonnet-4-6" if prov == "claude" else None)
+    use_model = model or ("claude-haiku-4-5" if prov == "claude" else None)
     user_prompt = _quiz_prompt(prompt, num_questions, difficulty, context)
     # Add a strict system instruction to force JSON-only output
     strict_system = (

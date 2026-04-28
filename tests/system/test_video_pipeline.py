@@ -83,7 +83,7 @@ class TestVideoGenerationPipeline:
                 "prompt": "Draw a circle",
                 "keys": {"claude": "test-key"},
                 "provider": "claude",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5",
             },
         )
 
