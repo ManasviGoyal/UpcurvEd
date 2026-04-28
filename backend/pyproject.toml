@@ -1,9 +1,8 @@
 [project]
 name = "upcurved-backend"
 version = "0.1.0"
-description = "FastAPI backend"
+description = "FastAPI backend for UpcurvEd"
 requires-python = ">=3.12"
-# Runtime deps (migrated from your requirements.txt)
 dependencies = [
   "fastapi>=0.111.0,<1.0.0",
   "uvicorn[standard]>=0.30.0,<1.0.0",
@@ -25,7 +24,7 @@ dependencies = [
   "anthropic>=0.29.0",
   "google-generativeai>=0.7.2",
 
-  # Tests/runtime helpers
+  # Runtime helpers / integrations
   "mcp>=1.2.0",
   "langdetect>=1.0.9",
   "mutagen>=1.47.0",
@@ -47,13 +46,20 @@ dev = [
   "pre-commit",
 ]
 
+# Infrastructure / release tooling formerly kept in requirements.txt
+infra = [
+  "pulumi>=3.0.0,<4.0.0",
+  "pulumi-gcp>=7.0.0,<8.0.0",
+  "pulumi-docker>=4.0.0,<5.0.0",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "UP", "B", "I"]  # basic errors, pyupgrade, bugbear, isort
-ignore = ["E203"]                    # if you want Black-compat behavior later
+select = ["E", "F", "UP", "B", "I"]
+ignore = ["E203"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
