@@ -67,7 +67,7 @@ import {
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { isDesktopLocalMode } from "@/lib/runtime";
-import { clearApiKeysForUser } from "@/lib/secureKeys";
+import { clearApiKeysForUser, persistApiKeysForUser } from "@/lib/secureKeys";
 import { prepareWidgetHtmlForIframe } from "@/lib/widgetRuntime";
 
 interface ChatInterfaceProps {
@@ -186,7 +186,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [progress, setProgress] = useState([0]);
-  const [volume, setVolume] = useState([75]);
+  const [volume, setVolume] = useState([100]);
   const [playbackSpeed, setPlaybackSpeed] = useState([1]);
   const [mediaDuration, setMediaDuration] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -209,6 +209,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Podcast generation visual progress (mirrors video progress UX)
   const [podcastProgress, setPodcastProgress] = useState(0);
   const podcastProgressTimer = useRef<number | null>(null);
+  const [podcastMode, setPodcastMode] = useState<"standard" | "debate">("standard");
+  const [videoMode, setVideoMode] = useState<"standard" | "story">("standard");
+  const [storyConfigOpen, setStoryConfigOpen] = useState(false);
+  const [storyHostChoice, setStoryHostChoice] = useState<"auto" | "scientist" | "friendly_robot" | "animal_guide" | "explorer" | "artist" | "athlete">("auto");
+  const [storyThemeChoice, setStoryThemeChoice] = useState<"auto" | "space" | "jungle" | "ocean" | "city_lab" | "sunset_farm" | "meadow">("auto");
   const [widgetProgress, setWidgetProgress] = useState(0);
   const widgetProgressTimer = useRef<number | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
@@ -501,6 +506,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
     setApiKeys(next);
   };
+
+  // Persist API keys whenever they change so restarts keep them.
+  useEffect(() => {
+    if (!user?.email) return;
+    void persistApiKeysForUser(user.email, apiKeys);
+  }, [user?.email, apiKeys.claude, apiKeys.gemini, apiKeys.provider, apiKeys.model]);
 
   // Reusable caption utilities
   const srtToVtt = (srt: string) => {
@@ -1955,6 +1966,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
       return;
     }
+    // Gate before posting user prompt into chat.
+    if (!ensureLlmKey("video")) return; // reuse existing gating label
 
     // Persist (may migrate draft) BEFORE adding message so user prompt always visible
     let persistedId = await ensurePersistedActiveChat(prompt);
@@ -1969,8 +1982,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     await processAndAddMessage(prompt, true, undefined, persistedId);
     // Now clear the query input AFTER message is added
     setQuery("");
-    // Gate after recording user prompt so it never disappears
-    if (!ensureLlmKey("video")) return; // reuse existing gating label
     // Pass the chat ID to generatePodcast to avoid duplicate chat creation
     generatePodcast(prompt, finalChatId);
   };
@@ -2015,6 +2026,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         keys: { claude: safe.claude, gemini: safe.gemini },
         provider: safe.provider || undefined,
         model: safe.model || undefined,
+        mode: podcastMode,
         sessionId,
       };
       const controller = new AbortController();
@@ -2039,14 +2051,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           type: 'audio',
           url: audioUrl, // Use signed URL for persistence
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `Podcast: ${prompt.slice(0, 50)}...`,
+          title: `${podcastMode === "debate" ? "Debate Podcast" : "Podcast"}: ${prompt.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           scriptGcsPath: data.script_gcs_path // GCS path for persistent script fallback
         };
 
         // Use the same chat ID we started with to ensure message goes to correct chat
-        await processAndAddMessage("✅ Podcast generated.", false, mediaAttachment, chatIdForGeneration);
+        await processAndAddMessage(
+          podcastMode === "debate" ? "✅ Debate podcast generated." : "✅ Podcast generated.",
+          false,
+          mediaAttachment,
+          chatIdForGeneration
+        );
 
         // Captions for podcast (audio): attempt fetch using helper
         // Clear old captions first
@@ -2094,7 +2111,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }
 
-  const generateVideoFromPrompt = async (promptOverride?: string) => {
+  const generateVideoFromPrompt = async (
+    promptOverride?: string,
+    storyOptions?: { host_character?: string; theme?: string }
+  ) => {
     lastGenerateKindRef.current = 'video';
     // If already generating, treat as cancel toggle
     if (busy && videoAbortRef.current) {
@@ -2118,6 +2138,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
       return;
     }
+    // Gate before posting user prompt into chat.
+    if (!ensureLlmKey("video")) return;
     // Persist (may migrate draft) BEFORE adding message so user prompt always visible
     let persistedId = await ensurePersistedActiveChat(prompt);
     // Use persistedId or activeChatId, or let processAndAddMessage create a local one
@@ -2131,10 +2153,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     await processAndAddMessage(prompt, true, undefined, persistedId);
     // Now clear the query input AFTER message is added
     setQuery("");
-    // Gate after recording user prompt so it never disappears
-    if (!ensureLlmKey("video")) return;
     // Pass the chat ID to generateVideo to avoid duplicate chat creation
-    generateVideo(prompt, finalChatId);
+    generateVideo(prompt, finalChatId, storyOptions);
   };
 
   const getLastUserPrompt = () => {
@@ -2903,7 +2923,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }
 
-  async function generateVideo(prompt: string, chatIdOverride?: string | number | null) {
+  async function generateVideo(
+    prompt: string,
+    chatIdOverride?: string | number | null,
+    storyOptions?: { host_character?: string; theme?: string }
+  ) {
     // if already busy, treat as cancel
     if (busy && videoAbortRef.current) {
       videoAbortRef.current.abort();
@@ -2961,6 +2985,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         keys: { claude: safe.claude, gemini: safe.gemini },
         provider: safe.provider || undefined, // "" -> undefined
         model: safe.model || undefined,
+        mode: videoMode,
+        storyOptions: videoMode === "story" ? (storyOptions || {}) : undefined,
         jobId,
         sessionId,
       };
@@ -2979,6 +3005,26 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const { data, raw } = await parseResponse(res);
 
       if (res.ok && data?.status === "ok") {
+        if (videoMode === "story" && data?.widget_html) {
+          const mediaAttachment: import('@/types').MediaAttachment = {
+            type: 'widget',
+            widgetCode: data.widget_html,
+            title: `Story Scenes: ${prompt.slice(0, 50)}...`,
+          };
+          setCurrentMediaMeta({ type: 'widget' });
+          setWidgetHtml(data.widget_html);
+          await processAndAddMessage(
+            "✅ Story mode scene slider generated.",
+            false,
+            mediaAttachment,
+            chatIdForGeneration
+          );
+          setVideoUrl(null);
+          setVttUrl(null);
+          setSrtText(null);
+          return;
+        }
+
         // Show toast when initial try failed and first retry starts (tries === 1)
         if (data.tries === 1) {
           toast({
@@ -3007,14 +3053,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           type: 'video',
           url: videoUrl,
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `Video: ${prompt.slice(0, 50)}...`,
+          title: `${videoMode === "story" ? "Story Video" : "Video"}: ${prompt.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           sceneCode: data.scene_code,  // Store scene code for video editing
         };
 
         // Use the same chat ID we started with to ensure message goes to correct chat
-        await processAndAddMessage("✅ Video generated.", false, mediaAttachment, chatIdForGeneration);
+        await processAndAddMessage(
+          videoMode === "story" ? "✅ Story mode video generated." : "✅ Video generated.",
+          false,
+          mediaAttachment,
+          chatIdForGeneration
+        );
 
         // Captions for video: attempt fetch using helper
         // Clear old captions first
@@ -3064,6 +3115,48 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       currentVideoJobId.current = null;
     }
   }
+
+  const handleVideoGenerateClick = async () => {
+    // Preserve existing stop behavior when already generating.
+    if (busy) {
+      await generateVideoFromPrompt();
+      return;
+    }
+    if (videoMode !== "story") {
+      await generateVideoFromPrompt();
+      return;
+    }
+    // Story mode: collect optional host/theme first.
+    setStoryConfigOpen(true);
+  };
+
+  const confirmStoryConfigAndGenerate = async () => {
+    setStoryConfigOpen(false);
+    const opts: { host_character?: string; theme?: string } = {};
+    if (storyHostChoice !== "auto") {
+      const hostMap: Record<string, string> = {
+        scientist: "scientist",
+        friendly_robot: "friendly robot",
+        animal_guide: "animal guide",
+        explorer: "explorer",
+        artist: "artist",
+        athlete: "athlete",
+      };
+      opts.host_character = hostMap[storyHostChoice] || undefined;
+    }
+    if (storyThemeChoice !== "auto") {
+      const themeMap: Record<string, string> = {
+        space: "space",
+        jungle: "jungle",
+        ocean: "ocean",
+        city_lab: "city lab",
+        sunset_farm: "sunset farm",
+        meadow: "meadow",
+      };
+      opts.theme = themeMap[storyThemeChoice] || undefined;
+    }
+    await generateVideoFromPrompt(undefined, opts);
+  };
 
   // Handle quiz generation directly from media (video or podcast)
   async function handleQuizMediaDirect(msg: any) {
@@ -4603,7 +4696,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       size="icon"
                       variant="default"
                       className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
-                      onClick={() => void generateVideoFromPrompt()}
+                      onClick={() => void handleVideoGenerateClick()}
                       title={busy ? "Stop video" : (podcastLoading || quizLoading || widgetLoading ? "Wait for current generation" : "Generate video")}
                       disabled={(!busy && (podcastLoading || quizLoading || widgetLoading))}
                     >
@@ -4631,6 +4724,32 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     </Button>
                   </>
                 )}
+              </div>
+            </div>
+            <div className="mt-2 flex justify-end">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={videoMode === "story" ? "secondary" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() =>
+                    setVideoMode((prev) => (prev === "story" ? "standard" : "story"))
+                  }
+                  title="Toggle story mode for video generation only"
+                >
+                  Story Mode: {videoMode === "story" ? "On" : "Off"}
+                </Button>
+                <Button
+                  variant={podcastMode === "debate" ? "secondary" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() =>
+                    setPodcastMode((prev) => (prev === "debate" ? "standard" : "debate"))
+                  }
+                  title="Toggle debate mode for podcast generation only"
+                >
+                  Debate Mode: {podcastMode === "debate" ? "On" : "Off"}
+                </Button>
               </div>
             </div>
           </div>
@@ -4909,7 +5028,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7"
+                    className="h-9 w-9"
                     title="Mute/unmute"
                     disabled={!videoUrl}
                     onClick={() => {
@@ -4928,7 +5047,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       }
                     }}
                   >
-                    <Volume2 className="w-8 h-4 text-muted-foreground" />
+                    <Volume2 className="w-5 h-5 text-foreground" />
                   </Button>
                   <Slider
                     value={volume}
@@ -4952,7 +5071,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     }}
                     max={100}
                     step={1}
-                    className="w-36"
+                    className="w-48"
                     disabled={!videoUrl}
                   />
                   {/* Download Button */}
@@ -4989,6 +5108,57 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           />
         </div>
       )}
+      <AlertDialog open={storyConfigOpen} onOpenChange={setStoryConfigOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Story Mode Options</AlertDialogTitle>
+            <AlertDialogDescription>
+              Pick an optional main character and theme. Leave as Auto to let the model decide.
+              Fixed story templates: Scientist, Friendly Robot, Animal Guide, Explorer, Artist, Athlete.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-3">
+            <div className="grid gap-1">
+              <label className="text-sm font-medium">Main Character</label>
+              <select
+                className="border rounded px-3 py-2 bg-background"
+                value={storyHostChoice}
+                onChange={(e) => setStoryHostChoice(e.target.value as any)}
+              >
+                <option value="auto">Auto</option>
+                <option value="scientist">Scientist</option>
+                <option value="friendly_robot">Friendly Robot</option>
+                <option value="animal_guide">Animal Guide</option>
+                <option value="explorer">Explorer</option>
+                <option value="artist">Artist</option>
+                <option value="athlete">Athlete</option>
+              </select>
+            </div>
+            <div className="grid gap-1">
+              <label className="text-sm font-medium">Theme</label>
+              <select
+                className="border rounded px-3 py-2 bg-background"
+                value={storyThemeChoice}
+                onChange={(e) => setStoryThemeChoice(e.target.value as any)}
+              >
+                <option value="auto">Auto</option>
+                <option value="space">Space</option>
+                <option value="jungle">Jungle</option>
+                <option value="ocean">Ocean</option>
+                <option value="city_lab">City Lab</option>
+                <option value="sunset_farm">Sunset Farm</option>
+                <option value="meadow">Meadow</option>
+              </select>
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmStoryConfigAndGenerate()}>
+              Generate Story Video
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Chat switch confirmation dialog */}
       <AlertDialog open={showSwitchWarning} onOpenChange={(open) => { if (!open) cancelChatSwitch(); }}>
         <AlertDialogContent>

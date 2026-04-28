@@ -201,6 +201,18 @@ def _generate_widget(*args, **kwargs):
     return _impl(*args, **kwargs)
 
 
+def _generate_story_video(*args, **kwargs):
+    from backend.mcp.story_video_logic import generate_story_video as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _generate_story_slider(*args, **kwargs):
+    from backend.mcp.story_video_logic import generate_story_slider as _impl
+
+    return _impl(*args, **kwargs)
+
+
 def require_firebase_user(
     authorization: str | None = Header(None),
     x_desktop_user: str | None = Header(None, alias="X-Desktop-User"),
@@ -266,6 +278,8 @@ class GenerateIn(BaseModel):
     keys: dict[str, str] = {}
     provider: Literal["claude", "gemini"] | None = None
     model: str | None = None
+    mode: Literal["standard", "story"] | None = "standard"
+    storyOptions: dict | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -287,6 +301,7 @@ class PodcastIn(BaseModel):
     keys: dict[str, str] = {}
     provider: Literal["claude", "gemini"] | None = None
     model: str | None = None
+    mode: Literal["standard", "debate"] | None = "standard"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -451,6 +466,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
     try:
         provider = body.provider
         model = body.model
+        gen_mode = (body.mode or "standard").strip().lower()
         if not provider:
             if body.keys.get("gemini"):
                 provider = "gemini"
@@ -460,20 +476,46 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
             model = "claude-sonnet-4-6"
-        logger.info("/generate called provider=%s model=%s", provider, model)
+        logger.info("/generate called provider=%s model=%s mode=%s", provider, model, gen_mode)
 
-        run_result = run_to_code(
-            prompt=body.prompt,
-            provider_keys=body.keys,
-            provider=provider,
-            model=model,
-        )
-        # Backward compatibility with older tests/mocks that return 6 fields.
-        if len(run_result) == 7:
-            code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id, failure_detail = run_result
+        if gen_mode == "story":
+            story_res = _generate_story_slider(
+                prompt=body.prompt,
+                provider=provider,
+                model=model,
+                provider_keys=body.keys,
+                story_options=body.storyOptions or {},
+            )
+            widget_html = story_res.get("widget_html")
+            if story_res.get("status") == "ok" and widget_html:
+                return {
+                    "ok": True,
+                    "status": "ok",
+                    "widget_html": widget_html,
+                    "story_plan": story_res.get("story_plan"),
+                    "generation_mode": "story",
+                    "message": "Story scene slider generated.",
+                }
+            return {
+                "ok": False,
+                "status": "error",
+                "error": "story_slider_failed",
+                "message": "Story generation failed.",
+                "video_url": None,
+            }
         else:
-            code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id = run_result
-            failure_detail = None
+            run_result = run_to_code(
+                prompt=body.prompt,
+                provider_keys=body.keys,
+                provider=provider,
+                model=model,
+            )
+            # Backward compatibility with older tests/mocks that return 6 fields.
+            if len(run_result) == 7:
+                code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id, failure_detail = run_result
+            else:
+                code, video_url, render_ok, tries, attempt_job_ids, succeeded_job_id = run_result
+                failure_detail = None
 
         if render_ok and video_url:
             gcs_bucket = _get_bucket_name()
@@ -571,6 +613,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                 "artifact_id": saved_artifact_id,
                 "gcs_path": gcs_path if gcs_bucket and signed_video_url else None,
                 "scene_code": code,
+                "generation_mode": gen_mode,
                 "message": "Video generated.",
             }
             logger.info("/generate completed: ok (job_id=%s, tries=%s)", succeeded_job_id, tries)
@@ -878,7 +921,14 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
             model = "gemini-2.5-pro"
         if not model and provider == "claude":
             model = "claude-sonnet-4-6"
-        result = _generate_podcast(prompt=body.prompt, provider=provider, model=model, provider_keys=body.keys, job_id=body.jobId)
+        result = _generate_podcast(
+            prompt=body.prompt,
+            provider=provider,
+            model=model,
+            provider_keys=body.keys,
+            mode=body.mode or "standard",
+            job_id=body.jobId,
+        )
 
         gcs_bucket = _get_bucket_name()
         if gcs_bucket and result.get("video_url"):
@@ -957,7 +1007,12 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
 
     logger.info("/widget called provider=%s model=%s", provider, model)
     try:
-        result = _generate_widget(prompt=body.prompt, provider=provider, model=model, provider_keys=body.keys)
+        result = _generate_widget(
+            prompt=body.prompt,
+            provider=provider,
+            model=model,
+            provider_keys=body.keys,
+        )
         logger.info("/widget completed: ok, html_len=%d", len(result.get("widget_html", "")))
         return {"ok": True, "status": "ok", "widget_html": result["widget_html"]}
     except Exception as e:

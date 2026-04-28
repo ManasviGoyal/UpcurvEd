@@ -8,6 +8,7 @@ const ROOT_DIR = path.resolve(__dirname, "..", "..");
 const RUNTIME_ROOT = path.join(ROOT_DIR, "desktop", "python-runtime");
 const PYTHON_DIR = path.join(RUNTIME_ROOT, "python");
 const BIN_DIR = path.join(RUNTIME_ROOT, "bin");
+const PLAYWRIGHT_BROWSERS_DIR = path.join(RUNTIME_ROOT, "ms-playwright");
 const REQUIREMENTS_FILE = path.join(ROOT_DIR, "desktop", "requirements-desktop.txt");
 
 function runOrThrow(command, args, options = {}) {
@@ -143,6 +144,14 @@ function main() {
   runOrThrow(venvPython, ["-m", "pip", "install", "--upgrade", "setuptools<81"], {
     cwd: ROOT_DIR,
   });
+  // Bundle Playwright Chromium into runtime so end-users do not need manual install.
+  runOrThrow(venvPython, ["-m", "playwright", "install", "chromium"], {
+    cwd: ROOT_DIR,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_BROWSERS_PATH: PLAYWRIGHT_BROWSERS_DIR,
+    },
+  });
   runOrThrow(venvPython, ["-m", "manim", "--version"], { cwd: ROOT_DIR });
 
   const ffmpegSource = runAndCaptureOrThrow(
@@ -162,6 +171,7 @@ function main() {
 
   console.log(`[desktop] bundled Python runtime ready at ${PYTHON_DIR}`);
   console.log(`[desktop] bundled ffmpeg ready at ${ffmpegTarget}`);
+  console.log(`[desktop] bundled Playwright browsers ready at ${PLAYWRIGHT_BROWSERS_DIR}`);
 }
 
 main();

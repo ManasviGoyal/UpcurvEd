@@ -1,5 +1,6 @@
 import logging
 import re
+from tempfile import NamedTemporaryFile
 
 from gtts import gTTS
 from langdetect import detect
@@ -11,6 +12,8 @@ from backend.runner.job_runner import STORAGE, to_static_url
 from backend.utils import app_logging  # noqa: F401
 
 logger = logging.getLogger(f"app.{__name__}")
+
+WELCOME_PREFIX = "welcome to upcurved podcasts"
 
 
 def _pick_provider_and_key(
@@ -30,7 +33,62 @@ def _pick_provider_and_key(
     raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' key.")
 
 
-def _podcast_prompt(user_prompt: str) -> str:
+def _podcast_prompt(user_prompt: str, mode: str = "standard") -> str:
+    low_mode = (mode or "standard").strip().lower()
+    if low_mode == "debate":
+        return f"""
+You are writing a structured educational debate podcast script.
+Let the script be in the language implied by the user's prompt.
+
+IMPORTANT: You MUST start with this greeting (translated to the same language):
+'Welcome to UpCurved Podcasts, where we take big ideas and curve them upwards
+into simple, fun explanations. Today's episode: [GENERATE A SIMPLE, DIRECT
+TITLE FOR THIS EPISODE BASED ON THE TOPIC]. Let's turn complexity into
+curiosity!'
+
+Debate format rules:
+1) Introduce the topic in 2-3 lines.
+2) Expert A gives argument for Viewpoint 1.
+3) Expert B gives argument for Viewpoint 2.
+4) Include one direct rebuttal round each (A rebuts B, B rebuts A).
+5) End with a Judge Summary section that compares both sides, clarifies what is correct,
+   and gives a practical takeaway for learners.
+6) Target spoken duration MUST be between 2 and 3 minutes total.
+7) Keep total script length around 320-450 words so TTS lands near 2-3 minutes.
+
+Style rules:
+- Keep it educational, clear, and balanced.
+- Keep labels explicit in plain text: "Host:", "Expert A:", "Expert B:", "Judge:".
+- No markdown, JSON, code blocks, stage directions, music cues, or SFX.
+- Do not end abruptly.
+
+Topic: {user_prompt}
+"""
+
+
+def _episode_title_from_prompt(prompt: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (prompt or "").strip())
+    cleaned = re.sub(r"[^A-Za-z0-9 \-]", "", cleaned).strip()
+    if not cleaned:
+        return "Learning Essentials"
+    words = cleaned.split()
+    return " ".join(words[:5]).strip()
+
+
+def _ensure_debate_greeting(script: str, user_prompt: str) -> str:
+    txt = (script or "").strip()
+    if not txt:
+        return txt
+    head = txt[:500].lower()
+    if WELCOME_PREFIX in head:
+        return txt
+    title = _episode_title_from_prompt(user_prompt)
+    greeting = (
+        "Host: Welcome to UpCurved Podcasts, where we take big ideas and curve them upwards "
+        f"into simple, fun explanations. Today's episode: {title}. "
+        "Let's turn complexity into curiosity!"
+    )
+    return f"{greeting}\n\n{txt}"
     return f"""
 You are a skilled podcast writer and narrator.
 Write a concise but engaging single-speaker podcast script for the following topic.
@@ -196,12 +254,121 @@ def _make_srt_proportional(script_text: str, total_seconds: float, min_per_cue: 
     return "\n".join(out_lines).strip() + "\n"
 
 
+def _parse_labeled_debate_segments(script_text: str) -> list[tuple[str, str]]:
+    """
+    Parse labeled dialogue lines like:
+      Host: ...
+      Expert A: ...
+      Expert B: ...
+      Judge: ...
+    Returns ordered (speaker, text) chunks.
+    """
+    lines = [ln.strip() for ln in (script_text or "").splitlines() if ln.strip()]
+    segments: list[tuple[str, str]] = []
+    current_speaker = None
+    buffer: list[str] = []
+    label_re = re.compile(r"^(Host|Expert A|Expert B|Judge)\s*:\s*(.*)$", re.IGNORECASE)
+
+    def flush():
+        nonlocal current_speaker, buffer
+        if current_speaker and buffer:
+            text = " ".join(buffer).strip()
+            if text:
+                segments.append((current_speaker, text))
+        current_speaker = None
+        buffer = []
+
+    for ln in lines:
+        m = label_re.match(ln)
+        if m:
+            flush()
+            current_speaker = m.group(1).title()
+            first_text = (m.group(2) or "").strip()
+            if first_text:
+                buffer.append(first_text)
+            continue
+        if current_speaker:
+            buffer.append(ln)
+    flush()
+    return segments
+
+
+def _voice_kwargs_for_speaker(speaker: str, lang: str) -> dict:
+    """
+    Build gTTS kwargs for each speaker so Expert A / Expert B sound distinct.
+    For English we vary region voice; for other languages we vary speed.
+    """
+    sp = (speaker or "").strip().lower()
+    kwargs = {"lang": lang, "slow": False}
+    if lang.startswith("en"):
+        if sp == "expert a":
+            kwargs["tld"] = "co.uk"
+            kwargs["slow"] = False
+        elif sp == "expert b":
+            kwargs["tld"] = "com.au"
+            kwargs["slow"] = True
+        elif sp == "judge":
+            kwargs["tld"] = "co.in"
+            kwargs["slow"] = False
+        else:  # host/default
+            kwargs["tld"] = "com"
+            kwargs["slow"] = False
+    else:
+        if sp == "expert b":
+            kwargs["slow"] = True
+    return kwargs
+
+
+def _synthesize_debate_multivoice(script: str, lang: str, out_mp3_path) -> None:
+    """
+    Synthesize debate script with distinct voices for Expert A and Expert B,
+    then concatenate into a single mp3.
+    """
+    segments = _parse_labeled_debate_segments(script)
+    if len(segments) < 4:
+        raise RuntimeError("Debate script did not include enough labeled dialogue segments.")
+    if not any(sp.lower() == "expert a" for sp, _ in segments):
+        raise RuntimeError("Debate script missing Expert A lines.")
+    if not any(sp.lower() == "expert b" for sp, _ in segments):
+        raise RuntimeError("Debate script missing Expert B lines.")
+
+    from pydub import AudioSegment
+
+    merged = AudioSegment.silent(duration=0)
+    gap = AudioSegment.silent(duration=180)
+    temp_files = []
+    try:
+        for speaker, text in segments:
+            if not text.strip():
+                continue
+            with NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                temp_files.append(tmp.name)
+                tts_kwargs = _voice_kwargs_for_speaker(speaker, lang)
+                try:
+                    gTTS(text=text, **tts_kwargs).save(tmp.name)
+                except Exception:
+                    # Fallback voice per segment if region/speed combo unsupported.
+                    gTTS(text=text, lang=lang).save(tmp.name)
+            clip = AudioSegment.from_file(temp_files[-1], format="mp3")
+            merged += clip + gap
+        merged.export(str(out_mp3_path), format="mp3")
+    finally:
+        from pathlib import Path as _Path
+
+        for p in temp_files:
+            try:
+                _Path(p).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def generate_podcast(
     prompt: str,
     *,
     provider: str | None = None,
     model: str | None = None,
     provider_keys: dict[str, str] | None = None,
+    mode: str = "standard",
     job_id: str | None = None,
 ) -> dict[str, str]:
     """
@@ -218,11 +385,13 @@ def generate_podcast(
         api_key=api_key,
         model=model,
         system=None,
-        user=_podcast_prompt(prompt),
+        user=_podcast_prompt(prompt, mode=mode),
         temperature=0.5,  # Higher temperature for more natural, varied dialogue
     )
     if not script or not script.strip():
         raise RuntimeError("LLM returned empty script")
+    if (mode or "standard").strip().lower() == "debate":
+        script = _ensure_debate_greeting(script, prompt)
 
     # Detect language for TTS
     lang = _infer_gtts_lang(script)
@@ -238,23 +407,44 @@ def generate_podcast(
     for d in (job_dir, out_dir, logs_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    mode_norm = (mode or "standard").strip().lower()
+
     # Synthesize audio
     mp3_path = job_dir / "podcast.mp3"
     try:
-        logger.info("podcast: synthesizing TTS mp3 (lang=%s)", lang)
-        tts = gTTS(text=script, lang=lang)
-        tts.save(str(mp3_path))
-    except Exception as e:
-        # Retry once with English if language unsupported or any gTTS failure occurs
-        msg = str(e) if str(e) else type(e).__name__
-        logger.warning("podcast: gTTS failed with lang=%s: %s; retrying with 'en'", lang, msg)
-        try:
-            tts = gTTS(text=script, lang="en")
+        if mode_norm == "debate":
+            logger.info("podcast: synthesizing debate multi-voice mp3 (lang=%s)", lang)
+            _synthesize_debate_multivoice(script, lang, mp3_path)
+        else:
+            logger.info("podcast: synthesizing TTS mp3 (lang=%s)", lang)
+            tts = gTTS(text=script, lang=lang)
             tts.save(str(mp3_path))
-            logger.info("podcast: gTTS fallback to 'en' succeeded")
+    except Exception as e:
+        # Retry once with English (or fallback single-voice for debate) if TTS fails.
+        msg = str(e) if str(e) else type(e).__name__
+        logger.warning(
+            "podcast: TTS failed with lang=%s mode=%s: %s; retrying fallback",
+            lang,
+            mode_norm,
+            msg,
+        )
+        try:
+            if mode_norm == "debate":
+                _synthesize_debate_multivoice(script, "en", mp3_path)
+                logger.info("podcast: debate fallback multi-voice synthesis in 'en' succeeded")
+            else:
+                tts = gTTS(text=script, lang="en")
+                tts.save(str(mp3_path))
+                logger.info("podcast: gTTS fallback to 'en' succeeded")
         except Exception as e2:
-            logger.exception("podcast: gTTS fallback failed: %s", e2)
-            raise RuntimeError(f"TTS failed: {msg}; fallback failed: {e2}") from e2
+            logger.warning("podcast: fallback TTS failed (%s), trying final single-voice 'en'", e2)
+            try:
+                tts = gTTS(text=script, lang="en")
+                tts.save(str(mp3_path))
+                logger.info("podcast: final single-voice fallback succeeded")
+            except Exception as e3:
+                logger.exception("podcast: final TTS fallback failed: %s", e3)
+                raise RuntimeError(f"TTS failed: {msg}; fallback failed: {e3}") from e3
 
     # After audio is created, measure duration and build SRT/VTT to match speaking speed
     srt_path = job_dir / "podcast.srt"

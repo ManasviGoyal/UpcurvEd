@@ -65,17 +65,12 @@ export async function loadApiKeysForUser(
 }
 
 export async function persistApiKeysForUser(email: string, keys: ApiKeys): Promise<void> {
+  // Always keep a local copy in desktop mode so restarts never lose keys,
+  // even when keytar/secret service is unavailable.
+  writeLocalSettings(email, normalizeKeys(keys));
   if (!isDesktopLocalMode() || !hasDesktopSecureStore()) {
-    writeLocalSettings(email, normalizeKeys(keys));
     return;
   }
-  // Keep non-sensitive provider/model in local settings.
-  writeLocalSettings(email, {
-    claude: "",
-    gemini: "",
-    provider: keys.provider || "",
-    model: keys.model || "",
-  });
   try {
     const result = await window.desktop!.secureStore!.setApiKeys(email, normalizeKeys(keys));
     // `setApiKeys` can resolve with `{ ok: false }` when secure storage is unavailable
@@ -84,8 +79,7 @@ export async function persistApiKeysForUser(email: string, keys: ApiKeys): Promi
       throw new Error(result?.reason || "secure_store_unavailable");
     }
   } catch {
-    // Fallback: if secure store fails, keep prior behavior so user is not blocked.
-    writeLocalSettings(email, normalizeKeys(keys));
+    // Local copy is already written above.
   }
 }
 

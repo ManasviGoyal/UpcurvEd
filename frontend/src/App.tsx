@@ -113,17 +113,18 @@ const AppContent = () => {
     }
   };
 
+  const profileKey = (email: string) => `app.profile.${email}`;
+
   const updateDisplayName = (nextName: string) => {
     const trimmed = String(nextName || "").trim();
     if (!trimmed) return;
     setUser((prev) => (prev ? { ...prev, name: trimmed } : prev));
     setUsers((prev) => prev.map((u) => (u.email === user?.email ? { ...u, name: trimmed } : u)));
-    if (desktopLocal) {
-      try {
-        const email = user?.email || "local@upcurved.desktop";
-        localStorage.setItem(LOCAL_USER_KEY, JSON.stringify({ name: trimmed, email }));
-      } catch {}
-    }
+    try {
+      const email = user?.email || "local@upcurved.desktop";
+      localStorage.setItem(LOCAL_USER_KEY, JSON.stringify({ name: trimmed, email }));
+      localStorage.setItem(profileKey(email), JSON.stringify({ name: trimmed }));
+    } catch {}
   };
 
   const resetLocalData = () => {
@@ -226,6 +227,14 @@ const AppContent = () => {
         if (fbUser) {
           const idToken = await fbUser.getIdToken();
           const email = fbUser.email || "unknown@example.com";
+          let localName = "";
+          try {
+            const raw = localStorage.getItem(profileKey(email));
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              localName = String(parsed?.name || "").trim();
+            }
+          } catch {}
           // Always force blank greeting each login (ChatGPT behavior) until first user message.
           try { sessionStorage.setItem('app.forceBlank', '1'); } catch {}
           // Immediately load theme/color for this user to avoid flicker
@@ -239,7 +248,7 @@ const AppContent = () => {
           } catch {}
           // Set lightweight user object; chats live in `users` store
           setUser({
-            name: fbUser.displayName || email.split('@')[0] || "User",
+            name: localName || fbUser.displayName || email.split('@')[0] || "User",
             email,
             uid: fbUser.uid,
             idToken,
@@ -252,7 +261,7 @@ const AppContent = () => {
             if (idx >= 0) {
               // keep existing entry; make sure name is up-to-date
               const cloned = [...prev];
-              cloned[idx] = { ...cloned[idx], name: fbUser.displayName || cloned[idx].name || email.split('@')[0] };
+              cloned[idx] = { ...cloned[idx], name: localName || fbUser.displayName || cloned[idx].name || email.split('@')[0] };
               return cloned;
             }
             // seed chats from local cache if present
@@ -261,7 +270,7 @@ const AppContent = () => {
               const raw = localStorage.getItem(`app.chats.${email}`);
               if (raw) cachedChats = JSON.parse(raw);
             } catch {}
-            return [...prev, { name: fbUser.displayName || email.split('@')[0] || "User", email, chats: Array.isArray(cachedChats) ? cachedChats : [] }];
+            return [...prev, { name: localName || fbUser.displayName || email.split('@')[0] || "User", email, chats: Array.isArray(cachedChats) ? cachedChats : [] }];
           });
           // On refresh: preserve current URL - don't redirect
           // Only redirect if on root path and authenticated (first login)

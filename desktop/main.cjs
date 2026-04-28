@@ -25,6 +25,9 @@ const PYTHON_RUNTIME_PYTHON_DIR = IS_PACKAGED
 const PYTHON_RUNTIME_BIN_DIR = IS_PACKAGED
   ? path.join(process.resourcesPath, "python-runtime", "bin")
   : path.join(APP_DIR, "desktop", "python-runtime", "bin");
+const PLAYWRIGHT_BROWSERS_DIR = IS_PACKAGED
+  ? path.join(process.resourcesPath, "python-runtime", "ms-playwright")
+  : path.join(APP_DIR, "desktop", "python-runtime", "ms-playwright");
 const IS_WSL =
   process.platform === "linux" &&
   (Boolean(process.env.WSL_DISTRO_NAME) || fs.existsSync("/proc/sys/fs/binfmt_misc/WSLInterop"));
@@ -410,6 +413,8 @@ function startBackend() {
       APP_MODE: process.env.APP_MODE || "desktop-local",
       UPCURVED_STORAGE_DIR: process.env.UPCURVED_STORAGE_DIR || storageDir,
       UPCURVED_DESKTOP_STATE_DIR: process.env.UPCURVED_DESKTOP_STATE_DIR || desktopStateDir,
+      PLAYWRIGHT_BROWSERS_PATH:
+        process.env.PLAYWRIGHT_BROWSERS_PATH || PLAYWRIGHT_BROWSERS_DIR,
     };
 
     if (isUsingBundledPython) {
