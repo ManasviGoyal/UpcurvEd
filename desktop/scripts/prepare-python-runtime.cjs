@@ -1,4 +1,3 @@
-// desktop/scripts/prepare-python-runtime.cjs
 #!/usr/bin/env node
 
 const fs = require("fs");

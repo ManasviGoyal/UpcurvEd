@@ -65,10 +65,14 @@ def _inject_watermark(code: str) -> str:
     Inject watermark code into Manim scene code.
     Adds a Text watermark at the top-right corner that persists throughout the scene.
     The watermark is added after each cleanup section to ensure it persists.
+
+    Important: the injected block performs a local import of Text, Rectangle, and UR
+    so it does not rely on those names already being imported in the generated scene.
     """
-    # Watermark initialization code (only run once, stored as instance vars)
     watermark_init = """        # Initialize watermark (only once) - stored as instance variables
         if not hasattr(self, '_watermark_added'):
+            from manim import Rectangle, Text, UR
+
             self._watermark_text = Text("Generated using UpcurvEd", font_size=24, color="white")
             self._watermark_text.set_opacity(0.8)  # Make text translucent
             self._watermark_text.to_corner(UR, buff=0.1)
@@ -78,7 +82,7 @@ def _inject_watermark(code: str) -> str:
                 height=self._watermark_text.height + 0.2,
                 fill_opacity=0.6,  # More translucent background
                 fill_color="black",
-                stroke_width=0
+                stroke_width=0,
             )
             self._watermark_bg.move_to(self._watermark_text.get_center())
             self.add(self._watermark_bg, self._watermark_text)
@@ -86,7 +90,6 @@ def _inject_watermark(code: str) -> str:
 
 """
 
-    # Watermark re-add code (after cleanup) - re-adds stored watermark objects
     watermark_readd = """        # Re-add watermark after cleanup (excluded from snapshot)
         if hasattr(self, '_watermark_added') and self._watermark_added:
             if self._watermark_bg not in self.mobjects:
@@ -96,7 +99,6 @@ def _inject_watermark(code: str) -> str:
 
 """
 
-    # Modify cleanup code to exclude watermark from snapshot
     cleanup_modify = """        # Modify cleanup to exclude watermark
         snapshot = [m for m in self.mobjects if not (
             hasattr(self, '_watermark_bg') and m in [self._watermark_bg, self._watermark_text]
@@ -106,33 +108,41 @@ def _inject_watermark(code: str) -> str:
     # First, add watermark initialization at the start of construct()
     pattern_start = r"(def\s+construct\s*\([^)]*\)\s*:\s*\n)"
     modified_code = re.sub(
-        pattern_start, lambda m: m.group(1) + watermark_init, code, count=1, flags=re.MULTILINE
+        pattern_start,
+        lambda m: m.group(1) + watermark_init,
+        code,
+        count=1,
+        flags=re.MULTILINE,
     )
 
     # If that didn't work, try fallback
     if modified_code == code:
         pattern_fallback = r"(def\s+construct\s*\([^)]*\)\s*:)"
         modified_code = re.sub(
-            pattern_fallback, r"\1\n" + watermark_init, code, count=1, flags=re.MULTILINE
+            pattern_fallback,
+            r"\1\n" + watermark_init,
+            code,
+            count=1,
+            flags=re.MULTILINE,
         )
 
     # Modify cleanup code to exclude watermark from being faded out
-    # Replace: snapshot = list(self.mobjects) with modified version
     snapshot_pattern = r"(snapshot\s*=\s*list\(self\.mobjects\))"
     modified_code = re.sub(
-        snapshot_pattern, cleanup_modify.strip(), modified_code, flags=re.MULTILINE
+        snapshot_pattern,
+        cleanup_modify.strip(),
+        modified_code,
+        flags=re.MULTILINE,
     )
 
     # Also re-add watermark after cleanup waits as a safeguard
     cleanup_wait_pattern = r"(self\.wait\(0\.1\))"
     modified_code = re.sub(
-        cleanup_wait_pattern, r"\1\n" + watermark_readd, modified_code, flags=re.MULTILINE
+        cleanup_wait_pattern,
+        r"\1\n" + watermark_readd,
+        modified_code,
+        flags=re.MULTILINE,
     )
-
-    # Also add at the very end of construct() as a final safeguard
-    # Find the end of construct() - look for the last indented line before next def/class
-    # This is tricky, so let's add it before any final return or at the end
-    # Actually, let's just ensure it's added after the last self.wait() or similar
 
     return modified_code
 
@@ -206,8 +216,8 @@ def run_job_from_code(
         lint_text = (lint_proc.stdout or "") + (lint_proc.stderr or "")
         (logs_dir / "lint.txt").write_text(lint_text)
 
-        LINT_STRICT = os.getenv("LINT_STRICT", "0") == "1"
-        if lint_proc.returncode != 0 and LINT_STRICT:
+        lint_strict = os.getenv("LINT_STRICT", "0") == "1"
+        if lint_proc.returncode != 0 and lint_strict:
             return {
                 "ok": False,
                 "status": "error",
@@ -225,7 +235,7 @@ def run_job_from_code(
                 "lint_url": to_static_url(logs_dir / "lint.txt"),
             }
     except FileNotFoundError:
-        # pyflakes not installed → skip linting
+        # pyflakes not installed -> skip linting
         pass
     except subprocess.TimeoutExpired as e:
         (logs_dir / "lint_timeout.txt").write_text(str(e))
@@ -258,7 +268,7 @@ def run_job_from_code(
             "manim",
             "-v",
             "WARNING",
-            "-ql",  # fixed low quality
+            "-ql",
             str(scene_py),
             scene_name,
             "-o",
@@ -279,14 +289,12 @@ def run_job_from_code(
         try:
             stdout, stderr = proc.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as e:
-            # Kill and capture what we can
             _kill_proc_tree(proc)
             try:
                 stdout, stderr = proc.communicate(timeout=2)
             except Exception:
                 pass
             (logs_dir / "timeout.txt").write_text(str(e))
-            # Persist artifacts
             (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd))
             (logs_dir / "manim_stdout.txt").write_text(stdout or "")
             (logs_dir / "manim_stderr.txt").write_text(stderr or "")
@@ -309,13 +317,11 @@ def run_job_from_code(
                 "timeout_url": to_static_url(logs_dir / "timeout.txt"),
             }
 
-        # Always write command and any available outputs
         (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd))
         (logs_dir / "manim_stdout.txt").write_text(stdout or "")
         (logs_dir / "manim_stderr.txt").write_text(stderr or "")
         (logs_dir / "returncode.txt").write_text(str(proc.returncode))
 
-        # Manim nests outputs under out_dir
         mp4s = sorted(out_dir.rglob("*.mp4"))
         if proc.returncode != 0 or not mp4s:
             (logs_dir / "out_dir_listing.txt").write_text(
@@ -339,29 +345,21 @@ def run_job_from_code(
                 "returncode_url": to_static_url(logs_dir / "returncode.txt"),
             }
 
-        # Success: copy newest MP4 to stable path and return
         newest = max(mp4s, key=lambda p: p.stat().st_mtime)
         final_video = job_dir / "video.mp4"
         shutil.copyfile(newest, final_video)
 
-        # Convert SRT to VTT if available (do it during generation, not after)
-        # Use same converter as podcast code for consistency
         srt_file = newest.with_suffix(".srt")
         if srt_file.exists():
             try:
-                import re
-
                 srt_text = srt_file.read_text(encoding="utf-8", errors="ignore")
 
-                # Convert SRT to WebVTT (same as podcast_logic._srt_to_vtt)
-                # Replace comma milliseconds with dot: 00:00:01,000 --> 00:00:01.000
                 vtt_body = re.sub(
                     r"^(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})",
                     r"\1.\2 --> \3.\4",
                     srt_text,
                     flags=re.MULTILINE,
                 )
-                # Remove SRT cue indices (standalone lines with only digits)
                 vtt_lines = []
                 for line in vtt_body.splitlines():
                     if re.match(r"^\s*\d+\s*$", line):
@@ -372,7 +370,6 @@ def run_job_from_code(
                 final_vtt = job_dir / "video.vtt"
                 final_vtt.write_text(vtt_text, encoding="utf-8")
             except Exception as e:
-                # Log but don't fail the whole job if VTT conversion fails
                 print(f"Warning: VTT conversion failed: {e}", file=sys.stderr)
 
         return {
@@ -392,7 +389,6 @@ def run_job_from_code(
         }
 
     except FileNotFoundError:
-        # python/manim runtime not available
         return {
             "ok": False,
             "status": "error",
@@ -405,7 +401,6 @@ def run_job_from_code(
             "logs": {"stdout_url": "", "stderr_url": "", "cmd_url": ""},
         }
     finally:
-        # Cleanup registry if process finished
         proc_ref = ACTIVE_PROCS.get(job_id)
         if proc_ref is not None and proc_ref.poll() is not None:
             ACTIVE_PROCS.pop(job_id, None)
