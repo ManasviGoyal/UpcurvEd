@@ -3,6 +3,12 @@
   "private": true,
   "version": "0.2.0",
   "description": "Desktop runtime for UpcurvEd",
+  "author": "Manasvi Goyal and Isabela Yepes",
+  "contributors": [
+    "Manasvi Goyal",
+    "Isabela Yepes"
+  ],
+  "license": "MIT",
   "main": "desktop/main.cjs",
   "engines": {
     "node": ">=20"
