@@ -33,17 +33,20 @@ extraMetadata:
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
 mac:
+  icon: desktop/icons/icon.icns
   category: public.app-category.education
   target:
     - target: dmg
 
 win:
+  icon: desktop/icons/icon.ico
   target:
     - target: nsis
       arch:
         - x64
 
 linux:
+  icon: desktop/icons/icon-512.png
   target:
     - AppImage
   category: Education
