@@ -11,9 +11,6 @@ class AgentState(TypedDict, total=False):
     provider: Provider  # optional; if absent we auto-pick by available key
     model: str  # optional model name
 
-    # ---- Retrieval (RAG) ----
-    retrieved_docs: str  # formatted docs retrieved from RAG (optional)
-
     # ---- Draft/Render/Repair loop ----
     manim_code: str  # current draft from draft_code_node
     previous_code: str  # last attempt that was rendered (for repair)
@@ -28,10 +25,6 @@ class AgentState(TypedDict, total=False):
     # Render outputs / flags
     render_ok: bool
     video_url: str | None  # /static/... when render_ok
-
-    # Retry counters / limits
-    tries: int  # incremented in retrieve_node
-    max_tries: int
 
     # Attempt tracking (per-render job ids from runner)
     attempt_job_ids: list[str]  # every render attempt's job_id

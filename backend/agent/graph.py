@@ -13,7 +13,6 @@ from ..utils import app_logging  # noqa: F401
 from .nodes.draft_code import draft_code_node
 from .nodes.log_failure import log_failure_node
 from .nodes.render import render_manim_node
-from .nodes.retrieve import retrieve_node
 from .state import AgentState
 
 # Per-module logger; name will look like: "app.backend.agent.graph"
@@ -65,7 +64,6 @@ def build_graph():
 
     g.add_node("draft_code", _timed_node("draft_code", draft_code_node))
     g.add_node("render", _timed_node("render", render_manim_node))
-    g.add_node("retrieve", _timed_node("retrieve", retrieve_node))
     g.add_node("log_failure", _timed_node("log_failure", log_failure_node))
 
     # Entry
@@ -78,10 +76,9 @@ def build_graph():
     g.add_conditional_edges(
         "render",
         _route_after_render,
-        {"ok": END, "need_fix": "retrieve"},
+        {"ok": END, "need_fix": "log_failure"},
     )
 
-    g.add_edge("retrieve", "log_failure")
 
     # Conditional: log_failure -> draft_code (retry) or END (give up)
     g.add_conditional_edges(
