@@ -6,7 +6,7 @@ UpcurvEd is a desktop application for generating educational media from natural-
 
 Our submission for the Claude Code competition only includes the April 2026 content of this repo, as featured in the demo video, as our project. It encompasses the following:
 
-- **Migration from web to desktop app:** available for download [here](upcurved.vercel.app/home) we support Mac OS (arm64), Windows (x64), and Linux (x64) architectures.
+- **Migration from web to desktop app:** available for download [here](https://upcurved.vercel.app/home) we support Mac OS (arm64), Windows (x64), and Linux (x64) architectures.
 - **Interactive widgets feature:** learn a concept visually and interactively (local MCP tool)
 - **Story mode videos feature:** kid friendly educational animations (local MCP tool)
 - **Debate style podcasts feature:** listen to a concept explained between two voices (local MCP tool)
