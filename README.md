@@ -1,16 +1,23 @@
-# UpcurvEd
+# UpcurvEd Desktop
 
-UpcurvEd is a desktop-first application for generating educational media from natural-language prompts. The current product centers on an Electron app that runs a local FastAPI backend and a React/Vite frontend, then uses Manim-based generation and rendering to produce outputs such as short explainer videos, podcasts, quizzes, and interactive widgets.
+UpcurvEd is a desktop application for generating educational media from natural-language prompts. The current product centers on an Electron app that runs a local FastAPI backend and a React/Vite frontend, uses AI generation and rendering to produce outputs. This desktop application addresses the lack of engaging and accessible STEM learning tools, especially for students who struggle with traditional text-heavy methods. It is designed for learners at various levels who benefit from visual and interactive explanations to improve understanding and retention.
 
-## Current Product Model
+## Claude Code Competition Note
 
-UpcurvEd is now maintained as a **desktop-first** project.
+Our submission for the Claude Code competition only includes the April 2026 content of this repo, as featured in the demo video, as our project. It encompasses the following:
 
-- **Primary distribution path:** packaged Electron installers
-- **Primary development workflow:** run Electron locally and let it start the backend/UI services it needs
-- **Browser/frontend-only development:** still useful for UI work, but secondary
+- **Migration from web to desktop app:** available for download [here](upcurved.vercel.app/home) we support Mac OS (arm64), Windows (x64), and Linux (x64) architectures.
+- **Interactive widgets feature:** learn a concept visually and interactively (local MCP tool)
+- **Story mode videos feature:** kid friendly educational animations (local MCP tool)
+- **Debate style podcasts feature:** listen to a concept explained between two voices (local MCP tool)
+- **Secure API key save feature:** save your Claude API key securely onto your Native OS password store.
 
-This repository is maintained as a desktop-first application. Documentation should reflect the desktop-local workflow as the source of truth.
+Components of the project from last semester not included in the demo video, description, nor in the submission:
+
+- **Quiz feature**
+- **Manim Video feature**
+- **Single voice podcast feature**
+- **Cloud, Kubernetes, Web version:** was not cost effective which is why this semester we desired to pivot to desktop.
 
 ## Current Architecture
 
