@@ -481,9 +481,16 @@ def _build_scene_template_html(
             ctx.beginPath(); ctx.arc(cx + 7*s, hy - 116*s, 2.5*s, 0, Math.PI*2); ctx.fill();
             // Mouth
             ctx.beginPath();
-            if (mouthUp) {{ ctx.arc(cx, hy - 105*s, 5*s, Math.PI, 0); }}
-            else {{ ctx.arc(cx, hy - 103*s, 5*s, 0, Math.PI); }}
-            ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5*s; ctx.stroke();
+            if (mouthUp) {{
+                // Smile
+                ctx.arc(cx, hy - 108*s, 6*s, 0, Math.PI);
+            }} else {{
+                // Frown
+                ctx.arc(cx, hy - 102*s, 6*s, Math.PI, 0);
+            }}
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 1.5*s;
+            ctx.stroke();
         }}
         function drawCloud(ctx, cx, cy, cw) {{
             ctx.fillStyle = 'rgba(255,255,255,0.92)';
@@ -1117,9 +1124,16 @@ def _build_story_slider_html(
             ctx.beginPath(); ctx.arc(cx + 7*s, hy - 116*s, 2.5*s, 0, Math.PI*2); ctx.fill();
             // Mouth
             ctx.beginPath();
-            if (mouthUp) {{ ctx.arc(cx, hy - 105*s, 5*s, Math.PI, 0); }}
-            else {{ ctx.arc(cx, hy - 103*s, 5*s, 0, Math.PI); }}
-            ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5*s; ctx.stroke();
+            if (mouthUp) {{
+                // Smile
+                ctx.arc(cx, hy - 108*s, 6*s, 0, Math.PI);
+            }} else {{
+                // Frown
+                ctx.arc(cx, hy - 102*s, 6*s, Math.PI, 0);
+            }}
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 1.5*s;
+            ctx.stroke();
         }}
         function drawCloud(ctx, cx, cy, cw) {{
             ctx.fillStyle = 'rgba(255,255,255,0.92)';
