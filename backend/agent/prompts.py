@@ -78,7 +78,20 @@ CODE_SYSTEM = dedent("""\
         - faces_list: list[list[int]]
         - Optional dicts: faces_config, graph_config
         - Do NOT use keyword names like vertices= or faces= (use positional args as above).
-
+    11) Do NOT invent style kwargs.
+        - Do NOT pass kwargs ending in `_style`, such as stroke_style, fill_style,
+        background_style, text_style, label_style, axis_style, or grid_style.
+        - Use direct Manim kwargs instead:
+            color=BLUE
+            fill_color=BLUE
+            fill_opacity=0.4
+            stroke_color=WHITE
+            stroke_width=2
+            font_size=36
+        - If you need styling, create the object first and then call methods like:
+            obj.set_color(BLUE)
+            obj.set_stroke(WHITE, width=2)
+            obj.set_fill(BLUE, opacity=0.4)
     Good practices:
         Avoiding overlapping text and labels:
             - Avoid placing long Text labels too close together, especially in clustered

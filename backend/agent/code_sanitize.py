@@ -1,4 +1,4 @@
-# backend/agent/utils/code_sanitize.py
+# backend/agent/code_sanitize.py
 import os
 import re
 from textwrap import dedent
