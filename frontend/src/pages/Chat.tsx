@@ -310,22 +310,40 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const safe: ApiKeys = {
       claude: apiKeys?.claude || "",
       gemini: apiKeys?.gemini || "",
+      openrouter: apiKeys?.openrouter || "",
       provider: apiKeys?.provider || "",
       model: apiKeys?.model || "",
     };
-    const provider = (safe.provider || (safe.gemini ? "gemini" : safe.claude ? "claude" : "")) as
-      | "gemini"
-      | "claude"
-      | "";
-    if (!provider || (provider === "gemini" && !safe.gemini) || (provider === "claude" && !safe.claude)) {
+
+    const provider = (
+      safe.provider ||
+      (safe.openrouter ? "openrouter" : safe.gemini ? "gemini" : safe.claude ? "claude" : "")
+    ) as "openrouter" | "gemini" | "claude" | "";
+
+    const missing =
+      !provider ||
+      (provider === "gemini" && !safe.gemini) ||
+      (provider === "claude" && !safe.claude) ||
+      (provider === "openrouter" && !safe.openrouter);
+
+    if (missing) {
       const which = provider || "an LLM";
       toast({
         title: "Missing API key",
-        description: `Add your ${which === "gemini" ? "Gemini" : which === "claude" ? "Claude" : "Gemini/Claude"} API key in Settings to ${action}.`,
+        description: `Add your ${
+          which === "gemini"
+            ? "Gemini"
+            : which === "claude"
+            ? "Claude"
+            : which === "openrouter"
+            ? "OpenRouter"
+            : "Gemini/Claude/OpenRouter"
+        } API key in Settings to ${action}.`,
         duration: 6000,
       });
       return false;
     }
+
     return true;
   };
 
@@ -2016,6 +2034,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const safe: ApiKeys = {
         claude: apiKeys?.claude || "",
         gemini: apiKeys?.gemini || "",
+        openrouter: apiKeys?.openrouter || "",
         provider: apiKeys?.provider || "",
         model: apiKeys?.model || "",
       };
@@ -2023,7 +2042,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const sessionId = ensureChatSessionId();
       const body = {
         prompt,
-        keys: { claude: safe.claude, gemini: safe.gemini },
+        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
         provider: safe.provider || undefined,
         model: safe.model || undefined,
         mode: podcastMode,
@@ -2215,9 +2234,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(pendingPrompt, true, undefined, persistedId);
       // Now clear the query input AFTER message is added
       setQuery("");
-      const safe: ApiKeys = { claude: apiKeys?.claude || '', gemini: apiKeys?.gemini || '', provider: apiKeys?.provider || '', model: apiKeys?.model || '' };
+      const safe: ApiKeys = { claude: apiKeys?.claude || '', gemini: apiKeys?.gemini || '', 
+        openrouter: apiKeys?.openrouter || "", provider: apiKeys?.provider || '', model: apiKeys?.model || '' };
       const sessionId = ensureChatSessionId();
-  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: { claude: safe.claude, gemini: safe.gemini }, provider: safe.provider || undefined, model: safe.model || undefined, sessionId };
+  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter }, provider: safe.provider || undefined, model: safe.model || undefined, sessionId };
       console.debug('POST /quiz/embedded', body);
       const controller = new AbortController();
       quizAbortRef.current = controller;
@@ -2305,6 +2325,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const safe: ApiKeys = {
         claude: apiKeys?.claude || "",
         gemini: apiKeys?.gemini || "",
+        openrouter: apiKeys?.openrouter || "",
         provider: apiKeys?.provider || "",
         model: apiKeys?.model || "",
       };
@@ -2316,7 +2337,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         prompt,
         provider: safe.provider || undefined,
         model: safe.model || undefined,
-        keys: { claude: safe.claude, gemini: safe.gemini },
+        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
         chatId: String(finalChatId),
       }, controller.signal);
 
@@ -2972,6 +2993,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const safe: ApiKeys = {
         claude: apiKeys?.claude || "",
         gemini: apiKeys?.gemini || "",
+        openrouter: apiKeys?.openrouter || "",
         provider: apiKeys?.provider || "",
         model: apiKeys?.model || "",
       };
@@ -2982,7 +3004,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const sessionId = ensureChatSessionId();
       const body = {
         prompt,
-        keys: { claude: safe.claude, gemini: safe.gemini },
+        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
         provider: safe.provider || undefined, // "" -> undefined
         model: safe.model || undefined,
         mode: videoMode,
@@ -3175,6 +3197,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const safe: ApiKeys = {
       claude: apiKeys?.claude || "",
       gemini: apiKeys?.gemini || "",
+      openrouter: apiKeys?.openrouter || "",
       provider: apiKeys?.provider || "",
       model: apiKeys?.model || "",
     };
@@ -3269,7 +3292,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         sceneCode: msg.media.sceneCode || "",
         provider: safe.provider || undefined,
         model: safe.model || undefined,
-        provider_keys: { claude: safe.claude, gemini: safe.gemini },
+        provider_keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
       }, videoAbort.signal);
 
       // Store quiz data like embedded quiz for interactive UI
@@ -3356,6 +3379,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const safe: ApiKeys = {
         claude: apiKeys?.claude || "",
         gemini: apiKeys?.gemini || "",
+        openrouter: apiKeys?.openrouter || "",
         provider: apiKeys?.provider || "",
         model: apiKeys?.model || "",
       };
@@ -3367,7 +3391,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const body = {
         original_code: quotedMessage.media.sceneCode,
         edit_instructions: editInstructions,
-        keys: { claude: safe.claude, gemini: safe.gemini },
+        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
         provider: safe.provider || undefined,
         model: safe.model || undefined,
         jobId,

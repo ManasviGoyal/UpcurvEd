@@ -108,7 +108,7 @@ class TestLLMClientsIntegration:
 
     def test_llm_via_quiz_variations(self, client):
         """Test LLM through quiz endpoint."""
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             for difficulty in ["easy", "medium", "hard"]:
                 r = client.post(
                     "/quiz/embedded",
@@ -123,7 +123,7 @@ class TestLLMClientsIntegration:
 
     def test_llm_via_podcast_variations(self, client):
         """Test LLM through podcast endpoint."""
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             for lang in ["en", "es", "fr"]:
                 r = client.post(
                     "/podcast",

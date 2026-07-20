@@ -25,8 +25,8 @@ class TestAllEndpointVariations:
         monkeypatch.setattr(main_mod, "run_to_code", fake_run)
 
         # Test matrix of parameters
-        providers = [None, "claude", "gemini"]
-        models = [None, "claude-3-5-sonnet", "gemini-3-flash-preview"]
+        providers = [None, "claude", "gemini", "openrouter"]
+        models = [None, "claude-3-5-sonnet", "gemini-3-flash-preview", "openrouter/free"]
         temps = [None, 0.5, 1.0]
 
         for provider in providers:
@@ -66,7 +66,7 @@ class TestAllEndpointVariations:
 
     def test_podcast_all_permutations(self, client):
         """Test podcast with many parameter combinations."""
-        providers = ["claude", "gemini"]
+        providers = ["claude", "gemini", "openrouter"]
         langs = ["en", "es", "fr"]
 
         for provider in providers:
@@ -98,6 +98,8 @@ class TestAllEndpointVariations:
             ("claude", None),
             ("gemini", "gemini-3-flash-preview"),
             ("gemini", None),
+            ("openrouter", "openrouter/free"),
+            ("openrouter", None),
         ]
 
         for provider, model in combos:

@@ -16,6 +16,8 @@ def _pick_provider(state: AgentState) -> str:
         return "claude"
     if keys.get("gemini"):
         return "gemini"
+    if keys.get("openrouter"):
+        return "openrouter"
     raise RuntimeError("No provider keys found in state.")
 
 

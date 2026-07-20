@@ -1,3 +1,4 @@
+# backend/mcp/story_video_logic.py
 import json
 import logging
 import os
@@ -152,7 +153,7 @@ def _pick_provider_and_key(
 ) -> tuple[str, str]:
     keys = provider_keys or {}
     prov = (provider or "").lower()
-    if prov in ("claude", "gemini"):
+    if prov in ("claude", "gemini", "openrouter"):
         key = keys.get(prov) or ""
         if not key:
             raise RuntimeError(f"Missing API key for provider '{prov}'.")
@@ -161,7 +162,9 @@ def _pick_provider_and_key(
         return "claude", keys["claude"]
     if keys.get("gemini"):
         return "gemini", keys["gemini"]
-    raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' key.")
+    if keys.get("openrouter"):
+        return "openrouter", keys["openrouter"]
+    raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' or 'openrouter' key.")
 
 
 def _story_prompt(topic: str, host_character: str | None = None, theme: str | None = None) -> str:

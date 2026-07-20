@@ -87,6 +87,7 @@ async function setSecureApiKeys(account, payload) {
   const safePayload = {
     claude: String(source.claude || ""),
     gemini: String(source.gemini || ""),
+    openrouter: String(source.openrouter || ""),
     provider: String(source.provider || ""),
     model: String(source.model || ""),
   };

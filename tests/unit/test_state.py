@@ -56,7 +56,7 @@ class TestAgentState:
     def test_provider_literal(self):
         """Provider should be 'claude' or 'gemini'."""
         state: AgentState = {"provider": "claude"}
-        assert state["provider"] in ["claude", "gemini"]
+        assert state["provider"] in ["claude", "gemini", "openrouter"]
 
     def test_retry_tracking(self):
         """State tracks retry attempts."""
@@ -107,6 +107,6 @@ class TestProviderType:
 
     def test_provider_list(self):
         """Test provider in list."""
-        providers = ["claude", "gemini"]
+        providers = ["claude", "gemini", "openrouter"]
         for p in providers:
-            assert p in ["claude", "gemini"]
+            assert p in ["claude", "gemini", "openrouter"]

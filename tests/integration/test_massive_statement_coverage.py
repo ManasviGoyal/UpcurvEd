@@ -69,7 +69,7 @@ class TestQuizLogicIntegration:
 
     def test_quiz_all_providers(self, client):
         """Test quiz with both providers."""
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             r = client.post(
                 "/quiz/embedded",
                 json={"prompt": "Test", "keys": {provider: "k"}, "provider": provider},
@@ -78,7 +78,7 @@ class TestQuizLogicIntegration:
 
     def test_quiz_all_models(self, client):
         """Test quiz with various models."""
-        models = ["claude-3-5-sonnet", "gemini-3-flash-preview", "claude-3-opus", "gemini-2.0-flash"]
+        models = ["claude-3-5-sonnet", "gemini-3-flash-preview", "claude-3-opus", "gemini-2.0-flash", "openrouter/free"]
         for model in models:
             r = client.post(
                 "/quiz/embedded",
@@ -93,6 +93,7 @@ class TestQuizLogicIntegration:
             {"difficulty": "medium", "num_questions": 10, "provider": "claude"},
             {"difficulty": "hard", "num_questions": 15, "provider": "gemini"},
             {"num_questions": 20, "model": "claude-3-5-sonnet"},
+            {"num_questions": 25, "model": "openrouter/free"},
         ]
         for combo in combinations:
             r = client.post(
@@ -164,6 +165,7 @@ class TestLLMClientsIntegration:
             ("claude", "claude-3-opus"),
             ("gemini", "gemini-3-flash-preview"),
             ("gemini", "gemini-2.0-flash"),
+            ("openrouter", "openrouter/free"),
         ]
 
         for provider, model in combinations:
@@ -199,6 +201,7 @@ class TestGraphWoRagRetryIntegration:
         variations = [
             {"provider": "claude", "model": "claude-3-5-sonnet"},
             {"provider": "gemini", "model": "gemini-3-flash-preview"},
+            {"provider": "openrouter", "model": "openrouter/free"},
             {"provider": "claude"},
             {"provider": "gemini"},
         ]

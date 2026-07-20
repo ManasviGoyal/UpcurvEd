@@ -133,7 +133,7 @@ class TestPodcastLogicMore:
         from backend.mcp.podcast_logic import generate_podcast
 
         mock_llm.return_value = "Test script"
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             for lang in ["en", "es", "fr"]:
                 try:
                     generate_podcast("topic", provider, "key", "model", "", lang)

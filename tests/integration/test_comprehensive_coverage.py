@@ -237,7 +237,7 @@ class TestQuizLogicIntegration:
 
     def test_quiz_with_providers(self, client):
         """Test quiz with different providers."""
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             r = client.post(
                 "/quiz/embedded",
                 json={
@@ -306,7 +306,7 @@ class TestGraphWoRagRetryIntegration:
     @patch("backend.api.main.run_to_code")
     def test_no_rag_with_providers(self, mock_run, client):
         """Test no-RAG with different providers."""
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
             r = client.post(
                 "/generate",

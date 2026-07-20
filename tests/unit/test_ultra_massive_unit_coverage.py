@@ -443,7 +443,7 @@ class TestPodcastLogicUltra:
 
         mock_llm.return_value = "Script"
 
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             try:
                 generate_podcast("topic", provider, "k", "model", "", "en")
             except Exception:

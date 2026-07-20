@@ -39,11 +39,12 @@ export interface User {
   chats: Chat[];
 }
 
-export type Provider = 'claude' | 'gemini' | '';
+export type Provider = 'claude' | 'gemini' | 'openrouter' | '';
 
 export interface ApiKeys {
   gemini: string;
   claude: string;
+  openrouter: string;
   provider?: Provider;
   model?: string;
 }

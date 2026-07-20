@@ -1,6 +1,6 @@
 from typing import Any, Literal, TypedDict
 
-Provider = Literal["claude", "gemini"]
+Provider = Literal["claude", "gemini", "openrouter"]
 
 
 class AgentState(TypedDict, total=False):

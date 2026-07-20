@@ -27,12 +27,14 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   "": "Auto (by available key)",
   claude: "Claude (Anthropic)",
   gemini: "Gemini (Google)",
+  openrouter: "OpenRouter Free",
 };
 
 const PROVIDER_MODELS: Record<Provider, string[]> = {
   "": [],
   claude: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
   gemini: ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
+  openrouter: ["openrouter/free"],
 };
 
 export const SettingsPage = ({
@@ -49,6 +51,7 @@ export const SettingsPage = ({
   const [localKeys, setLocalKeys] = useState<ApiKeys>({
     claude: apiKeys.claude || "",
     gemini: apiKeys.gemini || "",
+    openrouter: apiKeys.openrouter || "",
     provider: apiKeys.provider || "",
     model: apiKeys.model || "",
   });
@@ -119,11 +122,17 @@ export const SettingsPage = ({
   };
 
   const handleProviderChange = (provider: Provider) => {
-    const defaultModel = PROVIDER_MODELS[provider][0] || "";
+    const models = PROVIDER_MODELS[provider] || [];
+    const defaultModel = models[0] || "";
+
     setLocalKeys((prev) => ({
       ...prev,
       provider,
-      model: provider ? (prev.model || defaultModel) : "",
+      model: provider
+        ? models.includes(prev.model || "")
+          ? prev.model
+          : defaultModel
+        : "",
     }));
   };
 
@@ -164,6 +173,16 @@ export const SettingsPage = ({
               value={localKeys.claude}
               onChange={(e) => setLocalKeys({ ...localKeys, claude: e.target.value })}
               placeholder="Enter your Claude API key"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">OpenRouter API Key</label>
+            <Input
+              type="password"
+              value={localKeys.openrouter}
+              onChange={(e) => setLocalKeys({ ...localKeys, openrouter: e.target.value })}
+              placeholder="Enter your OpenRouter API key"
             />
           </div>
 

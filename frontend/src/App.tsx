@@ -49,6 +49,7 @@ const AppContent = () => {
   const [apiKeys, setApiKeys] = useState<ApiKeys>({
     gemini: "",
     claude: "",
+    openrouter: "",
     provider: "",
     model: "",
   });

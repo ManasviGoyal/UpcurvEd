@@ -245,10 +245,68 @@ if not _get_bucket_name():
     app.mount("/static", StaticFiles(directory=str(STORAGE)), name="static")
 
 
+ProviderName = Literal["claude", "gemini", "openrouter"]
+
+_PROVIDER_ENV_KEYS = {
+    "claude": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+
+_DEFAULT_MODELS = {
+    "claude": "claude-haiku-4-5",
+    "gemini": "gemini-3-flash-preview",
+    # OpenRouter's free router selects among free OpenRouter models.
+    "openrouter": os.environ.get("OPENROUTER_FREE_MODEL", "openrouter/free").strip()
+    or "openrouter/free",
+}
+
+
+def _provider_keys_with_env(keys: dict[str, str] | None) -> dict[str, str]:
+    merged = dict(keys or {})
+    for provider, env_name in _PROVIDER_ENV_KEYS.items():
+        if not merged.get(provider):
+            env_value = os.environ.get(env_name, "").strip()
+            if env_value:
+                merged[provider] = env_value
+    return merged
+
+
+def _get_provider_key(provider: str | None, keys: dict[str, str] | None) -> str | None:
+    if not provider:
+        return None
+    return _provider_keys_with_env(keys).get(provider)
+
+
+def _resolve_provider_model(
+    keys: dict[str, str] | None,
+    provider: str | None,
+    model: str | None,
+    *,
+    default_provider: str | None = None,
+) -> tuple[str | None, str | None]:
+    provider_keys = _provider_keys_with_env(keys)
+    if not provider:
+        # Keep the current Gemini/Claude preference order, then add OpenRouter.
+        if provider_keys.get("gemini"):
+            provider = "gemini"
+        elif provider_keys.get("claude"):
+            provider = "claude"
+        elif provider_keys.get("openrouter"):
+            provider = "openrouter"
+        else:
+            provider = default_provider
+
+    if not model and provider in _DEFAULT_MODELS:
+        model = _DEFAULT_MODELS[provider]
+
+    return provider, model
+
+
 class GenerateIn(BaseModel):
     prompt: str
     keys: dict[str, str] = {}
-    provider: Literal["claude", "gemini"] | None = None
+    provider: ProviderName | None = None
     model: str | None = None
     mode: Literal["standard", "story"] | None = "standard"
     storyOptions: dict | None = None
@@ -262,7 +320,7 @@ class QuizIn(BaseModel):
     num_questions: int = 5
     difficulty: Literal["easy", "medium", "hard"] | None = "medium"
     keys: dict[str, str] = {}
-    provider: Literal["claude", "gemini"] | None = None
+    provider: ProviderName | None = None
     model: str | None = None
     context: str | None = None
     userEmail: str | None = None
@@ -271,7 +329,7 @@ class QuizIn(BaseModel):
 class PodcastIn(BaseModel):
     prompt: str
     keys: dict[str, str] = {}
-    provider: Literal["claude", "gemini"] | None = None
+    provider: ProviderName | None = None
     model: str | None = None
     mode: Literal["standard", "debate"] | None = "standard"
     jobId: str | None = None
@@ -282,7 +340,7 @@ class PodcastIn(BaseModel):
 class WidgetIn(BaseModel):
     prompt: str
     keys: dict[str, str] = {}
-    provider: Literal["claude", "gemini"] | None = None
+    provider: ProviderName | None = None
     model: str | None = None
     jobId: str | None = None
     chatId: str | None = None
@@ -293,7 +351,7 @@ class EditVideoIn(BaseModel):
     original_code: str
     edit_instructions: str
     keys: dict[str, str] = {}
-    provider: Literal["claude", "gemini"] | None = None
+    provider: ProviderName | None = None
     model: str | None = None
     jobId: str | None = None
     chatId: str | None = None
@@ -436,18 +494,9 @@ def _srt_to_vtt_text(srt_text: str) -> str:
 @app.post("/generate")
 def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
     try:
-        provider = body.provider
-        model = body.model
+        provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+        provider_keys = _provider_keys_with_env(body.keys)
         gen_mode = (body.mode or "standard").strip().lower()
-        if not provider:
-            if body.keys.get("gemini"):
-                provider = "gemini"
-            elif body.keys.get("claude"):
-                provider = "claude"
-        if not model and provider == "gemini":
-            model = "gemini-3-flash-preview"
-        if not model and provider == "claude":
-            model = "claude-haiku-4-5"
         logger.info("/generate called provider=%s model=%s mode=%s", provider, model, gen_mode)
 
         if gen_mode == "story":
@@ -455,7 +504,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                 prompt=body.prompt,
                 provider=provider,
                 model=model,
-                provider_keys=body.keys,
+                provider_keys=provider_keys,
                 story_options=body.storyOptions or {},
             )
             widget_html = story_res.get("widget_html")
@@ -478,7 +527,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
         else:
             code, video_url, render_ok, generated_job_id, failure_detail = run_to_code(
                 prompt=body.prompt,
-                provider_keys=body.keys,
+                provider_keys=provider_keys,
                 provider=provider,
                 model=model,
             )
@@ -734,20 +783,10 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
     if not body.edit_instructions or not body.edit_instructions.strip():
         raise HTTPException(status_code=400, detail="edit_instructions is required and cannot be empty")
 
-    provider = body.provider
-    model = body.model
-    if not provider:
-        if body.keys.get("gemini"):
-            provider = "gemini"
-        elif body.keys.get("claude"):
-            provider = "claude"
-    if not model and provider == "gemini":
-        model = "gemini-3-flash-preview"
-    if not model and provider == "claude":
-        model = "claude-haiku-4-5"
+    provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
     logger.info("/edit using provider=%s model=%s", provider, model)
 
-    key = body.keys.get(provider) if provider else None
+    key = _get_provider_key(provider, body.keys)
     if not key:
         raise HTTPException(status_code=400, detail=f"Missing API key for '{provider}'")
 
@@ -902,24 +941,15 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
 @app.post("/quiz/embedded")
 def quiz_embedded(body: QuizIn):
     try:
-        provider = body.provider
-        model = body.model
-        if not provider:
-            if body.keys.get("gemini"):
-                provider = "gemini"
-            elif body.keys.get("claude"):
-                provider = "claude"
-        if not model and provider == "gemini":
-            model = "gemini-3-flash-preview"
-        if not model and provider == "claude":
-            model = "claude-haiku-4-5"
+        provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+        provider_keys = _provider_keys_with_env(body.keys)
         quiz = _generate_quiz_embedded(
             prompt=body.prompt,
             num_questions=body.num_questions,
             difficulty=body.difficulty or "medium",
             provider=provider,
             model=model,
-            provider_keys=body.keys,
+            provider_keys=provider_keys,
             context=body.context,
         )
         return {"status": "ok", "quiz": quiz}
@@ -934,20 +964,13 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
         transcript = body.get("transcript", "").strip()
         if not transcript:
             raise ValueError("Transcript from VTT captions is required")
-        provider = body.get("provider")
-        model = body.get("model")
-        provider_keys = body.get("provider_keys", {})
-        if not provider:
-            if provider_keys.get("gemini"):
-                provider = "gemini"
-            elif provider_keys.get("claude"):
-                provider = "claude"
-            else:
-                provider = "gemini"
-        if not model and provider == "gemini":
-            model = "gemini-3-flash-preview"
-        if not model and provider == "claude":
-            model = "claude-haiku-4-5"
+        provider_keys = _provider_keys_with_env(body.get("provider_keys", {}))
+        provider, model = _resolve_provider_model(
+            provider_keys,
+            body.get("provider"),
+            body.get("model"),
+            default_provider="gemini",
+        )
         context = body.get("sceneCode")
         num_questions = body.get("num_questions", 5)
         difficulty = body.get("difficulty", "medium")
@@ -973,22 +996,13 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
 @app.post("/podcast")
 def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
     try:
-        provider = body.provider
-        model = body.model
-        if not provider:
-            if body.keys.get("gemini"):
-                provider = "gemini"
-            elif body.keys.get("claude"):
-                provider = "claude"
-        if not model and provider == "gemini":
-            model = "gemini-3-flash-preview"
-        if not model and provider == "claude":
-            model = "claude-haiku-4-5"
+        provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+        provider_keys = _provider_keys_with_env(body.keys)
         result = _generate_podcast(
             prompt=body.prompt,
             provider=provider,
             model=model,
-            provider_keys=body.keys,
+            provider_keys=provider_keys,
             mode=body.mode or "standard",
             job_id=body.jobId,
         )
@@ -1080,17 +1094,8 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
 @app.post("/widget")
 def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
     """Generate a self-contained interactive HTML widget. Returns { ok, status, widget_html }."""
-    provider = body.provider
-    model = body.model
-    if not provider:
-        if body.keys.get("gemini"):
-            provider = "gemini"
-        elif body.keys.get("claude"):
-            provider = "claude"
-    if not model and provider == "gemini":
-        model = "gemini-3-flash-preview"
-    if not model and provider == "claude":
-        model = "claude-haiku-4-5"
+    provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+    provider_keys = _provider_keys_with_env(body.keys)
 
     logger.info("/widget called provider=%s model=%s", provider, model)
     try:
@@ -1098,7 +1103,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             prompt=body.prompt,
             provider=provider,
             model=model,
-            provider_keys=body.keys,
+            provider_keys=provider_keys,
         )
         logger.info("/widget completed: ok, html_len=%d", len(result.get("widget_html", "")))
         return {"ok": True, "status": "ok", "widget_html": result["widget_html"]}

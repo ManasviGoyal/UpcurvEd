@@ -67,6 +67,7 @@ def test_generate_pipeline_happy_path(monkeypatch):
         "keys": {
             "claude": "dummy",
             "gemini": "",
+            "openrouter": "",
         },  # no real keys needed due to monkeypatch
         "provider": "claude",
         "model": "claude-haiku-4-5",

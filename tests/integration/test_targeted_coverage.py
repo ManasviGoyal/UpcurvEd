@@ -32,7 +32,7 @@ class TestGraphIntegration:
     def test_graph_integration_02(self, mock_run, client):
         """Test graph with different providers."""
         mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
-        for provider in ["claude", "gemini"]:
+        for provider in ["claude", "gemini", "openrouter"]:
             r = client.post(
                 "/generate",
                 json={"prompt": "Draw", "keys": {provider: "k"}, "provider": provider},
@@ -43,7 +43,7 @@ class TestGraphIntegration:
     def test_graph_integration_03(self, mock_run, client):
         """Test graph with models."""
         mock_run.return_value = ("code", "/vid.mp4", True, 1, ["j"], "j")
-        for model in ["claude-3-5-sonnet", "gemini-3-flash-preview"]:
+        for model in ["claude-3-5-sonnet", "gemini-3-flash-preview", "openrouter/free"]:
             r = client.post(
                 "/generate",
                 json={"prompt": "Test", "keys": {"claude": "k"}, "model": model},

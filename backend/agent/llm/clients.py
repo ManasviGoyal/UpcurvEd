@@ -1,7 +1,48 @@
 # backend/agent/llm/clients.py
 from typing import Literal
+import os
+import requests
 
-Provider = Literal["claude", "gemini"]
+Provider = Literal["claude", "gemini", "openrouter"]
+
+# ---------- Open Router ----------
+def _call_openrouter(
+    api_key: str,
+    model: str | None,
+    system: str,
+    user: str,
+    temperature: float = 0.2,
+) -> str:
+    model = model or os.environ.get("OPENROUTER_FREE_MODEL", "openrouter/free")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost:8080"),
+        "X-OpenRouter-Title": os.environ.get("OPENROUTER_APP_TITLE", "UpcurvEd"),
+    }
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system or ""},
+            {"role": "user", "content": user or ""},
+        ],
+        "temperature": temperature,
+    }
+
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=120,
+    )
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"OpenRouter API error {response.status_code}: {response.text[:800]}")
+
+    data = response.json()
+    return data["choices"][0]["message"]["content"] or ""
 
 
 class LLMError(RuntimeError):
@@ -203,6 +244,14 @@ def call_llm(
             user=user,
             temperature=temperature,
             max_output_tokens=max_output_tokens or 8192,
+        )
+    elif provider == "openrouter":
+        return _call_openrouter(
+            api_key=api_key,
+            model=model,
+            system=system,
+            user=user,
+            temperature=temperature,
         )
     else:
         raise LLMError(f"Unknown provider: {provider}")

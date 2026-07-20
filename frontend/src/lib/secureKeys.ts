@@ -4,6 +4,7 @@ import { isDesktopLocalMode } from "@/lib/runtime";
 export const EMPTY_KEYS: ApiKeys = {
   claude: "",
   gemini: "",
+  openrouter: "",
   provider: "",
   model: "",
 };
@@ -20,6 +21,7 @@ function normalizeKeys(raw: any, fallback: ApiKeys = EMPTY_KEYS): ApiKeys {
   return {
     claude: String(raw?.claude ?? fallback.claude ?? ""),
     gemini: String(raw?.gemini ?? fallback.gemini ?? ""),
+    openrouter: String(raw?.openrouter ?? fallback.openrouter ?? ""),
     provider: (String(raw?.provider ?? fallback.provider ?? "") as ApiKeys["provider"]) || "",
     model: String(raw?.model ?? fallback.model ?? ""),
   };
@@ -31,6 +33,7 @@ function localMetadataOnly(keys: ApiKeys): ApiKeys {
     ...normalized,
     claude: "",
     gemini: "",
+    openrouter: "",
   };
 }
 
@@ -93,6 +96,7 @@ export async function loadApiKeysForUser(
       ...normalizedSecure,
       claude: normalizedSecure.claude || "",
       gemini: normalizedSecure.gemini || "",
+      openrouter: normalizedSecure.openrouter || "",
     };
   } catch {
     return local;
