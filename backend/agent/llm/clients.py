@@ -13,13 +13,13 @@ def _default_openrouter_model() -> str:
     Env precedence:
     1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
     2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
-    3. openai/gpt-oss-120b:free
+    3. moonshotai/kimi-k2.6:free
     """
     return (
         os.environ.get("OPENROUTER_MODEL")
         or os.environ.get("OPENROUTER_FREE_MODEL")
-        or "openai/gpt-oss-120b:free"
-    ).strip() or "openai/gpt-oss-120b:free"
+        or "moonshotai/kimi-k2.6:free"
+    ).strip() or "moonshotai/kimi-k2.6:free"
 
 
 # ---------- OpenRouter ----------
@@ -265,7 +265,7 @@ def call_llm(
         )
     elif provider == "openrouter":
         # OpenRouter supports exact model IDs like:
-        # - openai/gpt-oss-120b:free
+        # - moonshotai/kimi-k2.6:free
         # - openai/gpt-oss-20b:free
         # - openrouter/free
         return _call_openrouter(

@@ -260,13 +260,13 @@ def _default_openrouter_model() -> str:
     Env precedence:
     1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
     2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
-    3. openai/gpt-oss-120b:free
+    3. moonshotai/kimi-k2.6:free
     """
     return (
         os.environ.get("OPENROUTER_MODEL")
         or os.environ.get("OPENROUTER_FREE_MODEL")
-        or "openai/gpt-oss-120b:free"
-    ).strip() or "openai/gpt-oss-120b:free"
+        or "moonshotai/kimi-k2.6:free"
+    ).strip() or "moonshotai/kimi-k2.6:free"
 
 
 _DEFAULT_MODELS = {
