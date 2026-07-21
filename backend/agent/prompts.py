@@ -258,6 +258,10 @@ STRUCTURED_VIDEO_SYSTEM = dedent("""\
     - Heading: max 8 words.
     - Bullets: 2 to 4 bullets per scene, max 7 words each.
     - visual_goal: max 25 words, concrete and drawable.
+    - Make the lesson specific, factual, and educational, not generic or motivational.
+    - Include concrete mechanisms, causes/effects, vocabulary, or examples appropriate to the topic.
+    - For science, health, biology, history, or technical topics, use precise facts and explain how/why.
+    - Avoid generic filler such as "helps you grow", "is important", or "makes life better" unless paired with a concrete mechanism.
     - Avoid quotes inside strings unless necessary.
 """)
 
@@ -269,6 +273,61 @@ def build_structured_video_user_prompt(goal: str) -> str:
 
         Return only the compact JSON scene plan.
         Do not include Python code.
+        Make it specific, factual, and educational. Avoid generic filler.
+    """).strip()
+
+
+STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
+    You edit a compact JSON scene plan for a short educational Manim video.
+
+    Return ONLY valid JSON. No markdown. No Python code. No explanations.
+
+    Required behavior:
+    - Keep exactly 5 scenes.
+    - Keep the same scene order: title, key_points, diagram, creative, recap.
+    - Apply the user's edit request to the most relevant scene or scenes.
+    - If the user asks to remove a scene or topic, do NOT reduce the number of scenes.
+      Replace that scene with a better on-topic educational scene instead.
+    - Preserve useful unchanged scenes when possible.
+    - Make the lesson specific, factual, and educational, not generic or motivational.
+    - Include concrete mechanisms, causes/effects, vocabulary, or examples appropriate to the topic.
+    - Avoid generic filler such as "helps you grow", "is important", or "makes life better" unless paired with a concrete mechanism.
+
+    Output shape:
+    {
+      "title": "short lesson title",
+      "audience": "general",
+      "scenes": [
+        {
+          "id": 1,
+          "kind": "title",
+          "heading": "short heading",
+          "narration": "one clear sentence",
+          "bullets": ["short phrase", "short phrase"],
+          "duration_sec": 6
+        }
+      ]
+    }
+
+    Rules:
+    - Exactly 5 scenes.
+    - Narration: one sentence per scene, max 24 words.
+    - Heading: max 8 words.
+    - Bullets: 2 to 4 bullets per scene, max 7 words each.
+    - visual_goal for diagram/creative scenes: max 25 words, concrete and drawable.
+""")
+
+
+def build_structured_video_edit_user_prompt(original_plan: dict, edit_instructions: str) -> str:
+    return dedent(f"""\
+        Original compact scene plan JSON:
+        {__import__('json').dumps(original_plan, ensure_ascii=True, indent=2)}
+
+        User edit request:
+        {edit_instructions}
+
+        Return the complete edited compact JSON scene plan only.
+        Keep exactly 5 scenes. Do not include Python code.
     """).strip()
 
 

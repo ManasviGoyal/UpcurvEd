@@ -152,6 +152,7 @@ def run_job_from_code(
     scene_name: str = "GeneratedScene",
     timeout_seconds: int = 600,
     job_id: str | None = None,
+    inject_watermark: bool = True,
 ):
     """
     Execute a full render job from provided Manim code.
@@ -189,7 +190,10 @@ def run_job_from_code(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Inject watermark into code ---
-    code = _inject_watermark(code)
+    # Structured videos render multiple child scenes and apply one final
+    # continuous watermark after stitching, so child scene renders can disable it.
+    if inject_watermark:
+        code = _inject_watermark(code)
 
     # --- Write scene.py ---
     scene_py = job_dir / "scene.py"

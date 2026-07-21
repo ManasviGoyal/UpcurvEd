@@ -25,7 +25,9 @@ from typing import Any
 from backend.agent.code_sanitize import sanitize_minimally
 from backend.agent.llm.clients import call_llm
 from backend.agent.prompts import (
+    STRUCTURED_VIDEO_EDIT_SYSTEM,
     STRUCTURED_VIDEO_SYSTEM,
+    build_structured_video_edit_user_prompt,
     build_structured_video_user_prompt,
 )
 from backend.runner.job_runner import STORAGE, run_job_from_code, to_static_url
@@ -224,6 +226,19 @@ def parse_structured_video_plan(raw: str, topic: str) -> dict[str, Any]:
         return _normalize_plan(_default_plan(topic), topic=topic)
 
 
+def parse_plan_from_scene_bundle(bundle: str, topic: str = "Edited video") -> dict[str, Any]:
+    """Extract the plan from a structured scene bundle returned as scene_code."""
+    plan_text = _extract_block(bundle or "", "PLAN_JSON")
+    if not plan_text:
+        raise RuntimeError("Original video is not a structured scene bundle; PLAN_JSON missing.")
+    return _normalize_plan(_extract_json_object(plan_text), topic=topic)
+
+
+def is_structured_scene_bundle(text: str | None) -> bool:
+    value = text or ""
+    return "<<<PLAN_JSON>>>" in value and "<<<END_PLAN_JSON>>>" in value
+
+
 def _safe_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True)
 
@@ -377,7 +392,12 @@ def _render_scene_clip(
     scene_job_id = f"{final_job_id}_s{scene_index:02d}"
 
     safe_code = sanitize_minimally(code)
-    result = run_job_from_code(safe_code, job_id=scene_job_id, timeout_seconds=240)
+    result = run_job_from_code(
+        safe_code,
+        job_id=scene_job_id,
+        timeout_seconds=240,
+        inject_watermark=False,
+    )
     if result.get("ok") and result.get("video_url"):
         return _video_url_to_path(result["video_url"]), {
             "scene_index": scene_index,
@@ -396,7 +416,12 @@ def _render_scene_clip(
     simple_scene["kind"] = "key_points"
     fallback_code = build_scene_fallback_code(simple_scene)
     fallback_job_id = f"{final_job_id}_s{scene_index:02d}_fallback"
-    fallback = run_job_from_code(fallback_code, job_id=fallback_job_id, timeout_seconds=240)
+    fallback = run_job_from_code(
+        fallback_code,
+        job_id=fallback_job_id,
+        timeout_seconds=240,
+        inject_watermark=False,
+    )
 
     if fallback.get("ok") and fallback.get("video_url"):
         return _video_url_to_path(fallback["video_url"]), {
@@ -487,6 +512,54 @@ def _concat_clips(clips: list[pathlib.Path], final_mp4: pathlib.Path, logs_dir: 
         raise RuntimeError(f"ffmpeg concat failed: {detail}")
 
 
+def _apply_final_watermark(final_mp4: pathlib.Path, logs_dir: pathlib.Path) -> None:
+    """
+    Apply one continuous watermark to the stitched final video.
+    If ffmpeg/drawtext is unavailable, keep the unwatermarked final video.
+    """
+    try:
+        ffmpeg_bin = _find_ffmpeg()
+        tmp_mp4 = final_mp4.with_name("video_watermarked.mp4")
+        text = "Generated using UpcurvEd"
+        vf = (
+            "drawtext="
+            f"text='{text}':"
+            "x=w-tw-24:y=24:"
+            "fontsize=22:"
+            "fontcolor=white@0.86:"
+            "box=1:boxcolor=black@0.45:boxborderw=8"
+        )
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(final_mp4),
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(tmp_mp4),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        (logs_dir / "watermark_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
+        (logs_dir / "watermark_stdout.txt").write_text(proc.stdout or "", encoding="utf-8")
+        (logs_dir / "watermark_stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
+        if proc.returncode == 0 and tmp_mp4.exists() and tmp_mp4.stat().st_size > 0:
+            tmp_mp4.replace(final_mp4)
+        else:
+            if tmp_mp4.exists():
+                tmp_mp4.unlink(missing_ok=True)
+            logger.warning("final video watermark skipped: %s", (proc.stderr or "")[-400:])
+    except Exception as exc:
+        logger.warning("final video watermark failed; keeping original final video: %s", exc)
+
+
 def _format_vtt_ts(total_sec: float) -> str:
     millis = int((total_sec % 1) * 1000)
     seconds = int(total_sec) % 60
@@ -548,40 +621,17 @@ def _bundle_for_scene_code(plan: dict[str, Any], scene_codes: list[str], raw_pla
     return "\n".join(pieces)
 
 
-def generate_structured_manim_video(
-    prompt: str,
+def _render_structured_plan(
     *,
-    provider: str | None = None,
-    model: str | None = None,
-    provider_keys: dict[str, str] | None = None,
-    job_id: str | None = None,
+    plan: dict[str, Any],
+    raw_plan: str,
+    final_job_id: str,
 ) -> dict[str, Any]:
-    provider_name, api_key = _pick_provider_and_key(provider, provider_keys)
-    final_job_id = job_id or str(uuid.uuid4())[:8]
     final_job_dir = STORAGE / "jobs" / final_job_id
     logs_dir = final_job_dir / "logs"
     final_job_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(
-        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=plan_only_templates",
-        final_job_id,
-        provider_name,
-        model,
-    )
-
-    raw_plan = call_llm(
-        provider=provider_name,
-        api_key=api_key,
-        model=model,
-        system=STRUCTURED_VIDEO_SYSTEM,
-        user=build_structured_video_user_prompt(prompt),
-        temperature=0.35,
-        max_tokens=1800,
-    )
-
-    (logs_dir / "structured_raw_plan.txt").write_text(raw_plan or "", encoding="utf-8")
-    plan = parse_structured_video_plan(raw_plan or "", topic=prompt)
     (logs_dir / "structured_plan.json").write_text(
         json.dumps(plan, ensure_ascii=True, indent=2),
         encoding="utf-8",
@@ -610,6 +660,7 @@ def generate_structured_manim_video(
 
     final_mp4 = final_job_dir / "video.mp4"
     _concat_clips(clips, final_mp4, logs_dir)
+    _apply_final_watermark(final_mp4, logs_dir)
 
     final_vtt = final_job_dir / "video.vtt"
     _write_vtt_from_plan(plan, final_vtt)
@@ -630,3 +681,98 @@ def generate_structured_manim_video(
         "scene_results": scene_results,
         "used_fallback": used_fallback,
     }
+
+
+def generate_structured_manim_video(
+    prompt: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    provider_keys: dict[str, str] | None = None,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    provider_name, api_key = _pick_provider_and_key(provider, provider_keys)
+    final_job_id = job_id or str(uuid.uuid4())[:8]
+    final_job_dir = STORAGE / "jobs" / final_job_id
+    logs_dir = final_job_dir / "logs"
+    final_job_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=plan_only_templates",
+        final_job_id,
+        provider_name,
+        model,
+    )
+
+    raw_plan = call_llm(
+        provider=provider_name,
+        api_key=api_key,
+        model=model,
+        system=STRUCTURED_VIDEO_SYSTEM,
+        user=build_structured_video_user_prompt(prompt),
+        temperature=0.28,
+        max_tokens=2200,
+    )
+
+    (logs_dir / "structured_raw_plan.txt").write_text(raw_plan or "", encoding="utf-8")
+    plan = parse_structured_video_plan(raw_plan or "", topic=prompt)
+    return _render_structured_plan(plan=plan, raw_plan=raw_plan or "", final_job_id=final_job_id)
+
+
+def edit_structured_manim_video(
+    *,
+    original_bundle: str,
+    edit_instructions: str,
+    provider: str | None = None,
+    model: str | None = None,
+    provider_keys: dict[str, str] | None = None,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Edit a structured video by editing its compact scene plan, not raw Manim.
+    The full video is then re-rendered from deterministic templates.
+    """
+    provider_name, api_key = _pick_provider_and_key(provider, provider_keys)
+    final_job_id = job_id or str(uuid.uuid4())[:8]
+    final_job_dir = STORAGE / "jobs" / final_job_id
+    logs_dir = final_job_dir / "logs"
+    final_job_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    original_plan = parse_plan_from_scene_bundle(original_bundle, topic="Edited video")
+    (logs_dir / "structured_original_plan.json").write_text(
+        json.dumps(original_plan, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+
+    logger.info(
+        "structured_manim_edit_start job_id=%s provider=%s model=%s",
+        final_job_id,
+        provider_name,
+        model,
+    )
+
+    raw_edited_plan = call_llm(
+        provider=provider_name,
+        api_key=api_key,
+        model=model,
+        system=STRUCTURED_VIDEO_EDIT_SYSTEM,
+        user=build_structured_video_edit_user_prompt(original_plan, edit_instructions),
+        temperature=0.18,
+        max_tokens=2200,
+    )
+
+    (logs_dir / "structured_raw_edited_plan.txt").write_text(
+        raw_edited_plan or "",
+        encoding="utf-8",
+    )
+    edited_plan = parse_structured_video_plan(
+        raw_edited_plan or "",
+        topic=str(original_plan.get("title") or "Edited video"),
+    )
+    return _render_structured_plan(
+        plan=edited_plan,
+        raw_plan=raw_edited_plan or "",
+        final_job_id=final_job_id,
+    )
