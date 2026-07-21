@@ -35,8 +35,21 @@ from backend.runner.job_runner import STORAGE, run_job_from_code, to_static_url
 logger = logging.getLogger(f"app.{__name__}")
 
 
-_ALLOWED_KINDS = ("title", "key_points", "diagram", "creative", "recap")
-_DEFAULT_KINDS = ["title", "key_points", "diagram", "creative", "recap"]
+_ALLOWED_KINDS = (
+    "title",
+    "key_points",
+    "diagram",
+    "flow_diagram",
+    "cycle_diagram",
+    "timeline",
+    "comparison",
+    "chart",
+    "system_map",
+    "pseudo_3d",
+    "creative",
+    "recap",
+)
+_DEFAULT_KINDS = ["title", "key_points", "flow_diagram", "pseudo_3d", "recap"]
 
 
 def _pick_provider_and_key(
@@ -109,42 +122,42 @@ def _default_plan(topic: str) -> dict[str, Any]:
                 "id": 1,
                 "kind": "title",
                 "heading": safe_topic,
-                "narration": f"This lesson introduces {safe_topic} with simple visuals.",
-                "bullets": ["Big idea", "Simple visual"],
+                "narration": f"This lesson introduces {safe_topic} with a clear visual overview.",
+                "bullets": ["Big idea", "Visual map"],
                 "duration_sec": 6,
             },
             {
                 "id": 2,
                 "kind": "key_points",
-                "heading": "Key points",
-                "narration": f"These are the most important ideas about {safe_topic}.",
-                "bullets": ["What it means", "How it works", "Why it matters"],
+                "heading": "Core ideas",
+                "narration": f"These key points explain the most important mechanisms behind {safe_topic}.",
+                "bullets": ["Main mechanism", "Cause and effect", "Why it matters"],
                 "duration_sec": 8,
             },
             {
                 "id": 3,
-                "kind": "diagram",
+                "kind": "flow_diagram",
                 "heading": "How it works",
-                "narration": f"A simple diagram can show how {safe_topic} works step by step.",
-                "bullets": ["Start", "Process", "Result"],
-                "visual_goal": "Show a simple flow from start to process to result.",
+                "narration": f"A step-by-step diagram shows how {safe_topic} moves from inputs to results.",
+                "bullets": ["Input", "Process", "Result"],
+                "visual_goal": "Show inputs moving through a process into an output.",
                 "duration_sec": 9,
             },
             {
                 "id": 4,
-                "kind": "creative",
-                "heading": "Visual example",
-                "narration": f"A memorable example makes {safe_topic} easier to remember.",
-                "bullets": ["Example", "Connection", "Memory hook"],
-                "visual_goal": "Show a memorable metaphor with simple shapes.",
+                "kind": "pseudo_3d",
+                "heading": "Inside view",
+                "narration": f"A layered visual makes the hidden structure of {safe_topic} easier to understand.",
+                "bullets": ["Outer layer", "Inside process", "Final effect"],
+                "visual_goal": "Show layered depth, parts, or levels using pseudo-3D panels.",
                 "duration_sec": 9,
             },
             {
                 "id": 5,
                 "kind": "recap",
                 "heading": "Quick recap",
-                "narration": f"The main takeaway is to understand the core pattern behind {safe_topic}.",
-                "bullets": ["Main idea", "Simple example", "Takeaway"],
+                "narration": f"The takeaway is to connect the parts of {safe_topic} into one clear system.",
+                "bullets": ["Main idea", "Mechanism", "Takeaway"],
                 "duration_sec": 7,
             },
         ],
@@ -244,10 +257,15 @@ def _safe_json(value: Any) -> str:
 
 
 def build_template_scene_code(scene: dict[str, Any]) -> str:
-    """Build a deterministic Manim scene from a normalized scene-plan item."""
+    """Build a deterministic Manim scene from a normalized scene-plan item.
+
+    This template intentionally supports more complex-looking scenes without
+    letting the LLM write raw Manim code. The model chooses the scene kind and
+    content; the backend owns the Manim implementation.
+    """
     scene_json = _safe_json(scene)
 
-    return f'''
+    return f"""
 from manim import *  # noqa: F403,F405
 from manim_voiceover import VoiceoverScene
 from manim_voiceover.services.gtts import GTTSService
@@ -266,29 +284,35 @@ class GeneratedScene(VoiceoverScene):
         if not bullets_data:
             bullets_data = ["Main idea", "Example", "Takeaway"]
 
+        def safe_label(text, limit=42):
+            value = str(text or "").strip()
+            if len(value) > limit:
+                value = value[: limit - 1].rstrip() + "…"
+            return value or "Idea"
+
+        def make_card():
+            c = RoundedRectangle(width=10.9, height=4.85, corner_radius=0.25)
+            c.set_stroke(BLUE_C, width=2)
+            c.set_fill("#1e293b", opacity=0.92)
+            c.shift(DOWN * 0.35)
+            return c
+
+        def small_text(text, size=23, color=WHITE):
+            return Text(safe_label(text, 46), font_size=size, color=color)
+
         bg = Rectangle(width=config.frame_width, height=config.frame_height)
         bg.set_fill("#0f172a", opacity=1)
         bg.set_stroke(width=0)
         self.add(bg)
 
         with self.voiceover(text=narration) as tracker:
-            title = Text(heading, font_size=38, color=WHITE)
+            title = Text(safe_label(heading, 58), font_size=38, color=WHITE)
             title.to_edge(UP, buff=0.42)
 
             label = Text(kind.replace("_", " ").upper(), font_size=18, color=BLUE_C)
             label.next_to(title, DOWN, buff=0.18)
 
-            card = RoundedRectangle(
-                width=10.8,
-                height=4.75,
-                corner_radius=0.25,
-                stroke_color=BLUE_C,
-                stroke_width=2,
-                fill_color="#1e293b",
-                fill_opacity=0.92,
-            )
-            card.shift(DOWN * 0.35)
-
+            card = make_card()
             self.play(FadeIn(card), FadeIn(label), Write(title), run_time=1.0)
 
             if kind == "title":
@@ -296,54 +320,193 @@ class GeneratedScene(VoiceoverScene):
                 ring = Circle(radius=1.12, color=BLUE_C)
                 icon.move_to(card.get_center() + UP * 0.15)
                 ring.move_to(icon)
-                subtitle = Text("A quick visual lesson", font_size=28, color=WHITE)
+                subtitle = Text("A visual lesson", font_size=28, color=WHITE)
                 subtitle.next_to(icon, DOWN, buff=0.55)
                 self.play(GrowFromCenter(ring), FadeIn(icon), run_time=0.9)
                 self.play(Write(subtitle), run_time=0.8)
                 self.play(Rotate(ring, angle=PI / 6), Indicate(icon), run_time=1.0)
 
-            elif kind == "diagram":
+            elif kind in ("diagram", "flow_diagram"):
+                labels = bullets_data[:4]
+                while len(labels) < 3:
+                    labels.append(["Input", "Process", "Output"][len(labels)])
+                positions = [LEFT * 3.4 + DOWN * 0.1, ORIGIN + DOWN * 0.1, RIGHT * 3.4 + DOWN * 0.1]
+                shapes = VGroup(
+                    Circle(radius=0.52, color=BLUE_C, fill_opacity=0.75).move_to(positions[0]),
+                    RoundedRectangle(width=1.28, height=0.9, corner_radius=0.18, color=GREEN_C, fill_opacity=0.75).move_to(positions[1]),
+                    Triangle(color=ORANGE, fill_opacity=0.75).scale(0.72).move_to(positions[2]),
+                )
+                arrows = VGroup(
+                    Arrow(shapes[0].get_right(), shapes[1].get_left(), buff=0.22, color=WHITE),
+                    Arrow(shapes[1].get_right(), shapes[2].get_left(), buff=0.22, color=WHITE),
+                )
+                texts = VGroup(*[small_text(labels[i], 23).next_to(shapes[i], DOWN, buff=0.33) for i in range(3)])
+                goal = Text(safe_label(visual_goal, 65), font_size=19, color=BLUE_B)
+                goal.move_to(card.get_bottom() + UP * 0.43)
+                self.play(FadeIn(shapes[0]), Write(texts[0]), run_time=0.7)
+                self.play(GrowArrow(arrows[0]), FadeIn(shapes[1]), Write(texts[1]), run_time=0.9)
+                self.play(GrowArrow(arrows[1]), FadeIn(shapes[2]), Write(texts[2]), run_time=0.9)
+                self.play(FadeIn(goal), Indicate(shapes[1]), run_time=1.0)
+
+            elif kind == "cycle_diagram":
+                labels = bullets_data[:4]
+                while len(labels) < 4:
+                    labels.append(["Stage 1", "Stage 2", "Stage 3", "Stage 4"][len(labels)])
+                center = card.get_center() + DOWN * 0.05
+                circle_path = Circle(radius=1.45, color=BLUE_E).move_to(center)
+                node_positions = [
+                    center + UP * 1.45,
+                    center + RIGHT * 2.35,
+                    center + DOWN * 1.45,
+                    center + LEFT * 2.35,
+                ]
+                nodes = VGroup()
+                node_labels = VGroup()
+                colors = [BLUE_C, GREEN_C, ORANGE, PURPLE_B]
+                for i, pos in enumerate(node_positions):
+                    node = Circle(radius=0.33, color=colors[i], fill_opacity=0.82).move_to(pos)
+                    text = small_text(labels[i], 20)
+                    if i == 0:
+                        text.next_to(node, UP, buff=0.2)
+                    elif i == 1:
+                        text.next_to(node, RIGHT, buff=0.18)
+                    elif i == 2:
+                        text.next_to(node, DOWN, buff=0.2)
+                    else:
+                        text.next_to(node, LEFT, buff=0.18)
+                    nodes.add(node)
+                    node_labels.add(text)
+                pointer = Dot(color=YELLOW).scale(1.25).move_to(node_positions[0])
+                self.play(Create(circle_path), run_time=0.7)
+                self.play(LaggedStart(*[FadeIn(n) for n in nodes], lag_ratio=0.15), run_time=0.9)
+                self.play(LaggedStart(*[Write(t) for t in node_labels], lag_ratio=0.12), run_time=0.9)
+                self.play(MoveAlongPath(pointer, circle_path), run_time=1.7)
+                self.play(Indicate(nodes[0]), Indicate(nodes[2]), run_time=0.8)
+
+            elif kind == "timeline":
+                labels = bullets_data[:4]
+                while len(labels) < 4:
+                    labels.append(["First", "Next", "Then", "Finally"][len(labels)])
+                line = Line(LEFT * 4.1 + DOWN * 0.05, RIGHT * 4.1 + DOWN * 0.05, color=WHITE)
+                dots = VGroup()
+                text_mobs = VGroup()
+                for i, label_txt in enumerate(labels[:4]):
+                    alpha = i / 3
+                    pos = line.point_from_proportion(alpha)
+                    dot = Dot(pos, color=[BLUE_C, GREEN_C, ORANGE, PURPLE_B][i]).scale(1.2)
+                    text = small_text(label_txt, 20)
+                    direction = UP if i % 2 == 0 else DOWN
+                    text.next_to(dot, direction, buff=0.35)
+                    dots.add(dot)
+                    text_mobs.add(text)
+                mover = Dot(color=YELLOW).scale(1.0).move_to(line.get_start())
+                self.play(Create(line), run_time=0.6)
+                self.play(LaggedStart(*[FadeIn(d) for d in dots], lag_ratio=0.18), run_time=0.8)
+                self.play(LaggedStart(*[Write(t) for t in text_mobs], lag_ratio=0.12), run_time=0.9)
+                self.play(mover.animate.move_to(line.get_end()), run_time=1.4)
+                self.play(Indicate(dots[-1]), run_time=0.6)
+
+            elif kind == "comparison":
+                labels = bullets_data[:4]
+                while len(labels) < 3:
+                    labels.append(["Before", "During", "After"][len(labels)])
+                cols = VGroup()
+                positions = [LEFT * 3.2, ORIGIN, RIGHT * 3.2]
+                colors = [BLUE_C, GREEN_C, ORANGE]
+                for i in range(3):
+                    box = RoundedRectangle(width=2.55, height=2.25, corner_radius=0.18)
+                    box.set_stroke(colors[i], width=2)
+                    box.set_fill("#0f172a", opacity=0.72)
+                    box.move_to(card.get_center() + positions[i] + DOWN * 0.05)
+                    head = small_text(labels[i], 22, color=WHITE).move_to(box.get_top() + DOWN * 0.45)
+                    icon = Circle(radius=0.36, color=colors[i], fill_opacity=0.85).move_to(box.get_center() + DOWN * 0.15)
+                    cols.add(VGroup(box, head, icon))
+                self.play(LaggedStart(*[FadeIn(c[0]) for c in cols], lag_ratio=0.12), run_time=0.8)
+                self.play(LaggedStart(*[Write(c[1]) for c in cols], lag_ratio=0.12), run_time=0.9)
+                self.play(LaggedStart(*[FadeIn(c[2]) for c in cols], lag_ratio=0.12), run_time=0.7)
+                self.play(Indicate(cols[1]), run_time=0.8)
+
+            elif kind == "chart":
+                labels = bullets_data[:4]
+                while len(labels) < 4:
+                    labels.append(["Low", "Medium", "High", "Peak"][len(labels)])
+                base = Line(LEFT * 4 + DOWN * 1.45, RIGHT * 4 + DOWN * 1.45, color=WHITE)
+                y_axis = Line(LEFT * 4 + DOWN * 1.45, LEFT * 4 + UP * 1.4, color=WHITE)
+                heights = [0.8, 1.35, 2.0, 1.55]
+                bars = VGroup()
+                text_mobs = VGroup()
+                colors = [BLUE_C, GREEN_C, ORANGE, PURPLE_B]
+                for i in range(4):
+                    bar = Rectangle(width=0.8, height=heights[i])
+                    bar.set_fill(colors[i], opacity=0.82)
+                    bar.set_stroke(width=0)
+                    x_pos = -2.7 + i * 1.55
+                    bar.move_to(RIGHT * x_pos + DOWN * 1.45 + UP * heights[i] / 2)
+                    lab = small_text(labels[i], 18).next_to(bar, DOWN, buff=0.23)
+                    bars.add(bar)
+                    text_mobs.add(lab)
+                self.play(Create(base), Create(y_axis), run_time=0.5)
+                self.play(LaggedStart(*[GrowFromEdge(b, DOWN) for b in bars], lag_ratio=0.16), run_time=1.2)
+                self.play(LaggedStart(*[Write(t) for t in text_mobs], lag_ratio=0.1), run_time=0.8)
+                self.play(Indicate(bars[2]), run_time=0.8)
+
+            elif kind == "system_map":
+                labels = bullets_data[:4]
+                while len(labels) < 4:
+                    labels.append(["Input", "Signal", "Center", "Output"][len(labels)])
+                center = Circle(radius=0.66, color=YELLOW, fill_opacity=0.85).move_to(card.get_center() + DOWN * 0.05)
+                center_text = small_text(labels[2], 20, color=BLACK).move_to(center)
+                left = Circle(radius=0.42, color=BLUE_C, fill_opacity=0.82).shift(LEFT * 3.4 + DOWN * 0.05)
+                top = Circle(radius=0.42, color=GREEN_C, fill_opacity=0.82).shift(UP * 1.4 + DOWN * 0.05)
+                right = Circle(radius=0.42, color=ORANGE, fill_opacity=0.82).shift(RIGHT * 3.4 + DOWN * 0.05)
+                nodes = VGroup(left, top, right)
+                arrows = VGroup(
+                    Arrow(left.get_right(), center.get_left(), buff=0.18, color=WHITE),
+                    Arrow(top.get_bottom(), center.get_top(), buff=0.18, color=WHITE),
+                    Arrow(center.get_right(), right.get_left(), buff=0.18, color=WHITE),
+                )
+                node_labels = VGroup(
+                    small_text(labels[0], 21).next_to(left, DOWN, buff=0.23),
+                    small_text(labels[1], 21).next_to(top, UP, buff=0.23),
+                    small_text(labels[3], 21).next_to(right, DOWN, buff=0.23),
+                    center_text,
+                )
+                self.play(FadeIn(center), Write(center_text), run_time=0.7)
+                self.play(LaggedStart(*[FadeIn(n) for n in nodes], lag_ratio=0.15), run_time=0.8)
+                self.play(LaggedStart(*[GrowArrow(a) for a in arrows], lag_ratio=0.12), run_time=0.9)
+                self.play(LaggedStart(*[Write(t) for t in node_labels[:-1]], lag_ratio=0.1), run_time=0.8)
+                self.play(Indicate(center), run_time=0.7)
+
+            elif kind in ("pseudo_3d", "creative"):
                 labels = bullets_data[:3]
                 while len(labels) < 3:
-                    labels.append(["Start", "Process", "Result"][len(labels)])
-                left = Circle(radius=0.52, color=BLUE_C, fill_opacity=0.75).shift(LEFT * 3 + DOWN * 0.15)
-                mid = Square(side_length=1.02, color=GREEN_C, fill_opacity=0.75).shift(DOWN * 0.15)
-                right = Triangle(color=ORANGE, fill_opacity=0.75).scale(0.72).shift(RIGHT * 3 + DOWN * 0.15)
-                arrow1 = Arrow(left.get_right(), mid.get_left(), buff=0.25, color=WHITE)
-                arrow2 = Arrow(mid.get_right(), right.get_left(), buff=0.25, color=WHITE)
-                l1 = Text(labels[0], font_size=24, color=WHITE).next_to(left, DOWN, buff=0.34)
-                l2 = Text(labels[1], font_size=24, color=WHITE).next_to(mid, DOWN, buff=0.34)
-                l3 = Text(labels[2], font_size=24, color=WHITE).next_to(right, DOWN, buff=0.34)
-                goal = Text(visual_goal[:60] or "Step-by-step visual", font_size=20, color=BLUE_B)
-                goal.move_to(card.get_bottom() + UP * 0.45)
-                self.play(FadeIn(left), Write(l1), run_time=0.7)
-                self.play(GrowArrow(arrow1), FadeIn(mid), Write(l2), run_time=0.9)
-                self.play(GrowArrow(arrow2), FadeIn(right), Write(l3), run_time=0.9)
-                self.play(FadeIn(goal), Indicate(mid), run_time=1.0)
-
-            elif kind == "creative":
-                center = Dot(color=YELLOW).scale(1.6).move_to(card.get_center())
-                orbiters = VGroup()
-                labels = VGroup()
-                colors = [BLUE_C, GREEN_C, ORANGE, PURPLE_B]
-                for i, item in enumerate(bullets_data[:4]):
-                    angle = i * TAU / max(1, len(bullets_data[:4]))
-                    pos = card.get_center() + np.array([2.5 * np.cos(angle), 1.25 * np.sin(angle), 0])
-                    orb = Circle(radius=0.32, color=colors[i % len(colors)], fill_opacity=0.75).move_to(pos)
-                    txt = Text(item, font_size=21, color=WHITE).next_to(orb, DOWN, buff=0.22)
-                    orbiters.add(orb)
-                    labels.add(txt)
-                lines = VGroup(*[Line(center.get_center(), orb.get_center(), color=BLUE_E) for orb in orbiters])
-                self.play(FadeIn(center), run_time=0.5)
-                self.play(LaggedStart(*[Create(line) for line in lines], lag_ratio=0.1), run_time=0.8)
-                self.play(LaggedStart(*[FadeIn(o) for o in orbiters], lag_ratio=0.15), run_time=0.8)
-                self.play(LaggedStart(*[Write(t) for t in labels], lag_ratio=0.12), run_time=1.0)
-                self.play(Rotate(orbiters, angle=PI / 8, about_point=center.get_center()), Indicate(center), run_time=1.0)
+                    labels.append(["Layer 1", "Layer 2", "Layer 3"][len(labels)])
+                layers = VGroup()
+                colors = [BLUE_C, GREEN_C, PURPLE_B]
+                offsets = [LEFT * 0.55 + DOWN * 0.45, ORIGIN, RIGHT * 0.55 + UP * 0.45]
+                for i in range(3):
+                    panel = RoundedRectangle(width=4.4, height=2.1, corner_radius=0.18)
+                    panel.set_stroke(colors[i], width=2)
+                    panel.set_fill("#172554", opacity=0.55 + i * 0.1)
+                    panel.move_to(card.get_center() + offsets[i])
+                    txt = small_text(labels[i], 24).move_to(panel.get_center())
+                    shadow = panel.copy()
+                    shadow.set_fill(BLACK, opacity=0.18)
+                    shadow.set_stroke(width=0)
+                    shadow.shift(DOWN * 0.18 + RIGHT * 0.18)
+                    layers.add(VGroup(shadow, panel, txt))
+                connector1 = Arrow(layers[0][1].get_right(), layers[1][1].get_left(), buff=0.15, color=WHITE)
+                connector2 = Arrow(layers[1][1].get_right(), layers[2][1].get_left(), buff=0.15, color=WHITE)
+                self.play(FadeIn(layers[0]), run_time=0.7)
+                self.play(FadeIn(layers[1]), GrowArrow(connector1), run_time=0.8)
+                self.play(FadeIn(layers[2]), GrowArrow(connector2), run_time=0.8)
+                self.play(layers.animate.shift(UP * 0.08), run_time=0.45)
+                self.play(layers.animate.shift(DOWN * 0.08), Indicate(layers[1]), run_time=0.75)
 
             else:
                 bullet_mobs = VGroup(
                     *[
-                        Text("• " + item, font_size=28, color=WHITE)
+                        Text("• " + safe_label(item, 50), font_size=28, color=WHITE)
                         for item in bullets_data
                     ]
                 )
@@ -361,7 +524,7 @@ class GeneratedScene(VoiceoverScene):
                 )
                 self.play(Indicate(bullet_mobs[0]), run_time=0.7)
 
-            remaining = max(0.1, tracker.duration - 4.2)
+            remaining = max(0.1, tracker.duration - 4.4)
             if remaining > 0.1:
                 self.wait(remaining)
 
@@ -369,7 +532,8 @@ class GeneratedScene(VoiceoverScene):
         if snapshot:
             self.play(*[FadeOut(m) for m in snapshot], run_time=0.6)
         self.wait(0.1)
-'''.strip() + "\n"
+""".strip() + "\n"
+
 
 
 # Backward-compatible name used by the renderer's fallback branch.

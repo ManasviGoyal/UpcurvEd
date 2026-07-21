@@ -199,6 +199,20 @@ STRUCTURED_VIDEO_SYSTEM = dedent("""\
 
     Return ONLY valid JSON. No markdown. No Python code. No explanations.
 
+    Available scene kinds:
+    - title: opening title card.
+    - key_points: clean bullet overview.
+    - flow_diagram: input → process → output or step-by-step arrows.
+    - cycle_diagram: circular cycle with stages and moving pointer.
+    - timeline: sequence across time.
+    - comparison: side-by-side comparison of states, categories, or stages.
+    - chart: simple visual bar chart or magnitude comparison.
+    - system_map: central system with inputs, outputs, and arrows.
+    - pseudo_3d: layered/depth visual using safe pseudo-3D panels.
+    - diagram: alias for flow_diagram.
+    - creative: alias for pseudo_3d.
+    - recap: closing recap.
+
     Required JSON shape:
     {
       "title": "short lesson title",
@@ -222,20 +236,20 @@ STRUCTURED_VIDEO_SYSTEM = dedent("""\
         },
         {
           "id": 3,
-          "kind": "diagram",
+          "kind": "flow_diagram | cycle_diagram | timeline | comparison | chart | system_map",
           "heading": "short heading",
           "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase", "short phrase"],
-          "visual_goal": "describe the process or relationship as simple shapes, arrows, labels, or a timeline",
+          "bullets": ["label 1", "label 2", "label 3", "optional label 4"],
+          "visual_goal": "concrete drawable visual goal",
           "duration_sec": 9
         },
         {
           "id": 4,
-          "kind": "creative",
+          "kind": "comparison | chart | system_map | pseudo_3d | cycle_diagram | timeline",
           "heading": "short heading",
           "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase", "short phrase"],
-          "visual_goal": "describe a memorable visual metaphor using simple drawable objects",
+          "bullets": ["label 1", "label 2", "label 3", "optional label 4"],
+          "visual_goal": "concrete drawable visual goal",
           "duration_sec": 9
         },
         {
@@ -251,15 +265,27 @@ STRUCTURED_VIDEO_SYSTEM = dedent("""\
 
     Rules:
     - Exactly 5 scenes.
-    - Use this scene order: title, key_points, diagram, creative, recap.
+    - Scene 1 kind must be title.
+    - Scene 2 kind must be key_points.
+    - Scene 5 kind must be recap.
+    - Choose the BEST specific kind for scenes 3 and 4 from the available scene kinds.
     - Do NOT write Manim code. The backend will render templates from your plan.
     - Keep the plan compact.
-    - Narration: one sentence per scene, max 22 words.
+    - Narration: one sentence per scene, max 24 words.
     - Heading: max 8 words.
     - Bullets: 2 to 4 bullets per scene, max 7 words each.
+    - Bullets are used as visible labels, so make them concrete nouns/phrases, not full sentences.
     - visual_goal: max 25 words, concrete and drawable.
     - Make the lesson specific, factual, and educational, not generic or motivational.
     - Include concrete mechanisms, causes/effects, vocabulary, or examples appropriate to the topic.
+    - Prefer visual structures:
+        * cycles for repeating stages or loops
+        * timelines for time order
+        * flow diagrams for mechanisms
+        * comparisons for categories/states
+        * charts for quantities or relative magnitude
+        * system maps for inputs/outputs
+        * pseudo_3d for layers, anatomy, molecules, planets, or hidden structure
     - For science, health, biology, history, or technical topics, use precise facts and explain how/why.
     - Avoid generic filler such as "helps you grow", "is important", or "makes life better" unless paired with a concrete mechanism.
     - Avoid quotes inside strings unless necessary.
@@ -273,6 +299,7 @@ def build_structured_video_user_prompt(goal: str) -> str:
 
         Return only the compact JSON scene plan.
         Do not include Python code.
+        Use the most specific visual kinds for scenes 3 and 4.
         Make it specific, factual, and educational. Avoid generic filler.
     """).strip()
 
@@ -282,9 +309,16 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
 
     Return ONLY valid JSON. No markdown. No Python code. No explanations.
 
+    Available scene kinds:
+    title, key_points, flow_diagram, cycle_diagram, timeline, comparison,
+    chart, system_map, pseudo_3d, diagram, creative, recap.
+
     Required behavior:
     - Keep exactly 5 scenes.
-    - Keep the same scene order: title, key_points, diagram, creative, recap.
+    - Scene 1 kind must be title.
+    - Scene 2 kind must be key_points.
+    - Scene 5 kind must be recap.
+    - Scenes 3 and 4 should use the best specific visual kinds for the edited lesson.
     - Apply the user's edit request to the most relevant scene or scenes.
     - If the user asks to remove a scene or topic, do NOT reduce the number of scenes.
       Replace that scene with a better on-topic educational scene instead.
@@ -314,7 +348,8 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
     - Narration: one sentence per scene, max 24 words.
     - Heading: max 8 words.
     - Bullets: 2 to 4 bullets per scene, max 7 words each.
-    - visual_goal for diagram/creative scenes: max 25 words, concrete and drawable.
+    - Bullets are visible labels, so make them concrete nouns/phrases.
+    - visual_goal for diagram/creative/scenes 3-4: max 25 words, concrete and drawable.
 """)
 
 

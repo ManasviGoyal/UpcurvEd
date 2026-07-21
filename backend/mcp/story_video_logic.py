@@ -131,21 +131,38 @@ drawCharacterTemplate(x, cx, cy, scale, variant, bobAmt)
     Draws a prebuilt character variant using fixed templates.
 
 Scene structure to follow:
-1. Background: sky gradient or theme color, ground strip at h*0.65
-2. 2-3 characters placed at different x positions, y = groundY
-3. At least 1 prop (object, sign, tree, building) relevant to the scene
-4. Exactly 1 drawSpeechBubble call with a short lesson phrase (max 8 words) placed above the main character
-5. Animate using: bob = Math.sin(dt*2)*6, swing = Math.sin(dt*3)*0.2
-6. Use drawCharacterTemplate for all people/animals/robots (do not draw custom bodies)
+1. Background: theme gradient, ground/lab floor/water/space field as appropriate.
+2. 1-2 guide characters placed at different x positions. Use drawCharacterTemplate.
+3. At least 2 science props relevant to the scene:
+   examples: brain, lungs, cells, molecules, arrows, clock, cycle ring, chart bars,
+   microscope, plant leaf, planet, thermometer, water droplets, timeline.
+4. Exactly 1 drawSpeechBubble call with the provided short speech bubble phrase
+   (max 8 words) placed above the main character.
+5. Animate cause/effect:
+   - particles flow along arrows
+   - object grows/shrinks/pulses
+   - cycle rotates
+   - clock hand moves
+   - molecule dots move
+   - character gestures toward the model
+6. Use drawCharacterTemplate for people/animals/robots. Do not draw custom bodies.
+
+Scientific visual style:
+- Show the mechanism, not just decoration.
+- Prefer simple models: arrows, cycles, before/after panels, timelines, bar charts,
+  colored dots/particles, organs, cells, waves, or labeled-by-position diagrams.
+- Do NOT add scientific text labels with fillText/strokeText. The panel/caption handles text.
+- Use colors and spatial arrangement to communicate categories.
 
 Constraints:
-- All x/y coordinates relative to w and h
-- No hardcoded pixel values above 50
-- Do not clear canvas, do not call requestAnimationFrame
-- Keep under 50 lines
-- ALL scene text must go through drawSpeechBubble ONLY — never call fillText or strokeText directly
-- Do NOT draw heading bars, caption bars, or any text overlay rectangles
-- Speech bubble text must be short (max 8 words) and placed above the main character"""
+- All x/y coordinates relative to w and h.
+- No hardcoded pixel values above 50.
+- Do not clear canvas, do not call requestAnimationFrame.
+- Keep under 70 lines.
+- ALL scene text must go through drawSpeechBubble ONLY — never call fillText or strokeText directly.
+- Do NOT draw heading bars, caption bars, or any text overlay rectangles.
+- Speech bubble text must be short (max 8 words) and placed above the main character.
+"""
 
 
 def _pick_provider_and_key(
@@ -173,19 +190,43 @@ def _story_prompt(topic: str, host_character: str | None = None, theme: str | No
     host_line = f"Main character preference: {host_character}\n" if host_character else ""
     theme_line = f"Visual theme preference: {theme}\n" if theme else ""
     return (
-        f"Educational story for children about: {topic}\n"
+        f"Educational science story for children about: {topic}\n"
         f"Available main characters: {host_options}\n"
         f"Available visual themes: {theme_options}\n"
         f"{host_line}"
         f"{theme_line}"
         "Return ONLY valid JSON, no markdown.\n"
-        '{"title":"...","characters":["..."],"moral":"...","conclusion":"...",'
-        '"scenes":[{"heading":"...","lesson":"1-2 sentences","caption":"short narrator line",'
-        '"visual":"specific drawable scene description","duration_sec":10}]}\n'
+        "{"
+        "\"title\":\"...\","
+        "\"audience\":\"children ages 8-12\","
+        "\"characters\":[\"...\"],"
+        "\"science_big_idea\":\"one accurate core mechanism\","
+        "\"key_vocabulary\":[\"term\",\"term\",\"term\"],"
+        "\"misconception_to_fix\":\"common misconception, if relevant\","
+        "\"moral\":\"scientific takeaway, not a vague life moral\","
+        "\"conclusion\":\"curiosity question or practical takeaway\","
+        "\"scenes\":[{"
+        "\"heading\":\"...\","
+        "\"lesson\":\"1-2 accurate sentences explaining a mechanism\","
+        "\"science_fact\":\"specific accurate fact or mechanism\","
+        "\"vocabulary\":[\"term\",\"term\"],"
+        "\"cause_effect\":\"cause -> effect relationship\","
+        "\"misconception_fix\":\"optional correction\","
+        "\"caption\":\"short narrator line with concrete science\","
+        "\"speech_bubble\":\"max 8 words\","
+        "\"visual\":\"specific drawable science scene description\","
+        "\"duration_sec\":10"
+        "}]}\n"
         "Rules: exactly 6 scenes, each exactly 10 seconds, total = 60 seconds. "
-        "Simple vocabulary. Each scene is an animated storyboard with characters and objects moving. "
-        "Make visual descriptions specific and drawable: "
-        "name characters, objects, actions, and colors explicitly. "
+        "Make it story-like, but the learning must be scientific and mechanism-based. "
+        "Do NOT write generic lessons such as 'it helps you grow' unless you explain the real mechanism. "
+        "Each scene must teach one concrete concept: structure, process, cause/effect, cycle, sequence, "
+        "comparison, measurement, misconception correction, or real-world application. "
+        "Use age-appropriate vocabulary, but include real terms such as neuron, hormone, oxygen, REM, "
+        "evaporation, chlorophyll, gravity, friction, bacteria, ecosystem, etc. when relevant. "
+        "Every scene needs a visual model that is drawable with canvas shapes: arrows, particles, clocks, "
+        "cycles, organs, cells, charts, timelines, molecules, or before/after panels. "
+        "Avoid unsupported or overly precise claims. If exact numbers vary, say 'about' or describe the range. "
         "If the topic includes a named character, use that name in the title, characters list, and scene visuals."
     )
 
@@ -204,96 +245,225 @@ def _extract_json(raw: str) -> dict[str, Any]:
         return json.loads(m.group(0))
 
 
+def _compact_text(value: Any, limit: int = 220) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:limit]
+
+
+def _normalize_terms(value: Any, limit: int = 4) -> list[str]:
+    terms: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            txt = _compact_text(item, 32)
+            if txt and txt.lower() not in {t.lower() for t in terms}:
+                terms.append(txt)
+            if len(terms) >= limit:
+                break
+    elif isinstance(value, str):
+        for item in re.split(r"[,;]", value):
+            txt = _compact_text(item, 32)
+            if txt and txt.lower() not in {t.lower() for t in terms}:
+                terms.append(txt)
+            if len(terms) >= limit:
+                break
+    return terms
+
+
+def _short_bubble(value: Any, fallback: str) -> str:
+    text = _compact_text(value, 80) or _compact_text(fallback, 80) or "Watch the mechanism"
+    words = re.findall(r"[A-Za-z0-9%+-]+", text)
+    if not words:
+        return "Watch the mechanism"
+    return " ".join(words[:8])
+
+
+def _science_caption(scene: dict[str, Any], lesson: str) -> str:
+    fact = _compact_text(scene.get("science_fact"), 180)
+    cause = _compact_text(scene.get("cause_effect"), 150)
+    caption = _compact_text(scene.get("caption"), 180)
+    if fact and cause:
+        return f"{fact} {cause}"[:220]
+    if fact:
+        return fact
+    if caption:
+        return caption
+    return lesson[:220]
+
+
+def _default_science_scenes(topic: str) -> list[dict[str, Any]]:
+    topic_txt = _compact_text(topic, 60) or "this topic"
+    return [
+        {
+            "heading": "Observe the system",
+            "lesson": f"Scientists start by asking what parts make {topic_txt} work.",
+            "science_fact": f"{topic_txt} can be understood by looking at parts, patterns, and changes.",
+            "vocabulary": ["system", "pattern"],
+            "cause_effect": "Careful observation reveals what changes and what stays stable.",
+            "misconception_fix": "",
+            "caption": f"Look for the parts and patterns in {topic_txt}.",
+            "speech_bubble": "Look for the pattern",
+            "visual": "Scientist guide points to a simple system diagram with colored parts and arrows.",
+            "duration_sec": 10,
+        },
+        {
+            "heading": "Find the mechanism",
+            "lesson": f"A mechanism explains how one step in {topic_txt} leads to the next.",
+            "science_fact": "A mechanism is a chain of cause and effect.",
+            "vocabulary": ["mechanism", "cause", "effect"],
+            "cause_effect": "One change triggers another change.",
+            "misconception_fix": "",
+            "caption": "A mechanism connects causes to effects.",
+            "speech_bubble": "Cause leads to effect",
+            "visual": "Arrows connect three glowing objects from left to right.",
+            "duration_sec": 10,
+        },
+        {
+            "heading": "Measure the change",
+            "lesson": f"Many science ideas become clearer when we compare before and after states.",
+            "science_fact": "Comparing states helps reveal evidence.",
+            "vocabulary": ["evidence", "measurement"],
+            "cause_effect": "Measurement turns observations into evidence.",
+            "misconception_fix": "",
+            "caption": "Compare before and after to see evidence.",
+            "speech_bubble": "Evidence shows change",
+            "visual": "Before and after panels show an object changing with a small chart.",
+            "duration_sec": 10,
+        },
+        {
+            "heading": "Use a model",
+            "lesson": f"A model is a simplified picture that helps explain {topic_txt}.",
+            "science_fact": "Models are useful because they show invisible or complex processes.",
+            "vocabulary": ["model", "process"],
+            "cause_effect": "A good model shows how the parts interact.",
+            "misconception_fix": "",
+            "caption": "Models make invisible processes easier to see.",
+            "speech_bubble": "Models show hidden steps",
+            "visual": "Guide moves small particles through a simple model with arrows.",
+            "duration_sec": 10,
+        },
+        {
+            "heading": "Fix a misconception",
+            "lesson": f"A strong explanation of {topic_txt} separates what is true from what only sounds true.",
+            "science_fact": "Scientific claims should match evidence and mechanisms.",
+            "vocabulary": ["claim", "evidence"],
+            "cause_effect": "Better evidence improves the explanation.",
+            "misconception_fix": "Do not accept a simple story if it misses the mechanism.",
+            "caption": "A claim is stronger when evidence supports it.",
+            "speech_bubble": "Check the evidence",
+            "visual": "Two signs appear; the guide chooses the one connected to evidence dots.",
+            "duration_sec": 10,
+        },
+        {
+            "heading": "Apply the idea",
+            "lesson": f"Once we understand {topic_txt}, we can use it to make better predictions.",
+            "science_fact": "Scientific understanding helps us predict what may happen next.",
+            "vocabulary": ["prediction", "application"],
+            "cause_effect": "Knowing the mechanism helps predict the outcome.",
+            "misconception_fix": "",
+            "caption": "Use the mechanism to make a prediction.",
+            "speech_bubble": "Predict the next step",
+            "visual": "A path of arrows leads from question to model to prediction.",
+            "duration_sec": 10,
+        },
+    ]
+
+
 def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
-    title = str(plan.get("title") or f"{topic} Story").strip()[:80]
+    title = _compact_text(plan.get("title") or f"{topic} Science Story", 80)
     characters_in = plan.get("characters")
     characters: list[str] = []
     if isinstance(characters_in, list):
         for item in characters_in[:5]:
-            txt = str(item or "").strip()
+            txt = _compact_text(item, 40)
             if txt:
-                characters.append(txt[:40])
-    moral = str(plan.get("moral") or "").strip()[:220]
-    conclusion = str(plan.get("conclusion") or "").strip()[:220]
+                characters.append(txt)
+
+    science_big_idea = _compact_text(plan.get("science_big_idea"), 260)
+    key_vocabulary = _normalize_terms(plan.get("key_vocabulary"), limit=6)
+    misconception_to_fix = _compact_text(plan.get("misconception_to_fix"), 220)
+    moral = _compact_text(plan.get("moral") or plan.get("takeaway"), 240)
+    conclusion = _compact_text(plan.get("conclusion"), 240)
+
     scenes_in = plan.get("scenes")
     if not isinstance(scenes_in, list):
         scenes_in = []
 
     scenes: list[dict[str, Any]] = []
-    for i, s in enumerate(scenes_in[:7], start=1):
+    for i, s in enumerate(scenes_in[:6], start=1):
         if not isinstance(s, dict):
             continue
-        heading = str(s.get("heading") or f"Scene {i}").strip()[:60]
-        lesson = str(s.get("lesson") or "").strip()
-        caption = str(s.get("caption") or lesson).strip()
-        visual = str(s.get("visual") or "").strip()
-        duration = s.get("duration_sec", 7)
-        try:
-            duration = int(duration)
-        except Exception:
-            duration = 7
-        duration = max(5, min(12, duration))
+        heading = _compact_text(s.get("heading") or f"Scene {i}", 60)
+        lesson = _compact_text(s.get("lesson"), 260)
+        science_fact = _compact_text(s.get("science_fact"), 220)
+        cause_effect = _compact_text(s.get("cause_effect"), 180)
+        misconception_fix = _compact_text(s.get("misconception_fix"), 180)
+        visual = _compact_text(s.get("visual"), 420)
+        vocabulary = _normalize_terms(s.get("vocabulary"), limit=4)
+
         if not lesson:
-            continue
+            lesson = science_fact or f"This scene explains one science idea about {topic}."
+        if not science_fact:
+            science_fact = lesson
+        if not visual:
+            visual = "Scientist guide points to a simple science model with arrows and moving particles."
+
+        caption = _science_caption(s, lesson)
+        speech_bubble = _short_bubble(s.get("speech_bubble"), heading)
+
         scenes.append(
             {
                 "heading": heading,
                 "lesson": lesson,
+                "science_fact": science_fact,
+                "vocabulary": vocabulary,
+                "cause_effect": cause_effect,
+                "misconception_fix": misconception_fix,
                 "caption": caption,
+                "speech_bubble": speech_bubble,
                 "visual": visual,
-                "duration_sec": duration,
+                "duration_sec": 10,
             }
         )
 
-    if not scenes:
-        scenes = [
-            {
-                "heading": "Let us explore",
-                "lesson": f"Today we learn {topic} in a simple story.",
-                "caption": f"Welcome! We are exploring {topic}.",
-                "visual": "Friendly character points at colorful objects.",
-                "duration_sec": 7,
-            },
-            {
-                "heading": "The big idea",
-                "lesson": f"{topic} helps us understand how things work in daily life.",
-                "caption": f"The big idea: {topic} appears in daily life.",
-                "visual": "Objects move with arrows and labels.",
-                "duration_sec": 7,
-            },
-            {
-                "heading": "Try it",
-                "lesson": f"Imagine one example of {topic} around you and explain it in your own words.",
-                "caption": "Can you find one example around you?",
-                "visual": "Child character thinks with a light bulb icon.",
-                "duration_sec": 7,
-            },
-        ]
-
-    total = sum(int(s["duration_sec"]) for s in scenes)
-    if total < 40:
-        # Stretch slightly so it feels like a real story video.
-        deficit = 40 - total
-        for s in scenes:
-            if deficit <= 0:
+    if len(scenes) < 6:
+        defaults = _default_science_scenes(topic)
+        for fallback in defaults:
+            if len(scenes) >= 6:
                 break
-            bump = min(2, deficit)
-            s["duration_sec"] = min(12, int(s["duration_sec"]) + bump)
-            deficit -= bump
+            scenes.append(fallback)
 
     if not characters:
-        characters = ["friendly guide"]
+        characters = ["Scientist Guide", "Curious Learner"]
+    if not science_big_idea:
+        science_big_idea = f"Understanding {topic} means looking for mechanisms, evidence, and cause/effect."
+    if not key_vocabulary:
+        # Pull terms from scenes before falling back.
+        for scene in scenes:
+            for term in scene.get("vocabulary", []):
+                if term and term.lower() not in {t.lower() for t in key_vocabulary}:
+                    key_vocabulary.append(term)
+                if len(key_vocabulary) >= 6:
+                    break
+            if len(key_vocabulary) >= 6:
+                break
+    if not key_vocabulary:
+        key_vocabulary = ["system", "mechanism", "evidence"]
     if not moral:
-        moral = f"Learning {topic} helps us make better choices."
+        moral = f"Scientific takeaway: {science_big_idea}"
     if not conclusion:
-        conclusion = f"Great job exploring {topic}! Keep asking curious questions."
+        conclusion = f"Curious question: what evidence would help you explain {topic} better?"
+
     return {
         "title": title,
-        "audience": "children",
+        "audience": "children ages 8-12",
         "characters": characters,
+        "science_big_idea": science_big_idea,
+        "key_vocabulary": key_vocabulary,
+        "misconception_to_fix": misconception_to_fix,
         "moral": moral,
         "conclusion": conclusion,
-        "scenes": scenes,
+        "scenes": scenes[:6],
     }
 
 
@@ -356,26 +526,34 @@ def _generate_scene_draw_js(
         use_model = "claude-haiku-4-5"
     host_options = ", ".join(sorted(HOST_PRESETS.keys()))
     theme_options = ", ".join(sorted(THEME_PRESETS.keys()))
+    bubble = _short_bubble(scene.get("speech_bubble"), str(scene.get("heading") or "Science idea"))
+    vocab = ", ".join(scene.get("vocabulary") or [])
     user = (
         f"Scene heading: {scene.get('heading', '')}\n"
         f"Visual description: {scene.get('visual', '')}\n"
         f"Lesson text: {scene.get('lesson', '')}\n"
+        f"Science fact: {scene.get('science_fact', '')}\n"
+        f"Cause/effect: {scene.get('cause_effect', '')}\n"
+        f"Vocabulary to represent visually, not as text: {vocab}\n"
+        f"Misconception correction, if any: {scene.get('misconception_fix', '')}\n"
+        f"Speech bubble phrase to use exactly: {bubble}\n"
         f"Available main characters: {host_options}\n"
         f"Available visual themes: {theme_options}\n"
         f"Main character preference: {host_character or 'auto'}\n"
         f"Selected theme: {theme or 'auto'}\n"
-        "Render concrete objects from the visual description (not abstract particles only).\n"
+        "Render concrete scientific objects from the visual description.\n"
+        "Show the mechanism with visible cause/effect, not just a cute scene.\n"
+        "Good visual patterns: arrows, moving dots/particles, simple organ/cell shapes, "
+        "cycle rings, before/after panels, timelines, clocks, waves, charts, or comparisons.\n"
         "Include at least one animated main character (person/animal/robot) with visible motion.\n"
         "Use any named characters from the scene/title (keep names consistent).\n"
-        "Match a simple storyboard style: characters + props, clean shapes, no abstract blobs/particles.\n"
+        "Match a simple storyboard style: characters + scientific model + props.\n"
         "Use the theme colors for backgrounds and props.\n"
-        "Animate characters and objects with moving parts (arms, heads, props, or gestures).\n"
-        "Add visible motion so learners can understand cause/effect.\n"
+        "Animate characters and science objects with moving parts (arms, particles, arrows, waves, clocks, or gestures).\n"
         "Use drawCharacterTemplate for people/animals/robots (do not draw custom bodies).\n"
-        "IMPORTANT: Use exactly ONE drawSpeechBubble call for the lesson text, placed above the main character.\n"
+        "IMPORTANT: Use exactly ONE drawSpeechBubble call with the provided speech bubble phrase, placed above the main character.\n"
         "NEVER use fillText or strokeText directly — ALL text must go through drawSpeechBubble.\n"
         "Do NOT draw heading bars, caption rectangles, or any text overlay at top or bottom.\n"
-        "Keep speech bubble text short and readable (max 8 words).\n"
         "Return only the JavaScript function body."
     )
     raw = call_llm(
@@ -384,8 +562,8 @@ def _generate_scene_draw_js(
         model=use_model,
         system=DRAW_JS_SYSTEM,
         user=user,
-        temperature=0.3,
-        max_tokens=2000,
+        temperature=0.25,
+        max_tokens=2200,
     )
     return _extract_js_block(raw)
 
@@ -400,7 +578,12 @@ def _build_scene_template_html(
     payload = {
         "heading": str(scene.get("heading") or "Story Scene"),
         "lesson": str(scene.get("lesson") or ""),
-        "caption": str(scene.get("caption") or scene.get("lesson") or ""),
+        "caption": str(scene.get("caption") or scene.get("science_fact") or scene.get("lesson") or ""),
+        "science_fact": str(scene.get("science_fact") or ""),
+        "vocabulary": list(scene.get("vocabulary") or []),
+        "cause_effect": str(scene.get("cause_effect") or ""),
+        "misconception_fix": str(scene.get("misconception_fix") or ""),
+        "speech_bubble": str(scene.get("speech_bubble") or ""),
         "visual": str(scene.get("visual") or ""),
         "duration_sec": int(scene.get("duration_sec") or 10),
         "theme": THEME_PRESETS[theme_key],
@@ -697,7 +880,7 @@ def _build_scene_template_html(
       x.fillText(String(S.heading || '').slice(0, 60), w / 2, barY + 12);
       x.font = '400 15px Arial';
       x.fillStyle = 'rgba(255,255,255,0.82)';
-      const capText = String(S.caption || S.lesson || '').slice(0, 120);
+      const capText = String(S.caption || S.science_fact || S.lesson || '').slice(0, 140);
       x.fillText(capText, w / 2, barY + 40);
       x.textAlign = 'left';
       x.textBaseline = 'alphabetic';
@@ -861,7 +1044,7 @@ def _write_vtt(job_dir: pathlib.Path, scenes: list[dict[str, Any]], out_name: st
         start = _format_vtt_ts(t)
         end = _format_vtt_ts(t + dur)
         lines.append(f"{start} --> {end}")
-        caption = str(scene.get("caption") or scene.get("lesson") or "").strip()
+        caption = str(scene.get("caption") or scene.get("science_fact") or scene.get("lesson") or "").strip()
         lines.append(f"{scene['heading']}: {caption}")
         lines.append("")
         t += dur
@@ -890,8 +1073,8 @@ def generate_story_video(
         model=model,
         system=None,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
-        temperature=0.6,
-        max_tokens=3000,
+        temperature=0.45,
+        max_tokens=3800,
     )
     plan = _normalize_story_plan(_extract_json(raw), prompt)
     host_payload = _resolve_host_payload(host_character)
@@ -1004,8 +1187,13 @@ def _build_story_slider_html(
         scenes_payload.append(
             {
                 "heading": str(scene.get("heading") or f"Scene {idx + 1}"),
-                "caption": str(scene.get("caption") or scene.get("lesson") or ""),
+                "caption": str(scene.get("caption") or scene.get("science_fact") or scene.get("lesson") or ""),
                 "lesson": str(scene.get("lesson") or ""),
+                "science_fact": str(scene.get("science_fact") or ""),
+                "vocabulary": list(scene.get("vocabulary") or []),
+                "cause_effect": str(scene.get("cause_effect") or ""),
+                "misconception_fix": str(scene.get("misconception_fix") or ""),
+                "speech_bubble": str(scene.get("speech_bubble") or ""),
                 "visual": str(scene.get("visual") or ""),
                 "duration_sec": int(scene.get("duration_sec") or 10),
                 "theme": scene_theme,
@@ -1300,7 +1488,7 @@ def _build_story_slider_html(
       const s = scenes[current] || {{}};
       sceneLabel.textContent = `Scene ${{current + 1}}`;
       sceneHeading.textContent = String(s.heading || P.title || 'Story');
-      sceneCaption.textContent = String(s.caption || s.lesson || '');
+      sceneCaption.textContent = String(s.caption || s.science_fact || s.lesson || '');
       sceneSlider.value = String(current + 1);
       Array.from(sceneDots.children).forEach((el, i) => el.classList.toggle('active', i === current));
     }}
@@ -1415,7 +1603,7 @@ def _build_story_slider_html(
       ctx.fillText(String(s.heading || '').slice(0, 60), w / 2, barY + 12);
       ctx.font = '400 15px Arial';
       ctx.fillStyle = 'rgba(255,255,255,0.82)';
-      ctx.fillText(String(s.caption || s.lesson || '').slice(0, 120), w / 2, barY + 40);
+      ctx.fillText(String(s.caption || s.science_fact || s.lesson || '').slice(0, 140), w / 2, barY + 40);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       // Progress bar at top
@@ -1455,8 +1643,8 @@ def generate_story_slider(
         model=model,
         system=None,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
-        temperature=0.6,
-        max_tokens=3000,
+        temperature=0.45,
+        max_tokens=3800,
     )
     plan = _normalize_story_plan(_extract_json(raw), prompt)
     host_payload = _resolve_host_payload(host_character)
