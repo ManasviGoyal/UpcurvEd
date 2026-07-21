@@ -192,115 +192,73 @@ def build_code_user_prompt(
 
 
 
-# -------- STRUCTURED VIDEO PROMPTS (Plan + per-scene Manim) --------
+# -------- STRUCTURED VIDEO PROMPTS (Plan-only, backend-rendered templates) --------
 
 STRUCTURED_VIDEO_SYSTEM = dedent("""\
-    You generate a structured Manim video bundle.
+    You create a compact scene plan for a short educational Manim video.
 
-    Return ONLY this exact format. No markdown. No explanations.
+    Return ONLY valid JSON. No markdown. No Python code. No explanations.
 
-    <<<PLAN_JSON>>>
+    Required JSON shape:
     {
-      "title": "...",
+      "title": "short lesson title",
       "audience": "general",
       "scenes": [
         {
           "id": 1,
           "kind": "title",
-          "heading": "...",
-          "narration": "...",
-          "bullets": ["...", "..."],
+          "heading": "short heading",
+          "narration": "one clear sentence",
+          "bullets": ["short phrase", "short phrase"],
           "duration_sec": 6
         },
         {
           "id": 2,
           "kind": "key_points",
-          "heading": "...",
-          "narration": "...",
-          "bullets": ["...", "...", "..."],
+          "heading": "short heading",
+          "narration": "one clear sentence",
+          "bullets": ["short phrase", "short phrase", "short phrase"],
           "duration_sec": 8
         },
         {
           "id": 3,
           "kind": "diagram",
-          "heading": "...",
-          "narration": "...",
-          "bullets": ["...", "...", "..."],
-          "visual_goal": "...",
-          "duration_sec": 10
+          "heading": "short heading",
+          "narration": "one clear sentence",
+          "bullets": ["short phrase", "short phrase", "short phrase"],
+          "visual_goal": "describe the process or relationship as simple shapes, arrows, labels, or a timeline",
+          "duration_sec": 9
         },
         {
           "id": 4,
           "kind": "creative",
-          "heading": "...",
-          "narration": "...",
-          "bullets": ["...", "...", "..."],
-          "visual_goal": "...",
-          "duration_sec": 10
+          "heading": "short heading",
+          "narration": "one clear sentence",
+          "bullets": ["short phrase", "short phrase", "short phrase"],
+          "visual_goal": "describe a memorable visual metaphor using simple drawable objects",
+          "duration_sec": 9
         },
         {
           "id": 5,
           "kind": "recap",
-          "heading": "...",
-          "narration": "...",
-          "bullets": ["...", "...", "..."],
-          "duration_sec": 8
+          "heading": "short heading",
+          "narration": "one clear sentence",
+          "bullets": ["short phrase", "short phrase", "short phrase"],
+          "duration_sec": 7
         }
       ]
     }
-    <<<END_PLAN_JSON>>>
 
-    Then return exactly one complete Manim Python script for each scene:
-
-    <<<SCENE_1_CODE>>>
-    from manim import *
-    from manim_voiceover import VoiceoverScene
-    from manim_voiceover.services.gtts import GTTSService
-
-    class GeneratedScene(VoiceoverScene):
-        def construct(self):
-            ...
-    <<<END_SCENE_1_CODE>>>
-
-    Repeat for SCENE_2_CODE through SCENE_5_CODE.
-
-    Global rules:
+    Rules:
     - Exactly 5 scenes.
-    - Each scene must be independently runnable with:
-      manim -ql scene.py GeneratedScene
-    - Each scene must define exactly one class named GeneratedScene.
-    - Each scene must call self.set_speech_service(GTTSService(lang="en")).
-    - Each scene must use with self.voiceover(text="...") as tracker.
-    - No external files.
-    - No ImageMobject.
-    - No SVGMobject.
-    - No MathTex or Tex.
-    - Use Text or MarkupText only.
-    - No network, os, pathlib, requests, urllib, httpx, or filesystem imports.
-    - Do not invent style kwargs ending in _style.
-    - Prefer simple Manim primitives: Text, VGroup, Circle, Square, Rectangle,
-      RoundedRectangle, Arrow, Line, Dot, NumberLine, Axes, BarChart.
-    - For 3D scenes, only use 3D in scene 4. If scene 4 uses 3D methods or
-      3D objects, the class must be:
-      class GeneratedScene(VoiceoverScene, ThreeDScene):
-    - If a scene is complex, make it simpler rather than using risky APIs.
-    - Scene code should be concise: aim for under 120 lines per scene.
-    - Narration should be one short sentence per scene.
-    - Bullets should be short, max 8 words each.
-
-    Structure:
-    - Scene 1 title: safe title card, topic, simple icon.
-    - Scene 2 key_points: safe bullets or comparison layout.
-    - Scene 3 diagram: arrows, labels, process flow, timeline, or chart.
-    - Scene 4 creative: more visual/animated/optional 3D, but still runnable.
-    - Scene 5 recap: safe summary and takeaway.
-
-    Cleanup:
-    At the end of every voiceover block:
-        snapshot = list(self.mobjects)
-        if snapshot:
-            self.play(*[FadeOut(m) for m in snapshot])
-        self.wait(0.1)
+    - Use this scene order: title, key_points, diagram, creative, recap.
+    - Do NOT write Manim code. The backend will render templates from your plan.
+    - Keep the plan compact.
+    - Narration: one sentence per scene, max 22 words.
+    - Heading: max 8 words.
+    - Bullets: 2 to 4 bullets per scene, max 7 words each.
+    - visual_goal: max 25 words, concrete and drawable.
+    - Avoid quotes inside strings unless necessary.
 """)
 
 
@@ -309,10 +267,8 @@ def build_structured_video_user_prompt(goal: str) -> str:
         Teaching goal:
         {goal}
 
-        Create the full structured video bundle now.
-
-        The plan and all 5 scene scripts must be returned in one response.
-        Do not omit any scene.
+        Return only the compact JSON scene plan.
+        Do not include Python code.
     """).strip()
 
 

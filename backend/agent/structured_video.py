@@ -1,14 +1,13 @@
 # backend/agent/structured_video.py
 """
-Structured Manim video generation.
+Structured Manim video generation, v2.
 
-One LLM call returns:
-- a compact PLAN_JSON block
-- five independent Manim scene scripts
+One LLM call returns only a compact JSON scene plan. The backend then renders
+five deterministic Manim template scenes from that plan and concatenates them
+into one final downloadable video.
 
-Each scene is rendered separately. If an AI scene fails, only that scene is
-replaced with a safe template fallback. Successful clips are concatenated into
-one final downloadable video.
+This intentionally avoids asking the LLM to return long multi-scene Python code,
+which prevents token truncation errors such as: SyntaxError: '(' was never closed.
 """
 
 from __future__ import annotations
@@ -32,6 +31,10 @@ from backend.agent.prompts import (
 from backend.runner.job_runner import STORAGE, run_job_from_code, to_static_url
 
 logger = logging.getLogger(f"app.{__name__}")
+
+
+_ALLOWED_KINDS = ("title", "key_points", "diagram", "creative", "recap")
+_DEFAULT_KINDS = ["title", "key_points", "diagram", "creative", "recap"]
 
 
 def _pick_provider_and_key(
@@ -71,69 +74,130 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         clean = re.sub(r"\s*```$", "", clean).strip()
 
     try:
-        return json.loads(clean)
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict):
+            return parsed
     except Exception:
-        match = re.search(r"\{[\s\S]*\}", clean)
-        if not match:
-            raise RuntimeError("Structured video plan is missing valid JSON.")
-        return json.loads(match.group(0))
+        pass
+
+    # Conservative fallback: find the first JSON object-looking block.
+    match = re.search(r"\{[\s\S]*\}", clean)
+    if not match:
+        raise RuntimeError("Structured video plan is missing valid JSON.")
+    parsed = json.loads(match.group(0))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Structured video JSON was not an object.")
+    return parsed
 
 
-def parse_structured_video_bundle(raw: str) -> tuple[dict[str, Any], list[str]]:
-    plan_text = _extract_block(raw, "PLAN_JSON")
-    if not plan_text:
-        raise RuntimeError("Missing PLAN_JSON block in structured video bundle.")
-
-    plan = _normalize_plan(_extract_json_object(plan_text))
-
-    scene_codes: list[str] = []
-    for idx in range(1, 6):
-        code = _extract_block(raw, f"SCENE_{idx}_CODE")
-        if not code:
-            raise RuntimeError(f"Missing SCENE_{idx}_CODE block in structured video bundle.")
-        scene_codes.append(code)
-
-    return plan, scene_codes
+def _short_text(value: Any, limit: int, fallback: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    text = text.replace("\x00", "")
+    return (text[:limit].strip() or fallback)
 
 
-def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    title = str(plan.get("title") or "Generated Lesson").strip()[:90]
+def _default_plan(topic: str) -> dict[str, Any]:
+    safe_topic = _short_text(topic, 60, "Learning topic")
+    return {
+        "title": safe_topic,
+        "audience": "general",
+        "scenes": [
+            {
+                "id": 1,
+                "kind": "title",
+                "heading": safe_topic,
+                "narration": f"This lesson introduces {safe_topic} with simple visuals.",
+                "bullets": ["Big idea", "Simple visual"],
+                "duration_sec": 6,
+            },
+            {
+                "id": 2,
+                "kind": "key_points",
+                "heading": "Key points",
+                "narration": f"These are the most important ideas about {safe_topic}.",
+                "bullets": ["What it means", "How it works", "Why it matters"],
+                "duration_sec": 8,
+            },
+            {
+                "id": 3,
+                "kind": "diagram",
+                "heading": "How it works",
+                "narration": f"A simple diagram can show how {safe_topic} works step by step.",
+                "bullets": ["Start", "Process", "Result"],
+                "visual_goal": "Show a simple flow from start to process to result.",
+                "duration_sec": 9,
+            },
+            {
+                "id": 4,
+                "kind": "creative",
+                "heading": "Visual example",
+                "narration": f"A memorable example makes {safe_topic} easier to remember.",
+                "bullets": ["Example", "Connection", "Memory hook"],
+                "visual_goal": "Show a memorable metaphor with simple shapes.",
+                "duration_sec": 9,
+            },
+            {
+                "id": 5,
+                "kind": "recap",
+                "heading": "Quick recap",
+                "narration": f"The main takeaway is to understand the core pattern behind {safe_topic}.",
+                "bullets": ["Main idea", "Simple example", "Takeaway"],
+                "duration_sec": 7,
+            },
+        ],
+    }
+
+
+def _normalize_plan(plan: dict[str, Any], topic: str | None = None) -> dict[str, Any]:
+    fallback = _default_plan(topic or "Learning topic")
+    title = _short_text(plan.get("title"), 90, fallback["title"])
     scenes_in = plan.get("scenes")
     if not isinstance(scenes_in, list):
         scenes_in = []
 
-    default_kinds = ["title", "key_points", "diagram", "creative", "recap"]
     scenes: list[dict[str, Any]] = []
 
     for idx in range(5):
+        fallback_scene = fallback["scenes"][idx]
         incoming = scenes_in[idx] if idx < len(scenes_in) and isinstance(scenes_in[idx], dict) else {}
-        kind = str(incoming.get("kind") or default_kinds[idx]).strip().lower()
-        if kind not in ("title", "key_points", "diagram", "creative", "recap"):
-            kind = default_kinds[idx]
 
-        heading = str(incoming.get("heading") or f"Scene {idx + 1}").strip()[:80]
-        narration = str(incoming.get("narration") or incoming.get("caption") or heading).strip()[:260]
-        visual_goal = str(incoming.get("visual_goal") or incoming.get("visual") or "").strip()[:320]
+        kind = _short_text(incoming.get("kind"), 30, _DEFAULT_KINDS[idx]).lower().replace(" ", "_")
+        if kind not in _ALLOWED_KINDS:
+            kind = _DEFAULT_KINDS[idx]
+
+        # Keep the scene order stable even when the model drifts.
+        if idx in (0, 1, 4):
+            kind = _DEFAULT_KINDS[idx]
+
+        heading = _short_text(incoming.get("heading"), 70, fallback_scene["heading"])
+        narration = _short_text(
+            incoming.get("narration") or incoming.get("caption"),
+            240,
+            fallback_scene["narration"],
+        )
+        visual_goal = _short_text(
+            incoming.get("visual_goal") or incoming.get("visual"),
+            220,
+            fallback_scene.get("visual_goal", ""),
+        )
 
         bullets_in = incoming.get("bullets")
         bullets: list[str] = []
         if isinstance(bullets_in, list):
             for item in bullets_in[:4]:
-                text = str(item or "").strip()
+                text = _short_text(item, 54, "")
                 if text:
-                    bullets.append(text[:60])
+                    bullets.append(text)
 
         if not bullets:
-            if kind in ("title", "recap"):
-                bullets = ["Key idea", "Simple example", "Takeaway"]
-            else:
-                bullets = ["Observe", "Connect", "Remember"]
+            bullets = list(fallback_scene["bullets"])
 
         try:
-            duration = int(incoming.get("duration_sec") or (6 if idx == 0 else 8))
+            duration = int(incoming.get("duration_sec") or fallback_scene["duration_sec"])
         except Exception:
-            duration = 8
-        duration = max(4, min(14, duration))
+            duration = int(fallback_scene["duration_sec"])
+        duration = max(4, min(12, duration))
 
         scenes.append(
             {
@@ -141,7 +205,7 @@ def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "kind": kind,
                 "heading": heading,
                 "narration": narration,
-                "bullets": bullets,
+                "bullets": bullets[:4],
                 "visual_goal": visual_goal,
                 "duration_sec": duration,
             }
@@ -150,29 +214,23 @@ def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
     return {"title": title, "audience": str(plan.get("audience") or "general"), "scenes": scenes}
 
 
+def parse_structured_video_plan(raw: str, topic: str) -> dict[str, Any]:
+    """Parse the compact plan. On malformed/truncated model output, use a local plan."""
+    try:
+        plan_text = _extract_block(raw, "PLAN_JSON") or raw
+        return _normalize_plan(_extract_json_object(plan_text), topic=topic)
+    except Exception as exc:
+        logger.warning("structured video plan parse failed; using local default plan: %s", exc)
+        return _normalize_plan(_default_plan(topic), topic=topic)
+
+
 def _safe_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
-def build_scene_fallback_code(scene: dict[str, Any]) -> str:
-    heading = str(scene.get("heading") or "Key idea").strip()[:70] or "Key idea"
-    narration = (
-        str(scene.get("narration") or scene.get("caption") or heading).strip()[:240]
-        or f"Here is the key idea: {heading}."
-    )
-
-    bullets = scene.get("bullets")
-    if not isinstance(bullets, list) or not bullets:
-        bullets = ["Main idea", "Visual example", "Quick takeaway"]
-    bullets = [str(b or "").strip()[:54] for b in bullets[:4] if str(b or "").strip()]
-    if not bullets:
-        bullets = ["Main idea", "Visual example", "Quick takeaway"]
-
-    kind = str(scene.get("kind") or "fallback").strip()[:30]
-    heading_json = _safe_json(heading)
-    narration_json = _safe_json(narration)
-    bullets_json = _safe_json(bullets)
-    kind_json = _safe_json(kind)
+def build_template_scene_code(scene: dict[str, Any]) -> str:
+    """Build a deterministic Manim scene from a normalized scene-plan item."""
+    scene_json = _safe_json(scene)
 
     return f'''
 from manim import *  # noqa: F403,F405
@@ -184,10 +242,14 @@ class GeneratedScene(VoiceoverScene):
     def construct(self):
         self.set_speech_service(GTTSService(lang="en"))
 
-        heading = {heading_json}
-        narration = {narration_json}
-        bullets_data = {bullets_json}
-        scene_kind = {kind_json}
+        scene = {scene_json}
+        kind = str(scene.get("kind") or "key_points")
+        heading = str(scene.get("heading") or "Key idea")
+        narration = str(scene.get("narration") or heading)
+        visual_goal = str(scene.get("visual_goal") or "")
+        bullets_data = [str(x) for x in (scene.get("bullets") or []) if str(x).strip()][:4]
+        if not bullets_data:
+            bullets_data = ["Main idea", "Example", "Takeaway"]
 
         bg = Rectangle(width=config.frame_width, height=config.frame_height)
         bg.set_fill("#0f172a", opacity=1)
@@ -195,15 +257,15 @@ class GeneratedScene(VoiceoverScene):
         self.add(bg)
 
         with self.voiceover(text=narration) as tracker:
-            label = Text(scene_kind.upper(), font_size=20, color=BLUE_C)
-            label.to_edge(UP, buff=0.3)
-
             title = Text(heading, font_size=38, color=WHITE)
-            title.next_to(label, DOWN, buff=0.35)
+            title.to_edge(UP, buff=0.42)
+
+            label = Text(kind.replace("_", " ").upper(), font_size=18, color=BLUE_C)
+            label.next_to(title, DOWN, buff=0.18)
 
             card = RoundedRectangle(
-                width=10.6,
-                height=4.5,
+                width=10.8,
+                height=4.75,
                 corner_radius=0.25,
                 stroke_color=BLUE_C,
                 stroke_width=2,
@@ -212,34 +274,92 @@ class GeneratedScene(VoiceoverScene):
             )
             card.shift(DOWN * 0.35)
 
-            bullet_mobs = VGroup(
-                *[
-                    Text("• " + item, font_size=28, color=WHITE)
-                    for item in bullets_data
-                ]
-            )
-            bullet_mobs.arrange(DOWN, aligned_edge=LEFT, buff=0.35)
-            bullet_mobs.move_to(card.get_center())
+            self.play(FadeIn(card), FadeIn(label), Write(title), run_time=1.0)
 
-            accent = Circle(radius=0.18, color=YELLOW, fill_opacity=0.9)
-            accent.next_to(title, LEFT, buff=0.25)
+            if kind == "title":
+                icon = Circle(radius=0.82, color=YELLOW, fill_opacity=0.8)
+                ring = Circle(radius=1.12, color=BLUE_C)
+                icon.move_to(card.get_center() + UP * 0.15)
+                ring.move_to(icon)
+                subtitle = Text("A quick visual lesson", font_size=28, color=WHITE)
+                subtitle.next_to(icon, DOWN, buff=0.55)
+                self.play(GrowFromCenter(ring), FadeIn(icon), run_time=0.9)
+                self.play(Write(subtitle), run_time=0.8)
+                self.play(Rotate(ring, angle=PI / 6), Indicate(icon), run_time=1.0)
 
-            self.play(FadeIn(label), FadeIn(accent), Write(title), run_time=1.0)
-            self.play(FadeIn(card), run_time=0.6)
-            self.play(
-                LaggedStart(
-                    *[FadeIn(item, shift=UP * 0.2) for item in bullet_mobs],
-                    lag_ratio=0.18,
-                ),
-                run_time=2.0,
-            )
-            self.wait(0.4)
+            elif kind == "diagram":
+                labels = bullets_data[:3]
+                while len(labels) < 3:
+                    labels.append(["Start", "Process", "Result"][len(labels)])
+                left = Circle(radius=0.52, color=BLUE_C, fill_opacity=0.75).shift(LEFT * 3 + DOWN * 0.15)
+                mid = Square(side_length=1.02, color=GREEN_C, fill_opacity=0.75).shift(DOWN * 0.15)
+                right = Triangle(color=ORANGE, fill_opacity=0.75).scale(0.72).shift(RIGHT * 3 + DOWN * 0.15)
+                arrow1 = Arrow(left.get_right(), mid.get_left(), buff=0.25, color=WHITE)
+                arrow2 = Arrow(mid.get_right(), right.get_left(), buff=0.25, color=WHITE)
+                l1 = Text(labels[0], font_size=24, color=WHITE).next_to(left, DOWN, buff=0.34)
+                l2 = Text(labels[1], font_size=24, color=WHITE).next_to(mid, DOWN, buff=0.34)
+                l3 = Text(labels[2], font_size=24, color=WHITE).next_to(right, DOWN, buff=0.34)
+                goal = Text(visual_goal[:60] or "Step-by-step visual", font_size=20, color=BLUE_B)
+                goal.move_to(card.get_bottom() + UP * 0.45)
+                self.play(FadeIn(left), Write(l1), run_time=0.7)
+                self.play(GrowArrow(arrow1), FadeIn(mid), Write(l2), run_time=0.9)
+                self.play(GrowArrow(arrow2), FadeIn(right), Write(l3), run_time=0.9)
+                self.play(FadeIn(goal), Indicate(mid), run_time=1.0)
+
+            elif kind == "creative":
+                center = Dot(color=YELLOW).scale(1.6).move_to(card.get_center())
+                orbiters = VGroup()
+                labels = VGroup()
+                colors = [BLUE_C, GREEN_C, ORANGE, PURPLE_B]
+                for i, item in enumerate(bullets_data[:4]):
+                    angle = i * TAU / max(1, len(bullets_data[:4]))
+                    pos = card.get_center() + np.array([2.5 * np.cos(angle), 1.25 * np.sin(angle), 0])
+                    orb = Circle(radius=0.32, color=colors[i % len(colors)], fill_opacity=0.75).move_to(pos)
+                    txt = Text(item, font_size=21, color=WHITE).next_to(orb, DOWN, buff=0.22)
+                    orbiters.add(orb)
+                    labels.add(txt)
+                lines = VGroup(*[Line(center.get_center(), orb.get_center(), color=BLUE_E) for orb in orbiters])
+                self.play(FadeIn(center), run_time=0.5)
+                self.play(LaggedStart(*[Create(line) for line in lines], lag_ratio=0.1), run_time=0.8)
+                self.play(LaggedStart(*[FadeIn(o) for o in orbiters], lag_ratio=0.15), run_time=0.8)
+                self.play(LaggedStart(*[Write(t) for t in labels], lag_ratio=0.12), run_time=1.0)
+                self.play(Rotate(orbiters, angle=PI / 8, about_point=center.get_center()), Indicate(center), run_time=1.0)
+
+            else:
+                bullet_mobs = VGroup(
+                    *[
+                        Text("• " + item, font_size=28, color=WHITE)
+                        for item in bullets_data
+                    ]
+                )
+                bullet_mobs.arrange(DOWN, aligned_edge=LEFT, buff=0.36)
+                bullet_mobs.move_to(card.get_center())
+                accent = Circle(radius=0.16, color=YELLOW, fill_opacity=0.9)
+                accent.next_to(title, LEFT, buff=0.25)
+                self.play(FadeIn(accent), run_time=0.3)
+                self.play(
+                    LaggedStart(
+                        *[FadeIn(item, shift=UP * 0.2) for item in bullet_mobs],
+                        lag_ratio=0.18,
+                    ),
+                    run_time=1.8,
+                )
+                self.play(Indicate(bullet_mobs[0]), run_time=0.7)
+
+            remaining = max(0.1, tracker.duration - 4.2)
+            if remaining > 0.1:
+                self.wait(remaining)
 
         snapshot = list(self.mobjects)
         if snapshot:
             self.play(*[FadeOut(m) for m in snapshot], run_time=0.6)
         self.wait(0.1)
-'''.strip() + "\\n"
+'''.strip() + "\n"
+
+
+# Backward-compatible name used by the renderer's fallback branch.
+def build_scene_fallback_code(scene: dict[str, Any]) -> str:
+    return build_template_scene_code(scene)
 
 
 def _video_url_to_path(video_url: str) -> pathlib.Path:
@@ -256,22 +376,25 @@ def _render_scene_clip(
 ) -> tuple[pathlib.Path, dict[str, Any]]:
     scene_job_id = f"{final_job_id}_s{scene_index:02d}"
 
-    first_code = sanitize_minimally(code)
-    first = run_job_from_code(first_code, job_id=scene_job_id, timeout_seconds=240)
-    if first.get("ok") and first.get("video_url"):
-        return _video_url_to_path(first["video_url"]), {
+    safe_code = sanitize_minimally(code)
+    result = run_job_from_code(safe_code, job_id=scene_job_id, timeout_seconds=240)
+    if result.get("ok") and result.get("video_url"):
+        return _video_url_to_path(result["video_url"]), {
             "scene_index": scene_index,
             "used_fallback": False,
-            "job_id": first.get("job_id"),
+            "job_id": result.get("job_id"),
         }
 
+    # This should be rare because the primary scene is already a deterministic template.
     logger.warning(
-        "structured video scene %s failed; using fallback. error=%s",
+        "structured template scene %s failed; trying simplified fallback. error=%s",
         scene_index,
-        first.get("error") or first.get("error_log") or "unknown",
+        result.get("error") or result.get("error_log") or "unknown",
     )
 
-    fallback_code = build_scene_fallback_code(scene)
+    simple_scene = dict(scene)
+    simple_scene["kind"] = "key_points"
+    fallback_code = build_scene_fallback_code(simple_scene)
     fallback_job_id = f"{final_job_id}_s{scene_index:02d}_fallback"
     fallback = run_job_from_code(fallback_code, job_id=fallback_job_id, timeout_seconds=240)
 
@@ -279,8 +402,8 @@ def _render_scene_clip(
         return _video_url_to_path(fallback["video_url"]), {
             "scene_index": scene_index,
             "used_fallback": True,
-            "primary_error": first.get("error") or first.get("error_log"),
-            "primary_job_id": first.get("job_id"),
+            "primary_error": result.get("error") or result.get("error_log"),
+            "primary_job_id": result.get("job_id"),
             "fallback_job_id": fallback.get("job_id"),
         }
 
@@ -310,7 +433,7 @@ def _concat_clips(clips: list[pathlib.Path], final_mp4: pathlib.Path, logs_dir: 
     ffmpeg_bin = _find_ffmpeg()
     concat_file = logs_dir / "concat.txt"
     concat_file.write_text(
-        "\\n".join([f"file '{clip.as_posix()}'" for clip in clips]) + "\\n",
+        "\n".join([f"file '{clip.as_posix()}'" for clip in clips]) + "\n",
         encoding="utf-8",
     )
 
@@ -360,7 +483,8 @@ def _concat_clips(clips: list[pathlib.Path], final_mp4: pathlib.Path, logs_dir: 
     (logs_dir / "concat_reencode_stderr.txt").write_text(reencode_proc.stderr or "", encoding="utf-8")
 
     if reencode_proc.returncode != 0 or not final_mp4.exists():
-        raise RuntimeError(f"ffmpeg concat failed: {(reencode_proc.stderr or copy_proc.stderr)[-1000:]}")
+        detail = (reencode_proc.stderr or copy_proc.stderr or "")[-1000:]
+        raise RuntimeError(f"ffmpeg concat failed: {detail}")
 
 
 def _format_vtt_ts(total_sec: float) -> str:
@@ -396,14 +520,14 @@ def _write_vtt_from_plan(plan: dict[str, Any], out_path: pathlib.Path) -> None:
         lines.append("")
         cursor += duration
 
-    out_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _bundle_for_scene_code(plan: dict[str, Any], scene_codes: list[str], raw_bundle: str) -> str:
+def _bundle_for_scene_code(plan: dict[str, Any], scene_codes: list[str], raw_plan: str) -> str:
     pieces = [
-        "# Structured UpcurvEd Manim bundle",
-        "# This is not one monolithic Manim script.",
-        "# It contains the plan and the per-scene scripts used to build the final video.",
+        "# Structured UpcurvEd Manim bundle v2",
+        "# The LLM returned only the compact plan below.",
+        "# Python scene scripts were generated deterministically by the backend templates.",
         "",
         "<<<PLAN_JSON>>>",
         json.dumps(plan, ensure_ascii=True, indent=2),
@@ -420,8 +544,8 @@ def _bundle_for_scene_code(plan: dict[str, Any], scene_codes: list[str], raw_bun
             ]
         )
 
-    pieces.extend(["<<<RAW_MODEL_BUNDLE>>>", raw_bundle.strip(), "<<<END_RAW_MODEL_BUNDLE>>>", ""])
-    return "\\n".join(pieces)
+    pieces.extend(["<<<RAW_MODEL_PLAN>>>", (raw_plan or "").strip(), "<<<END_RAW_MODEL_PLAN>>>", ""])
+    return "\n".join(pieces)
 
 
 def generate_structured_manim_video(
@@ -440,28 +564,30 @@ def generate_structured_manim_video(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "structured_manim_generation_start job_id=%s provider=%s model=%s",
+        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=plan_only_templates",
         final_job_id,
         provider_name,
         model,
     )
 
-    raw_bundle = call_llm(
+    raw_plan = call_llm(
         provider=provider_name,
         api_key=api_key,
         model=model,
         system=STRUCTURED_VIDEO_SYSTEM,
         user=build_structured_video_user_prompt(prompt),
         temperature=0.35,
-        max_tokens=10000,
+        max_tokens=1800,
     )
 
-    (logs_dir / "structured_raw_bundle.txt").write_text(raw_bundle or "", encoding="utf-8")
-    plan, scene_codes = parse_structured_video_bundle(raw_bundle or "")
+    (logs_dir / "structured_raw_plan.txt").write_text(raw_plan or "", encoding="utf-8")
+    plan = parse_structured_video_plan(raw_plan or "", topic=prompt)
     (logs_dir / "structured_plan.json").write_text(
         json.dumps(plan, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
+
+    scene_codes = [build_template_scene_code(scene) for scene in plan["scenes"]]
 
     clips: list[pathlib.Path] = []
     scene_results: list[dict[str, Any]] = []
@@ -488,7 +614,7 @@ def generate_structured_manim_video(
     final_vtt = final_job_dir / "video.vtt"
     _write_vtt_from_plan(plan, final_vtt)
 
-    scene_code = _bundle_for_scene_code(plan, scene_codes, raw_bundle or "")
+    scene_code = _bundle_for_scene_code(plan, scene_codes, raw_plan or "")
     (final_job_dir / "scene_bundle.txt").write_text(scene_code, encoding="utf-8")
 
     used_fallback = any(bool(item.get("used_fallback")) for item in scene_results)
