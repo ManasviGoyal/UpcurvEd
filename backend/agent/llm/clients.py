@@ -5,15 +5,33 @@ import requests
 
 Provider = Literal["claude", "gemini", "openrouter"]
 
-# ---------- Open Router ----------
+
+def _default_openrouter_model() -> str:
+    """
+    Default to a specific free OpenRouter model for repeatable results.
+
+    Env precedence:
+    1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
+    2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
+    3. openai/gpt-oss-120b:free
+    """
+    return (
+        os.environ.get("OPENROUTER_MODEL")
+        or os.environ.get("OPENROUTER_FREE_MODEL")
+        or "openai/gpt-oss-120b:free"
+    ).strip() or "openai/gpt-oss-120b:free"
+
+
+# ---------- OpenRouter ----------
 def _call_openrouter(
     api_key: str,
     model: str | None,
-    system: str,
+    system: str | None,
     user: str,
     temperature: float = 0.2,
+    max_tokens: int | None = None,
 ) -> str:
-    model = model or os.environ.get("OPENROUTER_FREE_MODEL", "openrouter/free")
+    model = model or _default_openrouter_model()
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -22,14 +40,18 @@ def _call_openrouter(
         "X-OpenRouter-Title": os.environ.get("OPENROUTER_APP_TITLE", "UpcurvEd"),
     }
 
+    messages = []
+    if system and str(system).strip():
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user or ""})
+
     payload = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system or ""},
-            {"role": "user", "content": user or ""},
-        ],
+        "messages": messages,
         "temperature": temperature,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -121,7 +143,7 @@ def call_gemini(
     temperature: float = 0.2,
 ) -> str:
     """
-    Uses Google's official google-generativeai SDK to call Gemini 1.5.
+    Uses Google's official google-generativeai SDK to call Gemini.
     We attach system instruction to the GenerativeModel.
     """
     try:
@@ -136,8 +158,7 @@ def call_gemini(
             raise LLMError("Prompt is empty.")
 
         _with_genai_key(api_key)
-        # Use the same style as the user's working snippet.
-        # Configure safety settings to be permissive for educational content
+        # Configure safety settings to be permissive for educational content.
         safety_settings = {
             "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
             "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
@@ -161,7 +182,7 @@ def call_gemini(
         except Exception:
             text = ""
         if not text:
-            # Fallback: manually gather text parts from candidates
+            # Fallback: manually gather text parts from candidates.
             try:
                 candidates = getattr(resp, "candidates", []) or []
                 parts = []
@@ -175,7 +196,6 @@ def call_gemini(
                     if cparts is None and isinstance(content, dict):
                         cparts = content.get("parts")
                     for p in cparts or []:
-                        # p may be object with .text or dict {text:...}
                         val = getattr(p, "text", None)
                         if val is None and isinstance(p, dict):
                             val = p.get("text")
@@ -186,7 +206,6 @@ def call_gemini(
                 text = ""
 
         if not text:
-            # Provide details about why (e.g., safety finish_reason)
             finish = None
             try:
                 if getattr(resp, "candidates", None):
@@ -194,7 +213,6 @@ def call_gemini(
             except Exception:
                 pass
             pf = getattr(resp, "prompt_feedback", None)
-            # finish_reason: 1=STOP (normal), 2=SAFETY, 3=RECITATION, 4=OTHER
             error_msg = f"Gemini returned empty text. finish_reason={finish}"
             if finish == 2:
                 error_msg = (
@@ -246,12 +264,17 @@ def call_llm(
             max_output_tokens=max_output_tokens or 8192,
         )
     elif provider == "openrouter":
+        # OpenRouter supports exact model IDs like:
+        # - openai/gpt-oss-120b:free
+        # - openai/gpt-oss-20b:free
+        # - openrouter/free
         return _call_openrouter(
             api_key=api_key,
             model=model,
             system=system,
             user=user,
             temperature=temperature,
+            max_tokens=max_tokens or max_output_tokens,
         )
     else:
         raise LLMError(f"Unknown provider: {provider}")

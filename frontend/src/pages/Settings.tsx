@@ -27,15 +27,35 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   "": "Auto (by available key)",
   claude: "Claude (Anthropic)",
   gemini: "Gemini (Google)",
-  openrouter: "OpenRouter Free",
+  openrouter: "OpenRouter",
 };
 
 const PROVIDER_MODELS: Record<Provider, string[]> = {
   "": [],
   claude: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
   gemini: ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
-  openrouter: ["openrouter/free"],
+  openrouter: [
+    "openai/gpt-oss-120b:free",
+    "openai/gpt-oss-20b:free",
+    "openrouter/free",
+  ],
 };
+
+const MODEL_HELP: Record<Provider, string> = {
+  "": "Select a provider first.",
+  claude: "Choose a Claude model, or type another exact Anthropic model ID.",
+  gemini: "Choose a Gemini model, or type another exact Google model ID.",
+  openrouter:
+    "Choose a specific free OpenRouter model such as openai/gpt-oss-120b:free, or type any exact OpenRouter model ID.",
+};
+
+const normalizeApiKeys = (keys?: Partial<ApiKeys>): ApiKeys => ({
+  claude: keys?.claude || "",
+  gemini: keys?.gemini || "",
+  openrouter: keys?.openrouter || "",
+  provider: keys?.provider || "",
+  model: keys?.model || "",
+});
 
 export const SettingsPage = ({
   setView,
@@ -48,13 +68,7 @@ export const SettingsPage = ({
   onResetLocalData,
 }: SettingsPageProps) => {
   const [displayName, setDisplayName] = useState<string>(user.name || "");
-  const [localKeys, setLocalKeys] = useState<ApiKeys>({
-    claude: apiKeys.claude || "",
-    gemini: apiKeys.gemini || "",
-    openrouter: apiKeys.openrouter || "",
-    provider: apiKeys.provider || "",
-    model: apiKeys.model || "",
-  });
+  const [localKeys, setLocalKeys] = useState<ApiKeys>(normalizeApiKeys(apiKeys));
   const [secureStorageEnabled, setSecureStorageEnabled] = useState<boolean>(false);
   const [useSecureStorage, setUseSecureStorage] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
@@ -67,7 +81,7 @@ export const SettingsPage = ({
       const loaded = await loadApiKeysForUser(user.email);
       if (!cancelled) {
         const secureEnabled = desktopLocal ? isSecureStorageEnabledForUser(user.email) : false;
-        setLocalKeys(loaded);
+        setLocalKeys(normalizeApiKeys(loaded));
         setSecureStorageEnabled(secureEnabled);
         setUseSecureStorage(secureEnabled);
       }
@@ -90,9 +104,11 @@ export const SettingsPage = ({
     setStatusMessage("");
 
     try {
+      const keysToSave = normalizeApiKeys(localKeys);
+
       if (desktopLocal && useSecureStorage) {
-        const result = await persistApiKeysSecurelyForUser(user.email, localKeys);
-        setApiKeys(localKeys);
+        const result = await persistApiKeysSecurelyForUser(user.email, keysToSave);
+        setApiKeys(keysToSave);
 
         if (result.ok) {
           setSecureStorageEnabled(true);
@@ -111,8 +127,8 @@ export const SettingsPage = ({
       }
 
       await clearSecurelyStoredApiKeysForUser(user.email);
-      await persistApiKeysForUser(user.email, localKeys);
-      setApiKeys(localKeys);
+      await persistApiKeysForUser(user.email, keysToSave);
+      setApiKeys(keysToSave);
       setSecureStorageEnabled(false);
       setUseSecureStorage(false);
       setView("chat");
@@ -135,6 +151,10 @@ export const SettingsPage = ({
         : "",
     }));
   };
+
+  const selectedProvider = localKeys.provider || "";
+  const selectedProviderModels = PROVIDER_MODELS[selectedProvider] || [];
+  const modelListId = `provider-models-${selectedProvider || "none"}`;
 
   return (
     <div
@@ -190,7 +210,7 @@ export const SettingsPage = ({
             <label className="text-sm font-medium">Provider</label>
             <select
               className="border rounded px-3 py-2 bg-background"
-              value={localKeys.provider || ""}
+              value={selectedProvider}
               onChange={(e) => handleProviderChange(e.target.value as Provider)}
             >
               {Object.entries(PROVIDER_LABELS).map(([val, label]) => (
@@ -202,20 +222,22 @@ export const SettingsPage = ({
           </div>
 
           <div className="grid grid-cols-1 gap-2">
-            <label className="text-sm font-medium">Model (optional)</label>
-            <select
-              className="border rounded px-3 py-2 bg-background"
+            <label className="text-sm font-medium">Model</label>
+            <Input
+              list={modelListId}
               value={localKeys.model || ""}
               onChange={(e) => setLocalKeys({ ...localKeys, model: e.target.value })}
-              disabled={!localKeys.provider}
-            >
-              <option value="">{localKeys.provider ? "Choose..." : "Select provider first"}</option>
-              {(PROVIDER_MODELS[localKeys.provider || ""] || []).map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
+              disabled={!selectedProvider}
+              placeholder={selectedProvider ? "Choose or type exact model ID" : "Select provider first"}
+            />
+            <datalist id={modelListId}>
+              {selectedProviderModels.map((m) => (
+                <option key={m} value={m} />
               ))}
-            </select>
+            </datalist>
+            <p className="text-xs text-muted-foreground">
+              {MODEL_HELP[selectedProvider]}
+            </p>
           </div>
 
           {desktopLocal && (

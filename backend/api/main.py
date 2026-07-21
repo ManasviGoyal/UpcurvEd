@@ -1,4 +1,3 @@
-# backend/api/main.py
 import json
 import logging
 import mimetypes
@@ -98,16 +97,11 @@ def _run_to_code(
     provider_keys: dict | None = None,
     provider: str | None = None,
     model: str | None = None,
-    job_id: str | None = None,
 ) -> tuple[str, str | None, bool, str | None, str | None]:
     from backend.agent.graph import run_to_code as _run_to_code_canonical
 
     return _run_to_code_canonical(
-        prompt=prompt,
-        provider_keys=provider_keys,
-        provider=provider,
-        model=model,
-        job_id=job_id,
+        prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
     )
 
 
@@ -116,14 +110,9 @@ def run_to_code(
     provider_keys: dict | None = None,
     provider: str | None = None,
     model: str | None = None,
-    job_id: str | None = None,
 ):
     return _run_to_code(
-        prompt=prompt,
-        provider_keys=provider_keys,
-        provider=provider,
-        model=model,
-        job_id=job_id,
+        prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
     )
 
 
@@ -264,12 +253,26 @@ _PROVIDER_ENV_KEYS = {
     "openrouter": "OPENROUTER_API_KEY",
 }
 
+def _default_openrouter_model() -> str:
+    """
+    Default to a specific free OpenRouter model for repeatable results.
+
+    Env precedence:
+    1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
+    2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
+    3. openai/gpt-oss-120b:free
+    """
+    return (
+        os.environ.get("OPENROUTER_MODEL")
+        or os.environ.get("OPENROUTER_FREE_MODEL")
+        or "openai/gpt-oss-120b:free"
+    ).strip() or "openai/gpt-oss-120b:free"
+
+
 _DEFAULT_MODELS = {
     "claude": "claude-haiku-4-5",
     "gemini": "gemini-3-flash-preview",
-    # OpenRouter's free router selects among free OpenRouter models.
-    "openrouter": os.environ.get("OPENROUTER_FREE_MODEL", "openrouter/free").strip()
-    or "openrouter/free",
+    "openrouter": _default_openrouter_model(),
 }
 
 
@@ -541,7 +544,6 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                 provider_keys=provider_keys,
                 provider=provider,
                 model=model,
-                job_id=body.jobId,
             )
 
         if render_ok and video_url:
@@ -801,131 +803,6 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
     key = _get_provider_key(provider, body.keys)
     if not key:
         raise HTTPException(status_code=400, detail=f"Missing API key for '{provider}'")
-
-    # Structured scene-bundle videos are edited by editing the scene plan, not by
-    # asking the LLM to patch one huge Python file. This keeps scene stitching stable.
-    try:
-        from backend.agent.structured_video import (
-            edit_structured_manim_video,
-            is_structured_scene_bundle,
-        )
-
-        if is_structured_scene_bundle(body.original_code):
-            provider_keys = _provider_keys_with_env(body.keys)
-            structured_result = edit_structured_manim_video(
-                original_bundle=body.original_code,
-                edit_instructions=body.edit_instructions,
-                provider=provider,
-                model=model,
-                provider_keys=provider_keys,
-                job_id=body.jobId,
-            )
-
-            if not structured_result.get("ok") or not structured_result.get("video_url"):
-                return {
-                    "ok": False,
-                    "status": "error",
-                    "error": "structured_edit_failed",
-                    "message": "Structured video edit failed.",
-                    "video_url": None,
-                    "render_result": structured_result,
-                }
-
-            video_url = structured_result["video_url"]
-            code = structured_result.get("scene_code") or body.original_code
-            job_id = structured_result.get("job_id") or body.jobId or "unknown"
-            gcs_bucket = _get_bucket_name()
-            signed_video_url = None
-            signed_subtitle_url = None
-            saved_artifact_id = None
-            gcs_path = None
-            relative_path = video_url.replace("/static/", "")
-            p = pathlib.Path(STORAGE) / relative_path
-
-            if gcs_bucket and p.exists():
-                try:
-                    data = p.read_bytes()
-                    content_type = mimetypes.guess_type(p.name)[0] or "video/mp4"
-                    gcs_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.mp4"
-                    _upload_bytes(gcs_bucket, gcs_path, data, content_type)
-                    signed_video_url = _sign_url(gcs_bucket, gcs_path)
-                    saved_artifact_id = _save_artifact(
-                        uid, body.chatId, "video", gcs_path, len(data), content_type, derived=False
-                    )
-
-                    vtt_url = structured_result.get("vtt_url")
-                    if vtt_url:
-                        vtt_relative = str(vtt_url).replace("/static/", "")
-                        vtt_local = pathlib.Path(STORAGE) / vtt_relative
-                    else:
-                        vtt_local = p.with_suffix(".vtt")
-                    if vtt_local.exists():
-                        vtt_bytes = vtt_local.read_bytes()
-                        vtt_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/video_{job_id}.vtt"
-                        _upload_bytes(gcs_bucket, vtt_path, vtt_bytes, "text/vtt")
-                        signed_subtitle_url = _sign_url(gcs_bucket, vtt_path)
-                        _save_artifact(
-                            uid,
-                            body.chatId,
-                            "subtitle",
-                            vtt_path,
-                            len(vtt_bytes),
-                            "text/vtt",
-                            derived=True,
-                        )
-
-                    py_bytes = code.encode("utf-8")
-                    py_path = f"{uid}/chats/{body.chatId or 'uncategorized'}/scene_{job_id}.txt"
-                    _upload_bytes(gcs_bucket, py_path, py_bytes, "text/plain")
-                    _save_artifact(
-                        uid,
-                        body.chatId,
-                        "script",
-                        py_path,
-                        len(py_bytes),
-                        "text/plain",
-                        derived=True,
-                    )
-                except Exception as e:
-                    logger.warning("GCS upload failed for structured edit: %s", e)
-
-            if gcs_bucket:
-                if not signed_video_url:
-                    return {
-                        "ok": False,
-                        "status": "error",
-                        "error": "gcs_upload_failed",
-                        "message": "Edited video generated but GCS upload failed.",
-                    }
-                final_video_url = signed_video_url
-            else:
-                final_video_url = video_url
-                signed_subtitle_url = structured_result.get("vtt_url") or signed_subtitle_url
-
-            return {
-                "ok": True,
-                "status": "ok",
-                "video_url": final_video_url,
-                "signed_video_url": signed_video_url,
-                "signed_subtitle_url": signed_subtitle_url,
-                "artifact_id": saved_artifact_id,
-                "gcs_path": gcs_path,
-                "scene_code": code,
-                "scene_plan": structured_result.get("scene_plan"),
-                "generation_mode": "structured_scene_bundle",
-                "message": "Video edited successfully.",
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("/edit structured path failed: %s", e)
-        return {
-            "ok": False,
-            "status": "error",
-            "error": "structured_edit_failed",
-            "message": f"Structured video edit failed: {str(e)[:500]}",
-            "video_url": None,
-        }
 
     instructions_lower = body.edit_instructions.lower()
     wants_all = any(
