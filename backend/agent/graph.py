@@ -1,6 +1,7 @@
 # backend/agent/graph.py
 import json
 import logging
+import os
 import time
 
 from langgraph.graph import END, StateGraph
@@ -11,6 +12,7 @@ from .nodes.draft_code import draft_code_node
 from .nodes.log_failure import log_failure_node
 from .nodes.render import render_manim_node
 from .state import AgentState
+from .structured_video import generate_structured_manim_video
 
 logger = logging.getLogger(f"app.{__name__}")
 
@@ -74,6 +76,7 @@ def run_to_code(
     provider: str | None = None,
     model: str | None = None,
     max_tries: int = 2,
+    job_id: str | None = None,
 ) -> tuple[str, str | None, bool, str | None, str | None]:
     """
     Returns 5 values:
@@ -81,8 +84,59 @@ def run_to_code(
 
     max_tries is kept only for temporary call-site compatibility and is unused.
     """
-    app = build_graph()
     overall_start = time.perf_counter()
+
+    # Default standard video generation now uses the structured scene-bundle
+    # pipeline. Set UPCURVED_LEGACY_VIDEO_PIPELINE=1 to temporarily use the old
+    # monolithic Manim graph while debugging.
+    if os.getenv("UPCURVED_LEGACY_VIDEO_PIPELINE", "0") != "1":
+        try:
+            structured = generate_structured_manim_video(
+                prompt=prompt,
+                provider_keys=provider_keys,
+                provider=provider,
+                model=model,
+                job_id=job_id,
+            )
+            total_duration = time.perf_counter() - overall_start
+            code = structured.get("scene_code") or ""
+            render_ok = bool(structured.get("ok") and structured.get("video_url"))
+
+            record = {
+                "total_duration_s": total_duration,
+                "timings": structured.get("scene_results", []),
+                "render_ok": render_ok,
+                "job_id": structured.get("job_id"),
+                "prompt_length": len(prompt),
+                "code_length": len(code),
+                "compile_log_length": 0,
+                "provider": provider,
+                "model": model,
+                "generation_mode": "structured_scene_bundle",
+                "used_fallback": structured.get("used_fallback"),
+                "failure_detail": None,
+                "timestamp": time.time(),
+                "status": "success" if render_ok else "failed",
+            }
+            try:
+                logger.info("agent_manim_generation %s", json.dumps(record))
+            except Exception:
+                logger.exception("Failed to log agent metrics")
+
+            return (
+                code,
+                structured.get("video_url"),
+                render_ok,
+                structured.get("job_id"),
+                None if render_ok else "Structured video generation failed.",
+            )
+        except Exception as structured_error:
+            logger.exception(
+                "structured_manim_generation failed; falling back to legacy graph: %s",
+                structured_error,
+            )
+
+    app = build_graph()
 
     initial: AgentState = {
         "user_prompt": prompt,

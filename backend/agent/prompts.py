@@ -191,6 +191,131 @@ def build_code_user_prompt(
     """).strip()
 
 
+
+# -------- STRUCTURED VIDEO PROMPTS (Plan + per-scene Manim) --------
+
+STRUCTURED_VIDEO_SYSTEM = dedent("""\
+    You generate a structured Manim video bundle.
+
+    Return ONLY this exact format. No markdown. No explanations.
+
+    <<<PLAN_JSON>>>
+    {
+      "title": "...",
+      "audience": "general",
+      "scenes": [
+        {
+          "id": 1,
+          "kind": "title",
+          "heading": "...",
+          "narration": "...",
+          "bullets": ["...", "..."],
+          "duration_sec": 6
+        },
+        {
+          "id": 2,
+          "kind": "key_points",
+          "heading": "...",
+          "narration": "...",
+          "bullets": ["...", "...", "..."],
+          "duration_sec": 8
+        },
+        {
+          "id": 3,
+          "kind": "diagram",
+          "heading": "...",
+          "narration": "...",
+          "bullets": ["...", "...", "..."],
+          "visual_goal": "...",
+          "duration_sec": 10
+        },
+        {
+          "id": 4,
+          "kind": "creative",
+          "heading": "...",
+          "narration": "...",
+          "bullets": ["...", "...", "..."],
+          "visual_goal": "...",
+          "duration_sec": 10
+        },
+        {
+          "id": 5,
+          "kind": "recap",
+          "heading": "...",
+          "narration": "...",
+          "bullets": ["...", "...", "..."],
+          "duration_sec": 8
+        }
+      ]
+    }
+    <<<END_PLAN_JSON>>>
+
+    Then return exactly one complete Manim Python script for each scene:
+
+    <<<SCENE_1_CODE>>>
+    from manim import *
+    from manim_voiceover import VoiceoverScene
+    from manim_voiceover.services.gtts import GTTSService
+
+    class GeneratedScene(VoiceoverScene):
+        def construct(self):
+            ...
+    <<<END_SCENE_1_CODE>>>
+
+    Repeat for SCENE_2_CODE through SCENE_5_CODE.
+
+    Global rules:
+    - Exactly 5 scenes.
+    - Each scene must be independently runnable with:
+      manim -ql scene.py GeneratedScene
+    - Each scene must define exactly one class named GeneratedScene.
+    - Each scene must call self.set_speech_service(GTTSService(lang="en")).
+    - Each scene must use with self.voiceover(text="...") as tracker.
+    - No external files.
+    - No ImageMobject.
+    - No SVGMobject.
+    - No MathTex or Tex.
+    - Use Text or MarkupText only.
+    - No network, os, pathlib, requests, urllib, httpx, or filesystem imports.
+    - Do not invent style kwargs ending in _style.
+    - Prefer simple Manim primitives: Text, VGroup, Circle, Square, Rectangle,
+      RoundedRectangle, Arrow, Line, Dot, NumberLine, Axes, BarChart.
+    - For 3D scenes, only use 3D in scene 4. If scene 4 uses 3D methods or
+      3D objects, the class must be:
+      class GeneratedScene(VoiceoverScene, ThreeDScene):
+    - If a scene is complex, make it simpler rather than using risky APIs.
+    - Scene code should be concise: aim for under 120 lines per scene.
+    - Narration should be one short sentence per scene.
+    - Bullets should be short, max 8 words each.
+
+    Structure:
+    - Scene 1 title: safe title card, topic, simple icon.
+    - Scene 2 key_points: safe bullets or comparison layout.
+    - Scene 3 diagram: arrows, labels, process flow, timeline, or chart.
+    - Scene 4 creative: more visual/animated/optional 3D, but still runnable.
+    - Scene 5 recap: safe summary and takeaway.
+
+    Cleanup:
+    At the end of every voiceover block:
+        snapshot = list(self.mobjects)
+        if snapshot:
+            self.play(*[FadeOut(m) for m in snapshot])
+        self.wait(0.1)
+""")
+
+
+def build_structured_video_user_prompt(goal: str) -> str:
+    return dedent(f"""\
+        Teaching goal:
+        {goal}
+
+        Create the full structured video bundle now.
+
+        The plan and all 5 scene scripts must be returned in one response.
+        Do not omit any scene.
+    """).strip()
+
+
 # -------- EDIT (diff-based) PROMPTS --------
 
 EDIT_SYSTEM = dedent("""\

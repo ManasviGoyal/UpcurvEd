@@ -98,11 +98,16 @@ def _run_to_code(
     provider_keys: dict | None = None,
     provider: str | None = None,
     model: str | None = None,
+    job_id: str | None = None,
 ) -> tuple[str, str | None, bool, str | None, str | None]:
     from backend.agent.graph import run_to_code as _run_to_code_canonical
 
     return _run_to_code_canonical(
-        prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
+        prompt=prompt,
+        provider_keys=provider_keys,
+        provider=provider,
+        model=model,
+        job_id=job_id,
     )
 
 
@@ -111,9 +116,14 @@ def run_to_code(
     provider_keys: dict | None = None,
     provider: str | None = None,
     model: str | None = None,
+    job_id: str | None = None,
 ):
     return _run_to_code(
-        prompt=prompt, provider_keys=provider_keys, provider=provider, model=model
+        prompt=prompt,
+        provider_keys=provider_keys,
+        provider=provider,
+        model=model,
+        job_id=job_id,
     )
 
 
@@ -531,6 +541,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                 provider_keys=provider_keys,
                 provider=provider,
                 model=model,
+                job_id=body.jobId,
             )
 
         if render_ok and video_url:

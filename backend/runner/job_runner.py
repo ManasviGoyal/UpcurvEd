@@ -407,8 +407,22 @@ def run_job_from_code(
 
 
 def cancel_job(job_id: str):
-    """Attempt to terminate a running job by job_id. Never raises; returns a dict."""
+    """Attempt to terminate a running job by job_id. Never raises; returns a dict.
+
+    Structured videos render scene clips with child job ids such as
+    <job_id>_s01. If the exact id is not active, cancel the active child.
+    """
+    actual_job_id = job_id
     proc = ACTIVE_PROCS.get(job_id)
+
+    if proc is None:
+        prefix = f"{job_id}_"
+        for active_id, active_proc in list(ACTIVE_PROCS.items()):
+            if active_id.startswith(prefix):
+                actual_job_id = active_id
+                proc = active_proc
+                break
+
     job_dir = STORAGE / "jobs" / job_id
     logs_dir = job_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -418,13 +432,13 @@ def cancel_job(job_id: str):
         return {"status": "not_found", "job_id": job_id}
 
     if proc.poll() is not None:
-        ACTIVE_PROCS.pop(job_id, None)
-        (logs_dir / "cancel.txt").write_text("already exited")
-        return {"status": "already_finished", "job_id": job_id}
+        ACTIVE_PROCS.pop(actual_job_id, None)
+        (logs_dir / "cancel.txt").write_text(f"already exited: {actual_job_id}")
+        return {"status": "already_finished", "job_id": job_id, "actual_job_id": actual_job_id}
 
     try:
         _kill_proc_tree(proc)
     finally:
-        ACTIVE_PROCS.pop(job_id, None)
-        (logs_dir / "cancel.txt").write_text("canceled")
-    return {"status": "canceled", "job_id": job_id}
+        ACTIVE_PROCS.pop(actual_job_id, None)
+        (logs_dir / "cancel.txt").write_text(f"canceled: {actual_job_id}")
+    return {"status": "canceled", "job_id": job_id, "actual_job_id": actual_job_id}
