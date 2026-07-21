@@ -35,7 +35,7 @@ const PROVIDER_MODELS: Record<Provider, string[]> = {
   claude: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
   gemini: ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
   openrouter: [
-    "moonshotai/kimi-k2:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
     "openai/gpt-oss-20b:free",
     "openrouter/free",
   ],
@@ -46,7 +46,7 @@ const MODEL_HELP: Record<Provider, string> = {
   claude: "Choose a Claude model, or type another exact Anthropic model ID.",
   gemini: "Choose a Gemini model, or type another exact Google model ID.",
   openrouter:
-    "Choose a specific free OpenRouter model such as moonshotai/kimi-k2:free, or type any exact OpenRouter model ID.",
+    "Choose a specific free OpenRouter model such as nvidia/nemotron-3-ultra-550b-a55b:free, or type any exact OpenRouter model ID.",
 };
 
 const normalizeApiKeys = (keys?: Partial<ApiKeys>): ApiKeys => ({

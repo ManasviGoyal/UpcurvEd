@@ -260,13 +260,13 @@ def _default_openrouter_model() -> str:
     Env precedence:
     1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
     2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
-    3. moonshotai/kimi-k2:free
+    3. nvidia/nemotron-3-ultra-550b-a55b:free
     """
     return (
         os.environ.get("OPENROUTER_MODEL")
         or os.environ.get("OPENROUTER_FREE_MODEL")
-        or "moonshotai/kimi-k2:free"
-    ).strip() or "moonshotai/kimi-k2:free"
+        or "nvidia/nemotron-3-ultra-550b-a55b:free"
+    ).strip() or "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
 _DEFAULT_MODELS = {
