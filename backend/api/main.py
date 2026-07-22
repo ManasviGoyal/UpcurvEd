@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 from difflib import SequenceMatcher
 from typing import Literal
 from uuid import uuid4
@@ -450,6 +451,16 @@ class BurnCaptionsIn(BaseModel):
     chatId: str | None = None
 
 
+class AudioPackageIn(BaseModel):
+    audio_url: str
+    subtitle_url: str | None = None
+    subtitle_text: str | None = None
+    filename: str | None = None
+    artifactId: str | None = None
+    gcsPath: str | None = None
+    chatId: str | None = None
+
+
 class ChatCreateIn(BaseModel):
     title: str | None = Field(default="New Chat")
     model: str | None = None
@@ -704,6 +715,57 @@ def _safe_media_filename(name: str | None, fallback: str) -> str:
     if not raw.lower().endswith(".mp4"):
         raw += ".mp4"
     return raw
+
+
+def _safe_filename_with_extension(name: str | None, fallback: str, extension: str) -> str:
+    ext = extension if extension.startswith(".") else f".{extension}"
+    raw = (name or fallback or f"upcurved_export{ext}").strip()
+    raw = re.sub(r"[^a-zA-Z0-9._-]+", "_", raw)
+    raw = re.sub(r"_+", "_", raw).strip("._") or fallback
+    if not raw.lower().endswith(ext.lower()):
+        raw = re.sub(r"\.[a-zA-Z0-9]{1,8}$", "", raw)
+        raw += ext
+    return raw
+
+
+def _caption_text_to_vtt(caption_text: str) -> str:
+    clean = (caption_text or "").replace("\r\n", "\n").strip()
+    if not clean:
+        raise ValueError("caption text is empty")
+    if clean.upper().startswith("WEBVTT"):
+        return clean + "\n"
+    return _srt_to_vtt_text(clean)
+
+
+def _caption_text_to_transcript(caption_text: str) -> str:
+    """Convert VTT/SRT caption text into a simple readable transcript."""
+    text = (caption_text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    lines: list[str] = []
+    previous = ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        upper = line.upper()
+        if upper == "WEBVTT" or upper.startswith(("NOTE", "STYLE", "REGION", "KIND:", "LANGUAGE:")):
+            continue
+        if "-->" in line:
+            continue
+        if re.fullmatch(r"\d+", line):
+            continue
+        line = re.sub(r"<[^>]+>", "", line)
+        line = re.sub(r"\{[^}]+\}", "", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line or line == previous:
+            continue
+        lines.append(line)
+        previous = line
+
+    transcript = "\n".join(lines).strip()
+    return transcript + "\n" if transcript else ""
 
 
 def _ffmpeg_filter_path(path: pathlib.Path) -> str:
@@ -2713,6 +2775,104 @@ def burn_captions_video(body: BurnCaptionsIn, uid: str = Depends(require_firebas
         except Exception:
             pass
 
+
+
+@app.post("/api/media/audio-package")
+def audio_package(body: AudioPackageIn, uid: str = Depends(require_firebase_user)):
+    """
+    Create a ZIP package for podcast/audio downloads when CC is toggled on.
+
+    The right-panel Download button uses this only for audio + CC:
+    - CC off: frontend downloads the MP3 directly.
+    - CC on: backend returns a ZIP with audio, captions.vtt, and transcript.txt.
+    """
+    if not body.audio_url or not str(body.audio_url).strip():
+        raise HTTPException(status_code=400, detail="audio_url is required")
+
+    if not (body.subtitle_text and body.subtitle_text.strip()) and not (
+        body.subtitle_url and str(body.subtitle_url).strip()
+    ):
+        raise HTTPException(status_code=400, detail="subtitle_url or subtitle_text is required")
+
+    export_id = f"audio_pkg_{uuid4().hex[:8]}"
+    job_dir = pathlib.Path(STORAGE) / "jobs" / export_id
+    out_path = job_dir / "podcast_package.zip"
+    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="upcurved_audio_pkg_"))
+
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        audio_path = _download_url_to_file(str(body.audio_url), tmp_dir / "podcast.mp3")
+        caption_path = _materialize_caption_file(
+            subtitle_url=str(body.subtitle_url) if body.subtitle_url else None,
+            subtitle_text=body.subtitle_text,
+            tmp_dir=tmp_dir,
+        )
+        raw_caption_text = caption_path.read_text(encoding="utf-8", errors="ignore")
+        vtt_text = _caption_text_to_vtt(raw_caption_text)
+        transcript_text = _caption_text_to_transcript(vtt_text)
+        if not transcript_text.strip():
+            transcript_text = "Transcript could not be extracted from the caption file.\n"
+
+        base_filename = _safe_filename_with_extension(body.filename, "upcurved_podcast_package.zip", ".zip")
+        audio_suffix = audio_path.suffix.lower() if audio_path.suffix else ".mp3"
+        if audio_suffix not in {".mp3", ".m4a", ".wav", ".aac", ".ogg"}:
+            audio_suffix = ".mp3"
+
+        with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(audio_path, arcname=f"podcast{audio_suffix}")
+            zf.writestr("captions.vtt", vtt_text)
+            zf.writestr("transcript.txt", transcript_text)
+
+        download_url = to_static_url(out_path)
+        signed_url = None
+        gcs_path = None
+        artifact_id = None
+
+        gcs_bucket = _get_bucket_name()
+        if gcs_bucket:
+            data = out_path.read_bytes()
+            chat_path = body.chatId or "uncategorized"
+            gcs_path = f"{uid}/chats/{chat_path}/exports/{export_id}_{base_filename}"
+            _upload_bytes(gcs_bucket, gcs_path, data, "application/zip")
+            signed_url = _sign_url(gcs_bucket, gcs_path)
+            artifact_id = _save_artifact(
+                uid,
+                body.chatId,
+                "audio_package",
+                gcs_path,
+                len(data),
+                "application/zip",
+                derived=True,
+            )
+            download_url = signed_url
+
+        return {
+            "ok": True,
+            "status": "ok",
+            "download_url": download_url,
+            "signed_download_url": signed_url,
+            "filename": base_filename,
+            "job_id": export_id,
+            "artifact_id": artifact_id,
+            "gcs_path": gcs_path,
+            "message": "Podcast package created.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("/api/media/audio-package failed: %s", e)
+        return diagnostic_error_response(
+            feature="podcast",
+            step="audio package download",
+            error=e,
+            status_code=500,
+        )
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 

@@ -4797,10 +4797,28 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     let downloadSource = videoUrl;
 
     try {
+      const hasCaptions = Boolean(vttUrl || srtText || activeScript);
       const shouldBurnCaptions =
         currentMediaMeta?.type === 'video' &&
         isCaptionsOn &&
-        Boolean(vttUrl || srtText || activeScript);
+        hasCaptions;
+      const shouldPackageAudioCaptions =
+        currentMediaMeta?.type === 'audio' &&
+        isCaptionsOn &&
+        hasCaptions;
+
+      let subtitleText = activeScript || srtText || undefined;
+
+      // If captions are currently displayed from a generated blob URL, the backend
+      // cannot fetch that URL directly, so send the caption text in the request.
+      if (!subtitleText && vttUrl && /^blob:/i.test(vttUrl)) {
+        try {
+          const captionResponse = await fetch(vttUrl);
+          if (captionResponse.ok) {
+            subtitleText = await captionResponse.text();
+          }
+        } catch {}
+      }
 
       if (shouldBurnCaptions) {
         toast({
@@ -4808,19 +4826,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           description: 'Burning captions into the MP4. This may take a moment.',
           duration: 5000,
         });
-
-        let subtitleText = activeScript || srtText || undefined;
-
-        // If captions are currently displayed from a generated blob URL, the backend
-        // cannot fetch that URL directly, so send the caption text in the request.
-        if (!subtitleText && vttUrl && /^blob:/i.test(vttUrl)) {
-          try {
-            const captionResponse = await fetch(vttUrl);
-            if (captionResponse.ok) {
-              subtitleText = await captionResponse.text();
-            }
-          } catch {}
-        }
 
         const captionedFilename = fileName.replace(/\.mp4$/i, '_captions.mp4');
         const burnResponse = await apiFetch('/api/media/burn-captions', {
@@ -4832,6 +4837,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             filename: captionedFilename,
             artifactId: currentMediaMeta?.artifactId,
             gcsPath: currentMediaMeta?.gcsPath,
+            chatId: activeChatId != null ? String(activeChatId) : undefined,
           }),
         });
 
@@ -4839,7 +4845,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           let detail = `caption burn failed: ${burnResponse.status}`;
           try {
             const payload = await burnResponse.json();
-            detail = payload?.detail || payload?.message || detail;
+            detail = payload?.error || payload?.detail || payload?.message || detail;
           } catch {}
           throw new Error(detail);
         }
@@ -4847,6 +4853,39 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const burnData = await burnResponse.json();
         downloadSource = apiUrl(burnData.download_url || burnData.signed_video_url || burnData.video_url);
         fileName = burnData.filename || captionedFilename;
+      } else if (shouldPackageAudioCaptions) {
+        toast({
+          title: 'Preparing podcast package',
+          description: 'Creating a ZIP with audio, captions, and transcript.',
+          duration: 5000,
+        });
+
+        const packageFilename = fileName.replace(/\.[a-z0-9]+$/i, '_captions.zip');
+        const packageResponse = await apiFetch('/api/media/audio-package', {
+          method: 'POST',
+          body: JSON.stringify({
+            audio_url: videoUrl,
+            subtitle_url: vttUrl && !/^blob:/i.test(vttUrl) ? vttUrl : undefined,
+            subtitle_text: subtitleText,
+            filename: packageFilename,
+            artifactId: currentMediaMeta?.artifactId,
+            gcsPath: currentMediaMeta?.gcsPath,
+            chatId: activeChatId != null ? String(activeChatId) : undefined,
+          }),
+        });
+
+        if (!packageResponse.ok) {
+          let detail = `audio package failed: ${packageResponse.status}`;
+          try {
+            const payload = await packageResponse.json();
+            detail = payload?.error || payload?.detail || payload?.message || detail;
+          } catch {}
+          throw new Error(detail);
+        }
+
+        const packageData = await packageResponse.json();
+        downloadSource = apiUrl(packageData.download_url || packageData.signed_download_url);
+        fileName = packageData.filename || packageFilename;
       }
 
       const response = await fetch(downloadSource);
@@ -4865,7 +4904,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       window.URL.revokeObjectURL(url);
       toast({
         title: 'Download started',
-        description: shouldBurnCaptions ? 'Captioned video download initiated' : 'File download initiated',
+        description: shouldBurnCaptions
+          ? 'Captioned video download initiated'
+          : shouldPackageAudioCaptions
+            ? 'Podcast package download initiated'
+            : 'File download initiated',
       });
     } catch (error) {
       console.error('Download failed:', error);
@@ -5838,7 +5881,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   <Button
                     variant="ghost"
                     size="icon"
-                    title={currentMediaMeta?.type === "video" && isCaptionsOn ? "Download MP4 with burned-in captions" : "Download"}
+                    title={currentMediaMeta?.type === "video" && isCaptionsOn ? "Download MP4 with burned-in captions" : currentMediaMeta?.type === "audio" && isCaptionsOn ? "Download audio, captions, and transcript ZIP" : "Download"}
                     disabled={!videoUrl}
                     onClick={handleDownload}
                     className="h-7 w-7 ml-2"
