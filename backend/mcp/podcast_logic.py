@@ -1,3 +1,4 @@
+# backend/mcp/podcast_logic.py
 import logging
 import re
 from tempfile import NamedTemporaryFile
@@ -7,6 +8,7 @@ from langdetect import detect
 
 from backend.agent.llm.clients import call_llm
 from backend.runner.job_runner import STORAGE, to_static_url
+from backend.utils.diagnostics import DiagnosticError
 
 # Import to trigger app-level logging configuration (handlers, format, level).
 from backend.utils import app_logging  # noqa: F401
@@ -67,30 +69,6 @@ Style rules:
 Topic: {user_prompt}
 """
 
-
-def _episode_title_from_prompt(prompt: str) -> str:
-    cleaned = re.sub(r"\s+", " ", (prompt or "").strip())
-    cleaned = re.sub(r"[^A-Za-z0-9 \-]", "", cleaned).strip()
-    if not cleaned:
-        return "Learning Essentials"
-    words = cleaned.split()
-    return " ".join(words[:5]).strip()
-
-
-def _ensure_debate_greeting(script: str, user_prompt: str) -> str:
-    txt = (script or "").strip()
-    if not txt:
-        return txt
-    head = txt[:500].lower()
-    if WELCOME_PREFIX in head:
-        return txt
-    title = _episode_title_from_prompt(user_prompt)
-    greeting = (
-        "Host: Welcome to UpCurved Podcasts, where we take big ideas and curve them upwards "
-        f"into simple, fun explanations. Today's episode: {title}. "
-        "Let's turn complexity into curiosity!"
-    )
-    return f"{greeting}\n\n{txt}"
     return f"""
 You are a skilled podcast writer and narrator.
 Write a concise but engaging single-speaker podcast script for the following topic.
@@ -118,9 +96,35 @@ Do NOT include stage directions, music cues, or SFX like 'upbeat intro', 'fade
 in', 'fade out', or '[music]'.
 Do NOT include speaker labels; write only the spoken content.
 Do NOT end the script abruptly. Generate entire script.
+Target spoken duration MUST be between 2 and 3 minutes total.
+Keep total script length around 320-450 words so TTS lands near 2-3 minutes.
 
 Topic: {user_prompt}
 """
+
+def _episode_title_from_prompt(prompt: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (prompt or "").strip())
+    cleaned = re.sub(r"[^A-Za-z0-9 \-]", "", cleaned).strip()
+    if not cleaned:
+        return "Learning Essentials"
+    words = cleaned.split()
+    return " ".join(words[:5]).strip()
+
+
+def _ensure_debate_greeting(script: str, user_prompt: str) -> str:
+    txt = (script or "").strip()
+    if not txt:
+        return txt
+    head = txt[:500].lower()
+    if WELCOME_PREFIX in head:
+        return txt
+    title = _episode_title_from_prompt(user_prompt)
+    greeting = (
+        "Host: Welcome to UpCurved Podcasts, where we take big ideas and curve them upwards "
+        f"into simple, fun explanations. Today's episode: {title}. "
+        "Let's turn complexity into curiosity!"
+    )
+    return f"{greeting}\n\n{txt}"
 
 
 def _infer_gtts_lang(script_text: str) -> str:
@@ -379,19 +383,45 @@ def generate_podcast(
     video_url} where video_url points to the mp3.
     """
     # Resolve provider/key
-    prov, api_key = _pick_provider_and_key(provider, provider_keys)
+    try:
+        prov, api_key = _pick_provider_and_key(provider, provider_keys)
+    except Exception as e:
+        raise DiagnosticError(
+            str(e),
+            feature="podcast",
+            step="provider/key resolution",
+            provider=provider,
+            model=model,
+            status_code=400,
+        ) from e
+
     # Generate script
     logger.info("podcast: calling LLM provider=%s model=%s", prov, model)
-    script = call_llm(
-        provider=prov,
-        api_key=api_key,
-        model=model,
-        system=None,
-        user=_podcast_prompt(prompt, mode=mode),
-        temperature=0.5,  # Higher temperature for more natural, varied dialogue
-    )
+    try:
+        script = call_llm(
+            provider=prov,
+            api_key=api_key,
+            model=model,
+            system=None,
+            user=_podcast_prompt(prompt, mode=mode),
+            temperature=0.5,  # Higher temperature for more natural, varied dialogue
+        )
+    except Exception as e:
+        raise DiagnosticError(
+            str(e) or type(e).__name__,
+            feature="podcast",
+            step="script generation",
+            provider=prov,
+            model=model,
+        ) from e
     if not script or not script.strip():
-        raise RuntimeError("LLM returned empty script")
+        raise DiagnosticError(
+            "Model returned empty podcast script.",
+            feature="podcast",
+            step="script generation",
+            provider=prov,
+            model=model,
+        )
     if (mode or "standard").strip().lower() == "debate":
         script = _ensure_debate_greeting(script, prompt)
 
@@ -446,7 +476,13 @@ def generate_podcast(
                 logger.info("podcast: final single-voice fallback succeeded")
             except Exception as e3:
                 logger.exception("podcast: final TTS fallback failed: %s", e3)
-                raise RuntimeError(f"TTS failed: {msg}; fallback failed: {e3}") from e3
+                raise DiagnosticError(
+                    f"TTS failed: {msg}; fallback failed: {e3}",
+                    feature="podcast",
+                    step="audio generation",
+                    provider=prov,
+                    model=model,
+                ) from e3
 
     # After audio is created, measure duration and build SRT/VTT to match speaking speed
     srt_path = job_dir / "podcast.srt"

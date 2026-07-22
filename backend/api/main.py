@@ -34,6 +34,7 @@ from backend.agent.prompts import (
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
 from backend.utils import app_logging  # noqa: F401
 from backend.utils.html_exports import build_quiz_html, make_download_filename, safe_job_id, save_html_file
+from backend.utils.diagnostics import diagnostic_error_response
 
 logger = logging.getLogger(f"app.{__name__}")
 APP_MODE = os.environ.get("APP_MODE", "cloud").strip().lower()
@@ -1237,7 +1238,13 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
         return {"status": "ok", "quiz": quiz, **download_meta}
     except Exception as e:
         logger.exception("/quiz/embedded failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return diagnostic_error_response(
+            feature="quiz",
+            step="quiz generation",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 @app.post("/quiz/media")
@@ -1281,7 +1288,13 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
         return {"status": "ok", "quiz": quiz, **download_meta}
     except Exception as e:
         logger.exception("/quiz/media failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return diagnostic_error_response(
+            feature="quiz",
+            step="quiz from media captions",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 @app.post("/podcast")
@@ -1378,8 +1391,13 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
         return result
     except Exception as e:
         logger.exception("/podcast failed: %s", e)
-        msg = str(e) if str(e) else f"{type(e).__name__}"
-        raise HTTPException(status_code=500, detail=msg) from e
+        return diagnostic_error_response(
+            feature="podcast",
+            step="podcast generation",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 
@@ -1712,7 +1730,13 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
         return {"ok": True, "status": "ok", "widget_html": widget_html, **download_meta}
     except Exception as e:
         logger.exception("/widget failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return diagnostic_error_response(
+            feature="widget",
+            step="widget generation",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 @app.post("/edit/widget")
@@ -1741,7 +1765,13 @@ def edit_widget_endpoint(body: EditWidgetIn, uid: str = Depends(require_firebase
         return {"ok": True, "status": "ok", "widget_html": widget_html, **download_meta}
     except Exception as e:
         logger.exception("/edit/widget failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return diagnostic_error_response(
+            feature="widget",
+            step="widget editing",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 @app.post("/edit/story")
@@ -1776,7 +1806,13 @@ def edit_story_endpoint(body: EditStoryIn, uid: str = Depends(require_firebase_u
         }
     except Exception as e:
         logger.exception("/edit/story failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return diagnostic_error_response(
+            feature="story",
+            step="story editing",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 @app.post("/edit/quiz")
@@ -1806,7 +1842,13 @@ def edit_quiz_endpoint(body: EditQuizIn, uid: str = Depends(require_firebase_use
         return {"status": "ok", "quiz": quiz, **download_meta}
     except Exception as e:
         logger.exception("/edit/quiz failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        return diagnostic_error_response(
+            feature="quiz",
+            step="quiz editing",
+            error=e,
+            provider=locals().get("provider"),
+            model=locals().get("model"),
+        )
 
 
 def _chat_doc(uid: str, chat_id: str):

@@ -2252,25 +2252,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         setSrtText(null);
         void fetchCaptions(audioUrl, data.signed_subtitle_url);
       } else {
-        // Prefer backend-provided detail; otherwise fall back to HTTP status and body, then sanitize
-        let msg: string = "";
-        try {
-          const primary = (data && (data.detail ?? data)) ?? raw;
-          if (primary !== undefined && primary !== null) {
-            if (typeof primary === "string") msg = primary;
-            else msg = JSON.stringify(primary, null, 2);
-          }
-        } catch {}
-        if (!msg || msg.replace(/\s+/g, "") === "\"\"") {
-          const statusText = (res as any).statusText || "";
-          msg = `HTTP ${(res as any).status || "error"} ${statusText || ""}`.trim();
-          if (!raw || String(raw).trim() === "") {
-            msg += " (empty body)";
-          }
-        }
-        const friendly = "Podcast generation failed." + (msg ? ` ${String(msg).slice(0, 180)}` : "");
+        const errorBody = responseErrorBody(res, data, raw);
+        const friendly = formatGenerationError("Podcast generation", errorBody);
         setApiError(friendly);
-        await processAndAddMessage("❌ Podcast generation failed.", false, undefined, chatIdForGeneration);
+        await processAndAddMessage(friendly, false, undefined, chatIdForGeneration);
       }
     } catch (err: any) {
       if (err?.name === "AbortError") {
@@ -2278,11 +2263,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         await processAndAddMessage("⏹️ Canceled podcast generation.", false, undefined, chatIdForGeneration);
         aborted = true;
       } else {
+        const body = thrownErrorBody(err);
         const networkMsg = err?.message && /Failed to fetch|NetworkError|TypeError/i.test(err.message)
           ? "We couldn't reach the server. Check your connection and try again."
           : (err?.message || "Request failed");
-        setApiError(networkMsg);
-        await processAndAddMessage("❌ Network error.", false, undefined, chatIdForGeneration);
+        const friendly = body
+          ? formatGenerationError("Podcast generation", body, networkMsg)
+          : `❌ Network error.\n\nReason: ${networkMsg}`;
+        setApiError(friendly);
+        await processAndAddMessage(friendly, false, undefined, chatIdForGeneration);
       }
     } finally {
       setPodcastLoading(false);
@@ -2438,15 +2427,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             }));
           }
       } else {
-        const rawMsg = JSON.stringify(data?.detail ?? data ?? quizRawResponse, null, 2) || '';
-        const concise = rawMsg ? String(rawMsg).slice(0,160) : '';
-        await processAndAddMessage('❌ Quiz generation failed.', false, undefined, persistedId);
+        const errorBody = responseErrorBody(res, data, quizRawResponse);
+        await processAndAddMessage(formatGenerationError('Quiz generation', errorBody), false, undefined, persistedId);
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
       } else {
-        await processAndAddMessage('❌ Quiz generation failed.', false, undefined, persistedId);
+        const body = thrownErrorBody(err);
+        await processAndAddMessage(formatGenerationError('Quiz generation', body, err?.message), false, undefined, persistedId);
       }
     } finally {
       setQuizLoading(false);
@@ -2536,14 +2525,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         setHtmlDownloadUrl(widgetDownloadUrl || null);
         setHtmlDownloadFilename(widgetDownloadFilename || null);
       } else {
-        await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
+        const friendly = formatGenerationError("Widget generation", data, "Widget response did not include widget_html.");
+        await processAndAddMessage(friendly, false, undefined, persistedId);
       }
     } catch (err: any) {
       if (err?.name === "AbortError") {
         await processAndAddMessage("⏹️ Canceled widget generation.", false, undefined, persistedId);
         aborted = true;
       } else {
-        await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
+        const body = thrownErrorBody(err);
+        const friendly = formatGenerationError("Widget generation", body, err?.message || "Unknown error");
+        await processAndAddMessage(friendly, false, undefined, persistedId);
         toast({ title: "Widget failed", description: err?.message || "Unknown error", duration: 4000 });
       }
     } finally {
@@ -3119,6 +3111,96 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }
 
+  function responseErrorBody(res: Response, data: any, raw?: string) {
+    if (data && typeof data === "object") return data;
+    const statusText = `${res.status || "error"} ${(res as any).statusText || ""}`.trim();
+    const fallback = raw && raw.trim() ? raw.trim().slice(0, 500) : `HTTP ${statusText}`;
+    return { ok: false, status: "error", error: fallback, message: fallback };
+  }
+
+  function thrownErrorBody(err: any) {
+    return err?.errorBody || err?.body || err?.responseBody || null;
+  }
+
+  function stringifyDiagnosticReason(value: any): string {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+
+  function cleanGenerationReason(raw?: any): string {
+    let text = stringifyDiagnosticReason(raw).trim();
+    if (!text) return "";
+
+    const jsonStart = text.indexOf("{");
+    if (jsonStart >= 0) {
+      try {
+        const parsed = JSON.parse(text.slice(jsonStart));
+        const message = parsed?.error?.message || parsed?.message || parsed?.detail;
+        if (message) text = String(message);
+      } catch {
+        // Keep the original text if it is not valid JSON.
+      }
+    }
+
+    text = text
+      .replace(/"user_id"\s*:\s*"[^"]+"/g, '"user_id":"hidden"')
+      .replace(/user_[A-Za-z0-9_-]+/g, "user_hidden")
+      .replace(/sk-[A-Za-z0-9_-]+/g, "sk_hidden")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const lower = text.toLowerCase();
+    if (lower.includes("input must have at least 1 token")) {
+      return "The model received an empty prompt. Try again or switch models.";
+    }
+    if ((lower.includes("keyerror") && lower.includes("choices")) || lower.includes("missing choices") || lower.includes("did not return choices")) {
+      return "The model provider returned an unexpected response. Try again or switch models.";
+    }
+    if (lower.includes("complete html document") || lower.includes("incomplete html")) {
+      return "The model returned an incomplete HTML file. Try again or switch models.";
+    }
+    if (lower.includes("json") && (lower.includes("parse") || lower.includes("decode") || lower.includes("invalid"))) {
+      return "The model returned malformed JSON. Try again or switch models.";
+    }
+    if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("429")) {
+      return "The model provider is rate-limiting requests. Wait a moment or switch models.";
+    }
+    if (lower.includes("unauthorized") || lower.includes("invalid api key") || lower.includes("401")) {
+      return "The API key was rejected. Check the key in Settings.";
+    }
+    if (lower.includes("forbidden") || lower.includes("403")) {
+      return "The model provider blocked this request. Try a different model or rephrase the prompt.";
+    }
+    if (lower.includes("timeout") || lower.includes("timed out")) {
+      return "The request took too long. Try again or switch models.";
+    }
+    if (lower.includes("ffmpeg")) {
+      return "The media export step failed. Try again, or check the backend terminal for details.";
+    }
+
+    return text.length > 220 ? `${text.slice(0, 220).trim()}…` : text;
+  }
+
+  function formatGenerationError(label: string, errorBody?: any, fallbackReason?: string) {
+    const d = errorBody?.diagnostics;
+    const lines = [`❌ ${label} failed.`, ""];
+
+    if (d?.step) lines.push(`Step: ${d.step}`);
+
+    const reason = cleanGenerationReason(
+      errorBody?.error ?? errorBody?.message ?? errorBody?.detail ?? fallbackReason
+    );
+    if (reason) lines.push(`Reason: ${reason}`);
+
+    const technicalDetails = [d?.provider, d?.model].filter(Boolean).join(" · ");
+    if (technicalDetails) {
+      lines.push("", `Technical details: ${technicalDetails}`);
+    }
+
+    return lines.join("\n").trimEnd();
+  }
+
   async function generateVideo(
     prompt: string,
     chatIdOverride?: string | number | null,
@@ -3508,13 +3590,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           }));
         }
       } else {
-        await processAndAddMessage('❌ Quiz generation failed.', false, undefined, persistedId);
+        await processAndAddMessage(formatGenerationError('Quiz generation', response, 'Quiz response did not include questions.'), false, undefined, persistedId);
       }
     } catch (err: any) {
       if (err.name !== "AbortError") {
-        setApiError(err.message);
+        const body = thrownErrorBody(err);
+        const friendly = formatGenerationError('Quiz generation', body, err?.message || 'Request failed');
+        setApiError(friendly);
         toast({ title: "Quiz generation failed", description: err.message, duration: 4000 });
-        await processAndAddMessage(`❌ Quiz generation failed: ${err.message}`, false, undefined, persistedId);
+        await processAndAddMessage(friendly, false, undefined, persistedId);
       } else {
         await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
       }
@@ -3605,13 +3689,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           }));
         }
       } else {
-        await processAndAddMessage('❌ Quiz generation failed.', false, undefined, persistedId);
+        await processAndAddMessage(formatGenerationError('Quiz generation', response, 'Quiz response did not include questions.'), false, undefined, persistedId);
       }
     } catch (err: any) {
       if (err.name !== "AbortError") {
-        setApiError(err.message);
+        const body = thrownErrorBody(err);
+        const friendly = formatGenerationError('Quiz generation', body, err?.message || 'Request failed');
+        setApiError(friendly);
         toast({ title: "Quiz generation failed", description: err.message, duration: 4000 });
-        await processAndAddMessage(`❌ Quiz generation failed: ${err.message}`, false, undefined, persistedId);
+        await processAndAddMessage(friendly, false, undefined, persistedId);
       } else {
         await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
       }
@@ -3683,7 +3769,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           }),
           signal: controller.signal,
         });
-        const { data } = await parseResponse(res);
+        const { data, raw } = await parseResponse(res);
 
         if (res.ok && data?.status === 'ok' && data?.widget_html) {
           const downloadUrl = toPlayableMediaUrl(data.download_url);
@@ -3705,8 +3791,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           setHtmlDownloadUrl(downloadUrl || null);
           setHtmlDownloadFilename(downloadFilename || null);
         } else {
-          const msg = data?.message || data?.detail || `${artifactLabel(kind)} editing failed.`;
-          await processAndAddMessage(`❌ ${artifactLabel(kind)} editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+          const errorBody = responseErrorBody(res, data, raw);
+          await processAndAddMessage(formatGenerationError(`${artifactLabel(kind)} editing`, errorBody), false, undefined, chatIdForGeneration);
         }
       } else if (kind === 'quiz') {
         const originalQuiz = quotedMessage.quizData;
@@ -3735,7 +3821,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           }),
           signal: controller.signal,
         });
-        const { data } = await parseResponse(res);
+        const { data, raw } = await parseResponse(res);
 
         if (res.ok && data?.status === 'ok' && data?.quiz?.questions?.length) {
           const quizPayload = {
@@ -3759,8 +3845,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             }));
           }
         } else {
-          const msg = data?.message || data?.detail || 'Quiz editing failed.';
-          await processAndAddMessage(`❌ Quiz editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+          const errorBody = responseErrorBody(res, data, raw);
+          await processAndAddMessage(formatGenerationError('Quiz editing', errorBody), false, undefined, chatIdForGeneration);
         }
       } else {
         toast({ title: "Unsupported edit", description: "This artifact type cannot be edited yet.", duration: 4000 });
@@ -3774,8 +3860,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         await processAndAddMessage(`⏹️ Canceled ${artifactLabel(kind)} editing.`, false, undefined, chatIdForGeneration);
       } else {
         const msg = err?.message || "Request failed";
+        const body = thrownErrorBody(err);
+        const friendly = formatGenerationError(`${artifactLabel(kind)} editing`, body, msg);
         toast({ title: `${artifactLabel(kind)} edit failed`, description: msg, duration: 4000 });
-        await processAndAddMessage(`❌ ${artifactLabel(kind)} editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+        await processAndAddMessage(friendly, false, undefined, chatIdForGeneration);
       }
     } finally {
       setWidgetLoading(false);

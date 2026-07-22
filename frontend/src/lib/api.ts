@@ -4,6 +4,44 @@ import { isDesktopLocalMode } from "@/lib/runtime";
 const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '';
 const DESKTOP_LOCAL_DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 
+
+export class ApiRequestError extends Error {
+  status: number;
+  errorBody: any;
+  rawBody: string;
+
+  constructor(message: string, status: number, errorBody: any, rawBody: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.errorBody = errorBody;
+    this.rawBody = rawBody;
+  }
+}
+
+async function readResponseBody(res: Response): Promise<{ data: any; raw: string }> {
+  const raw = await res.text().catch(() => "");
+  try {
+    return { data: raw ? JSON.parse(raw) : null, raw };
+  } catch {
+    return { data: null, raw };
+  }
+}
+
+function messageFromErrorBody(fallback: string, data: any, raw: string): string {
+  const detail = data?.error || data?.message || data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (detail !== undefined && detail !== null) return String(detail);
+  if (raw && raw.trim()) return raw.trim().slice(0, 300);
+  return fallback;
+}
+
+export async function throwApiError(res: Response, fallback: string): Promise<never> {
+  const { data, raw } = await readResponseBody(res);
+  const message = messageFromErrorBody(`${fallback}: ${res.status}`, data, raw);
+  throw new ApiRequestError(message, res.status, data, raw);
+}
+
 function resolvedApiBaseUrl(): string {
   const runtimeDesktopBase = String(window?.desktop?.apiBaseUrl || "").trim();
   if (runtimeDesktopBase) return runtimeDesktopBase.replace(/\/+$/, "");
@@ -195,7 +233,7 @@ export async function apiQuiz(body: {
     body: JSON.stringify(body),
     signal,
   });
-  if (!res.ok) throw new Error(`quiz generation failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, 'quiz generation failed');
   return res.json();
 }
 
@@ -218,6 +256,6 @@ export async function apiWidget(body: {
     }),
     signal,
   });
-  if (!res.ok) throw new Error(`widget generation failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, 'widget generation failed');
   return res.json(); // { ok, status, widget_html }
 }
