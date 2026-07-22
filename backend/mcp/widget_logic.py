@@ -9,6 +9,14 @@ import re
 from html import escape
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.prompts import (
+    WIDGET_EDIT_SYSTEM,
+    WIDGET_REPAIR_SYSTEM,
+    WIDGET_SYSTEM,
+    build_widget_edit_user_prompt,
+    build_widget_repair_user_prompt,
+    build_widget_user_prompt,
+)
 from backend.utils import app_logging  # noqa: F401
 
 logger = logging.getLogger(f"app.{__name__}")
@@ -32,105 +40,6 @@ def _pick_provider_and_key(
         return "openrouter", keys["openrouter"]
     raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' or 'openrouter' key.")
 
-
-WIDGET_SYSTEM = """You generate self-contained interactive educational HTML simulations.
-Output ONLY a complete HTML document. No markdown, no backticks, no explanation.
-
-This widget runs in a sandboxed iframe inside a desktop app. It must be robust.
-
-Hard requirements:
-1) Return a complete HTML document:
-   - Starts with <!DOCTYPE html>
-   - Contains <html>, <head>, <body>, and closing </html>
-
-2) Technology constraints:
-   - Vanilla HTML/CSS/JS only (no React, no build tools, no TypeScript).
-   - No external scripts/styles/fonts/images/CDNs.
-   - No external stylesheet links (<link rel="stylesheet" href="...">) and no CSS @import.
-   - No fetch/XMLHttpRequest/WebSocket.
-   - No localStorage/sessionStorage/cookies/indexedDB.
-   - No window.top/window.parent assumptions.
-
-3) Simulation-first UI structure:
-   - Two-column layout:
-     left = main visualization area (canvas or SVG),
-     right = control panel.
-   - Control panel sections:
-     a) "Live Data" section with at least 3 numeric readouts with units.
-     b) "Controls" section with at least 3 interactive controls.
-   - Controls must be visible in initial viewport (no collapsed drawers required to access them).
-   - Include one short concept explanation line.
-   - Include one status/insight line that changes as controls change.
-
-4) Interactivity:
-   - Use addEventListener.
-   - Use requestAnimationFrame for animated simulations.
-   - The simulation must start with visible non-zero state (not an empty static canvas).
-   - Keep simulation deterministic and smooth on modest hardware.
-   - If using canvas interactions, use getBoundingClientRect() for coordinates.
-
-5) Styling:
-   - Use one <style> block in <head>.
-   - Use one <script> block near end of <body>.
-   - Make it visually polished and educational (not plain boilerplate).
-   - Ensure good contrast and readable labels.
-   - Ensure controls are visible without requiring hidden panels.
-   - Do not place invisible overlays that block pointer events.
-
-6) Complexity limits (for reliability):
-   - Max 1 canvas.
-   - Keep code compact and maintainable.
-   - Avoid giant datasets and long hardcoded tables.
-
-Completeness rules:
-- Do not truncate output.
-- Close all tags.
-- Close all functions/objects/arrays/conditionals.
-- End cleanly with </script> (if used), </body>, </html>.
-- If concept is too complex, deliver a simplified but fully working simulation.
-
-Required HTML skeleton (follow this structure exactly and fill in the simulation content):
-<body>
-  <div class="wrapper">
-    <div class="viz-col" id="viz-col">
-      <canvas id="sim-canvas"></canvas>
-    </div>
-    <div class="panel-col">
-      <h2 class="panel-title">...</h2>
-      <p class="concept-line">...</p>
-      <div class="section-label">LIVE DATA</div>
-      ...
-      <div class="section-label">CONTROLS</div>
-      ...
-      <div class="insight-box" id="insight">...</div>
-    </div>
-  </div>
-  <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      const vizCol = document.getElementById('viz-col');
-      const canvas = document.getElementById('sim-canvas');
-      canvas.width = vizCol.clientWidth;
-      canvas.height = vizCol.clientHeight;
-      // initialize non-zero simulation state
-      // start requestAnimationFrame loop here
-    });
-  </script>
-</body>
-"""
-
-
-def _widget_user_prompt(topic: str) -> str:
-    return (
-        f"Create an interactive educational simulation for: {topic}\n\n"
-        "Design target: app-like simulation quality, similar to science learning tools.\n"
-        "Use a left visualization panel and right control panel.\n"
-        "Include meaningful live metrics and controls that clearly change system behavior.\n"
-        "Controls must always be visible (not hidden/collapsed).\n"
-        "Canvas must be sized in DOMContentLoaded and animation must start there.\n"
-        "Audience: middle/high school learners.\n"
-        "The result must run on first load in a sandboxed iframe.\n\n"
-        "Output ONLY the HTML document."
-    )
 
 
 def _extract_html(raw: str) -> str:
@@ -490,6 +399,96 @@ const tick=()=>{{
 </script></body></html>"""
 
 
+
+def _repair_edited_widget_html(
+    *,
+    provider: str,
+    api_key: str,
+    model: str | None,
+    original_title: str | None,
+    edit_instructions: str,
+    prior_html: str,
+    reason: str,
+) -> str:
+    repair_system = WIDGET_REPAIR_SYSTEM
+    repair_user = build_widget_repair_user_prompt(
+        original_title=original_title,
+        edit_instructions=edit_instructions,
+        prior_html=prior_html,
+        reason=reason,
+    )
+    fixed_raw = call_llm(
+        provider=provider,
+        api_key=api_key,
+        model=model,
+        system=repair_system,
+        user=repair_user,
+        temperature=0.1,
+        max_tokens=8000,
+        max_output_tokens=8000,
+    )
+    return _extract_html(fixed_raw)
+
+
+def edit_widget(
+    *,
+    original_html: str,
+    edit_instructions: str,
+    original_title: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    provider_keys: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Revise an existing widget using its actual HTML source.
+
+    This is intentionally different from generate_widget(). It avoids rebuilding
+    from only the visible text, which can produce a totally different widget.
+    """
+    if not original_html or not original_html.strip():
+        raise RuntimeError("original_html is required")
+    if not edit_instructions or not edit_instructions.strip():
+        raise RuntimeError("edit_instructions is required")
+
+    prov, api_key = _pick_provider_and_key(provider, provider_keys)
+    logger.info("widget edit: calling LLM provider=%s model=%s", prov, model)
+
+    raw = call_llm(
+        provider=prov,
+        api_key=api_key,
+        model=model,
+        system=WIDGET_EDIT_SYSTEM,
+        user=build_widget_edit_user_prompt(
+            original_html=original_html,
+            edit_instructions=edit_instructions,
+            original_title=original_title,
+        ),
+        temperature=0.1,
+        max_tokens=8000,
+        max_output_tokens=8000,
+    )
+    if not raw or not raw.strip():
+        raise RuntimeError("LLM returned empty edited widget.")
+
+    html = _extract_html(raw)
+    ok, reason = _validate_widget_html(html)
+    if not ok:
+        logger.warning("widget edit: validation failed (%s), attempting repair", reason)
+        html = _repair_edited_widget_html(
+            provider=prov,
+            api_key=api_key,
+            model=model,
+            original_title=original_title,
+            edit_instructions=edit_instructions,
+            prior_html=html,
+            reason=reason,
+        )
+        ok2, reason2 = _validate_widget_html(html)
+        if not ok2:
+            raise RuntimeError(f"Edited widget failed validation after repair: {reason2}")
+
+    logger.info("widget edit: generated %d chars of HTML", len(html))
+    return {"status": "ok", "widget_html": html}
+
 def generate_widget(
     prompt: str,
     *,
@@ -509,7 +508,7 @@ def generate_widget(
             api_key=api_key,
             model=model,
             system=WIDGET_SYSTEM,
-            user=_widget_user_prompt(prompt),
+            user=build_widget_user_prompt(prompt),
             temperature=0.2,
             max_tokens=6000,
             max_output_tokens=6000,

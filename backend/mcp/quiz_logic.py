@@ -8,6 +8,12 @@ except ImportError:  # optional fallback, continue without json5
 from typing import Any
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.prompts import (
+    QUIZ_EDIT_SYSTEM,
+    QUIZ_GENERATE_SYSTEM,
+    build_quiz_edit_user_prompt,
+    build_quiz_user_prompt,
+)
 
 DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 
@@ -345,57 +351,6 @@ def _normalize_quiz(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _quiz_prompt(prompt: str, num_questions: int, difficulty: str, context: str | None) -> str:
-    """Build a very strict JSON-only prompt to minimize LLM formatting errors."""
-    context_block = (
-        f"\nAdditional context (SRT/script, use only for content; "
-        f"DO NOT include it in the JSON):\n{context}\n"
-        if context
-        else ""
-    )
-    return (
-        # Task
-        "You are an expert quiz maker. Produce a multiple-choice quiz "
-        "as a single JSON object only, strictly following this schema and rules.\n\n"
-        # Explicit schema (keys and types)
-        "SCHEMA (keys and types):\n"
-        "{\n"
-        '  "title": string,\n'
-        '  "description": string,\n'
-        '  "questions": [\n'
-        '    { "type": "multiple_choice", "prompt": string, '
-        '"options": [string, ...], "correctIndex": integer }\n'
-        "  ]\n"
-        "}\n\n"
-        # Hard rules to avoid syntax issues
-        "HARD RULES (must follow all):\n"
-        "1) Output MUST be valid RFC 8259 JSON. "
-        "No markdown, no code fences, no comments, no explanations.\n"
-        "2) Use double quotes for ALL keys and ALL string values.\n"
-        "3) NO trailing commas anywhere.\n"
-        "4) The array questions MUST contain exactly {NUM_Q} items.\n"
-        '5) Each question MUST have: type="multiple_choice" (exact), '
-        "non-empty prompt, options array length 3-5 with unique strings.\n"
-        "6) correctIndex MUST be a 0-based integer within the bounds of options, "
-        "and the option at that index is the ONLY correct answer.\n"
-        "7) Do NOT include null/undefined/NaN, "
-        "and do NOT include additional fields beyond the schema.\n"
-        "8) The JSON MUST start with '{' and end with '}' "
-        "with no leading or trailing text.\n\n"
-        # Content directives
-        "CONTENT REQUIREMENTS:\n"
-        f"- Use exactly {{NUM_Q}} questions.\n"
-        f'- Topic/context from the user prompt: "{prompt}"\n'
-        f"- Difficulty: {difficulty}\n"
-        "- Title and description should be short and informative.\n"
-        "- Use context only to craft questions; "
-        "DO NOT embed the context text into the JSON.\n\n"
-        # Final instruction: replace NUM_Q placeholder
-        .replace("{NUM_Q}", str(num_questions))
-        + context_block
-    )
-
-
 def _generate_quiz_json_with_call_llm(
     prompt: str,
     num_questions: int,
@@ -409,12 +364,9 @@ def _generate_quiz_json_with_call_llm(
     # For Gemini, let the unified client choose its preferred default (gemini-3-flash-preview).
     # For Claude, keep a sensible default.
     use_model = model or ("claude-haiku-4-5" if prov == "claude" else None)
-    user_prompt = _quiz_prompt(prompt, num_questions, difficulty, context)
-    # Add a strict system instruction to force JSON-only output
-    strict_system = (
-        "You are a JSON generator. Always return a single valid JSON object. "
-        "Never include markdown code fences, explanations, or comments."
-    )
+    user_prompt = build_quiz_user_prompt(prompt, num_questions, difficulty, context)
+    # Strict system instruction lives in backend.agent.prompts.
+    strict_system = QUIZ_GENERATE_SYSTEM
     text = call_llm(
         provider=prov,
         api_key=api_key,
@@ -459,3 +411,51 @@ def generate_quiz_embedded(
         "questions": questions,
         "count": len(questions),
     }
+
+
+def edit_quiz_embedded(
+    *,
+    original_quiz: dict[str, Any],
+    edit_instructions: str,
+    num_questions: int | None = None,
+    difficulty: str = "medium",
+    provider: str | None = None,
+    model: str | None = None,
+    provider_keys: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Edit an existing embedded quiz using the quiz JSON as source of truth."""
+    if not isinstance(original_quiz, dict) or not original_quiz.get("questions"):
+        raise RuntimeError("original_quiz with questions is required")
+    if not edit_instructions or not edit_instructions.strip():
+        raise RuntimeError("edit_instructions is required")
+
+    existing_questions = original_quiz.get("questions") or []
+    target_count = int(num_questions or len(existing_questions) or 5)
+    target_count = max(1, min(target_count, 20))
+
+    prov, api_key = _pick_provider_and_key(provider, provider_keys)
+    use_model = model or ("claude-haiku-4-5" if prov == "claude" else None)
+    strict_system = QUIZ_EDIT_SYSTEM
+    text = call_llm(
+        provider=prov,
+        api_key=api_key,
+        model=use_model,
+        system=strict_system,
+        user=build_quiz_edit_user_prompt(
+            original_quiz=original_quiz,
+            edit_instructions=edit_instructions,
+            num_questions=target_count,
+            difficulty=difficulty,
+        ),
+        temperature=0.25,
+    )
+    quiz = _parse_quiz_json(text)
+    questions = (quiz.get("questions") or [])[:target_count]
+    quiz["questions"] = questions
+    return {
+        "title": quiz.get("title") or original_quiz.get("title") or "Edited quiz",
+        "description": quiz.get("description") or original_quiz.get("description") or "Edited quiz",
+        "questions": questions,
+        "count": len(questions),
+    }
+

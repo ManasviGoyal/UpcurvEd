@@ -1,6 +1,10 @@
 // frontend/src/types/index.ts
+
+export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'quiz';
+
 export interface MediaAttachment {
   type: 'video' | 'audio' | 'widget';
+  artifactKind?: ArtifactKind;     // distinguishes story/widget/video/audio for UI follow-up actions
   url?: string;                    // media URL, or downloadable HTML URL for widgets/stories
   subtitleUrl?: string;
   title?: string;
@@ -12,10 +16,17 @@ export interface MediaAttachment {
   downloadFilename?: string;       // suggested filename for downloadable HTML exports
 }
 
+export interface QuizData {
+  downloadUrl?: string;
+  downloadFilename?: string;
+  [key: string]: unknown;
+}
+
 export interface Message {
   role: 'user' | 'bot';
   content: string;
   media?: MediaAttachment;
+  quizData?: QuizData;             // quiz JSON/result payload used for rendering + edit/download follow-ups
   createdAt?: number;
   messageId?: string;
 }

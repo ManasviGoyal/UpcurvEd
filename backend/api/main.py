@@ -23,7 +23,14 @@ import requests
 from backend.agent.code_sanitize import sanitize_minimally
 from backend.agent.llm.clients import call_llm
 from backend.agent.minigraph import echo_manim_code
-from backend.agent.prompts import EDIT_SYSTEM, build_edit_user_prompt
+from backend.agent.prompts import (
+    EDIT_SYSTEM,
+    STORY_EDIT_FULL_HTML_SYSTEM,
+    STORY_EDIT_PATCH_SYSTEM,
+    build_edit_user_prompt,
+    build_story_edit_full_html_user_prompt,
+    build_story_edit_patch_user_prompt,
+)
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
 from backend.utils import app_logging  # noqa: F401
 from backend.utils.html_exports import build_quiz_html, make_download_filename, safe_job_id, save_html_file
@@ -176,6 +183,18 @@ def _generate_podcast(*args, **kwargs):
 
 def _generate_widget(*args, **kwargs):
     from backend.mcp.widget_logic import generate_widget as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _edit_widget(*args, **kwargs):
+    from backend.mcp.widget_logic import edit_widget as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _edit_quiz_embedded(*args, **kwargs):
+    from backend.mcp.quiz_logic import edit_quiz_embedded as _impl
 
     return _impl(*args, **kwargs)
 
@@ -382,6 +401,44 @@ class EditVideoIn(BaseModel):
     sessionId: str | None = None
 
 
+class EditWidgetIn(BaseModel):
+    original_html: str
+    edit_instructions: str
+    original_title: str | None = None
+    keys: dict[str, str] = {}
+    provider: ProviderName | None = None
+    model: str | None = None
+    jobId: str | None = None
+    chatId: str | None = None
+    sessionId: str | None = None
+
+
+class EditStoryIn(BaseModel):
+    original_html: str
+    edit_instructions: str
+    original_title: str | None = None
+    keys: dict[str, str] = {}
+    provider: ProviderName | None = None
+    model: str | None = None
+    storyOptions: dict | None = None
+    jobId: str | None = None
+    chatId: str | None = None
+    sessionId: str | None = None
+
+
+class EditQuizIn(BaseModel):
+    original_quiz: dict
+    edit_instructions: str
+    num_questions: int | None = None
+    difficulty: Literal["easy", "medium", "hard"] | None = "medium"
+    keys: dict[str, str] = {}
+    provider: ProviderName | None = None
+    model: str | None = None
+    jobId: str | None = None
+    chatId: str | None = None
+    sessionId: str | None = None
+
+
 class BurnCaptionsIn(BaseModel):
     video_url: str
     subtitle_url: str | None = None
@@ -420,6 +477,7 @@ class MessageMedia(BaseModel):
     gcsPath: str | None = None
     sceneCode: str | None = None
     widgetCode: str | None = None
+    artifactKind: str | None = None
     downloadFilename: str | None = None
 
 
@@ -1324,6 +1382,309 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
         raise HTTPException(status_code=500, detail=msg) from e
 
 
+
+def _extract_complete_html_document(raw: str) -> str:
+    """Extract and lightly validate a complete HTML document from an LLM response."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    low = text.lower()
+    html_start = low.find("<!doctype")
+    if html_start < 0:
+        html_start = low.find("<html")
+    if html_start > 0:
+        text = text[html_start:].strip()
+        low = text.lower()
+    if "<html" not in low or "</html>" not in low or "<body" not in low or "</body>" not in low:
+        raise RuntimeError("Model did not return a complete HTML document.")
+    if "<script" in low and "</script>" not in low:
+        raise RuntimeError("Edited HTML appears truncated (missing </script>).")
+    text = re.sub(
+        r"""<script\b[^>]*\bsrc\s*=\s*['\"]https?://[^'\"]*['\"][^>]*>\s*</script>""",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"""<link\b[^>]*\brel\s*=\s*['\"]stylesheet['\"][^>]*>""",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"""@import\s+url\(['\"]?https?://[^'\")]+['\"]?\)\s*;?""",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def _strip_llm_code_fence(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def _parse_llm_json_object(raw: str) -> dict:
+    text = _strip_llm_code_fence(raw)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start : end + 1]
+    return json.loads(text)
+
+
+def _find_story_plan_json_bounds(html: str) -> tuple[int, int]:
+    """Return start/end indexes for the JSON object assigned to const P = {...}."""
+    marker = "const P ="
+    pos = html.find(marker)
+    if pos < 0:
+        raise RuntimeError("Could not find story plan JSON (const P) in story HTML.")
+    start = html.find("{", pos)
+    if start < 0:
+        raise RuntimeError("Could not find story plan JSON start in story HTML.")
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(html)):
+        ch = html[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return start, i + 1
+    raise RuntimeError("Could not find story plan JSON end in story HTML.")
+
+
+def _extract_story_plan_from_html(html: str) -> dict:
+    start, end = _find_story_plan_json_bounds(html)
+    return json.loads(html[start:end])
+
+
+def _replace_story_plan_in_html(html: str, plan: dict) -> str:
+    start, end = _find_story_plan_json_bounds(html)
+    plan_json = json.dumps(plan, ensure_ascii=False, separators=(",", ":"))
+    return html[:start] + plan_json + html[end:]
+
+
+def _looks_like_bad_story_draw_js(draw_js: object) -> bool:
+    text = str(draw_js or "").strip()
+    if not text:
+        return True
+    low = text.lower()
+    bad_phrases = (
+        "we are given",
+        "let's plan",
+        "lets plan",
+        "constraints:",
+        "visual description:",
+        "we need to show",
+        "the scene should",
+        "```",
+    )
+    if any(p in low for p in bad_phrases):
+        return True
+    # Heuristic: runtime expects executable drawing code using x/w/h/dt or helper calls.
+    code_markers = ("x.", "draw", "const ", "let ", "for(", "for (", "Math.")
+    return not any(m in text for m in code_markers)
+
+
+def _story_scene_summaries_for_edit(plan: dict) -> list[dict]:
+    scenes = plan.get("scenes") if isinstance(plan, dict) else []
+    out: list[dict] = []
+    if not isinstance(scenes, list):
+        return out
+    for idx, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        draw_js = str(scene.get("draw_js") or "")
+        out.append(
+            {
+                "scene_number": idx,
+                "heading": scene.get("heading") or "",
+                "caption": scene.get("caption") or "",
+                "lesson": scene.get("lesson") or "",
+                "science_fact": scene.get("science_fact") or "",
+                "vocabulary": scene.get("vocabulary") or [],
+                "cause_effect": scene.get("cause_effect") or "",
+                "misconception_fix": scene.get("misconception_fix") or "",
+                "speech_bubble": scene.get("speech_bubble") or "",
+                "visual": scene.get("visual") or "",
+                "draw_js_status": "invalid_or_generic" if _looks_like_bad_story_draw_js(draw_js) else "probably_executable",
+                "draw_js_excerpt": draw_js[:900],
+            }
+        )
+    return out
+
+
+def _apply_story_patch_to_plan(plan: dict, patch: dict) -> dict:
+    if not isinstance(patch, dict):
+        raise RuntimeError("Story edit patch was not a JSON object.")
+    new_plan = json.loads(json.dumps(plan, ensure_ascii=False))
+    for top_key in ("title", "moral", "conclusion"):
+        val = patch.get(top_key)
+        if isinstance(val, str) and val.strip():
+            new_plan[top_key] = val.strip()
+    scenes = new_plan.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        raise RuntimeError("Story plan has no scenes to edit.")
+    updates = patch.get("updates")
+    if not isinstance(updates, list) or not updates:
+        raise RuntimeError("Story edit patch did not include scene updates.")
+    allowed = {
+        "heading",
+        "caption",
+        "lesson",
+        "science_fact",
+        "vocabulary",
+        "cause_effect",
+        "misconception_fix",
+        "speech_bubble",
+        "visual",
+        "draw_js",
+        "duration_sec",
+        "theme",
+    }
+    applied = 0
+    for upd in updates:
+        if not isinstance(upd, dict):
+            continue
+        raw_num = upd.get("scene_number", upd.get("index"))
+        try:
+            scene_index = int(raw_num) - 1
+        except Exception:
+            continue
+        if scene_index < 0 or scene_index >= len(scenes) or not isinstance(scenes[scene_index], dict):
+            continue
+        for key_name, val in upd.items():
+            if key_name in ("scene_number", "index") or key_name not in allowed:
+                continue
+            if key_name == "draw_js" and not isinstance(val, str):
+                continue
+            if isinstance(val, str) and not val.strip():
+                continue
+            scenes[scene_index][key_name] = val
+            applied += 1
+    if applied <= 0:
+        raise RuntimeError("Story edit patch contained no applicable changes.")
+    return new_plan
+
+
+def _edit_story_by_plan_patch(
+    *,
+    original_html: str,
+    edit_instructions: str,
+    original_title: str | None,
+    provider: str,
+    model: str | None,
+    api_key: str,
+) -> str:
+    """Edit a story by patching its const P JSON plan instead of regenerating full HTML."""
+    plan = _extract_story_plan_from_html(original_html)
+    summaries = _story_scene_summaries_for_edit(plan)
+    raw = call_llm(
+        provider=provider,
+        api_key=api_key,
+        model=model,
+        system=STORY_EDIT_PATCH_SYSTEM,
+        user=build_story_edit_patch_user_prompt(
+            original_title=original_title or plan.get("title"),
+            scene_summaries=summaries,
+            edit_instructions=edit_instructions,
+        ),
+        temperature=0.12,
+        max_tokens=6000,
+        max_output_tokens=6000,
+    )
+    patch = _parse_llm_json_object(raw)
+    new_plan = _apply_story_patch_to_plan(plan, patch)
+    return _replace_story_plan_in_html(original_html, new_plan)
+
+
+def _edit_story_html(
+    *,
+    original_html: str,
+    edit_instructions: str,
+    original_title: str | None,
+    provider: str,
+    model: str | None,
+    provider_keys: dict[str, str],
+) -> str:
+    """Edit an existing story slider.
+
+    Prefer patching the embedded story plan JSON (`const P = ...`) instead of asking
+    the model to rewrite a large complete HTML file. This prevents truncation
+    failures and specifically fixes scenes that fall back to the generic
+    character/table animation because their draw_js is missing or invalid.
+    """
+    key = _get_provider_key(provider, provider_keys)
+    if not key:
+        raise HTTPException(status_code=400, detail=f"Missing API key for '{provider}'")
+    if not original_html or not original_html.strip():
+        raise HTTPException(status_code=400, detail="original_html is required")
+    if not edit_instructions or not edit_instructions.strip():
+        raise HTTPException(status_code=400, detail="edit_instructions is required")
+
+    # Fast/reliable path for story slider exports: edit the embedded JSON source
+    # and splice it back into the existing HTML shell.
+    try:
+        patched_html = _edit_story_by_plan_patch(
+            original_html=original_html,
+            edit_instructions=edit_instructions,
+            original_title=original_title,
+            provider=provider,
+            model=model,
+            api_key=key,
+        )
+        return _extract_complete_html_document(patched_html)
+    except Exception as patch_error:
+        logger.warning("story edit: JSON patch path failed; trying full-HTML fallback: %s", patch_error)
+
+    # Fallback for older/nonstandard story exports with no const P JSON.
+    raw = call_llm(
+        provider=provider,
+        api_key=key,
+        model=model,
+        system=STORY_EDIT_FULL_HTML_SYSTEM,
+        user=build_story_edit_full_html_user_prompt(
+            original_html=original_html,
+            edit_instructions=edit_instructions,
+            original_title=original_title,
+        ),
+        temperature=0.1,
+        max_tokens=12000,
+        max_output_tokens=12000,
+    )
+    html = _extract_complete_html_document(raw)
+    low = html.lower()
+    if "<button" not in low and "onclick" not in low and "addeventlistener" not in low:
+        raise RuntimeError("Edited story appears to have lost interactive navigation.")
+    return html
+
+
 @app.post("/widget")
 def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
     """Generate a self-contained interactive HTML widget. Returns { ok, status, widget_html }."""
@@ -1351,6 +1712,100 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
         return {"ok": True, "status": "ok", "widget_html": widget_html, **download_meta}
     except Exception as e:
         logger.exception("/widget failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/edit/widget")
+def edit_widget_endpoint(body: EditWidgetIn, uid: str = Depends(require_firebase_user)):
+    provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+    provider_keys = _provider_keys_with_env(body.keys)
+    logger.info("/edit/widget called provider=%s model=%s", provider, model)
+    try:
+        result = _edit_widget(
+            original_html=body.original_html,
+            edit_instructions=body.edit_instructions,
+            original_title=body.original_title,
+            provider=provider,
+            model=model,
+            provider_keys=provider_keys,
+        )
+        widget_html = result["widget_html"]
+        download_meta = _html_download_payload(
+            uid=uid,
+            chat_id=body.chatId,
+            kind="widget",
+            title=body.original_title or "Edited widget",
+            html_text=widget_html,
+            job_id=body.jobId,
+        )
+        return {"ok": True, "status": "ok", "widget_html": widget_html, **download_meta}
+    except Exception as e:
+        logger.exception("/edit/widget failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/edit/story")
+def edit_story_endpoint(body: EditStoryIn, uid: str = Depends(require_firebase_user)):
+    provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+    provider_keys = _provider_keys_with_env(body.keys)
+    logger.info("/edit/story called provider=%s model=%s", provider, model)
+    try:
+        story_html = _edit_story_html(
+            original_html=body.original_html,
+            edit_instructions=body.edit_instructions,
+            original_title=body.original_title,
+            provider=provider,
+            model=model,
+            provider_keys=provider_keys,
+        )
+        download_meta = _html_download_payload(
+            uid=uid,
+            chat_id=body.chatId,
+            kind="story",
+            title=body.original_title or "Edited story",
+            html_text=story_html,
+            job_id=body.jobId,
+        )
+        return {
+            "ok": True,
+            "status": "ok",
+            "widget_html": story_html,
+            "generation_mode": "story",
+            "message": "Story edited successfully.",
+            **download_meta,
+        }
+    except Exception as e:
+        logger.exception("/edit/story failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/edit/quiz")
+def edit_quiz_endpoint(body: EditQuizIn, uid: str = Depends(require_firebase_user)):
+    provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+    provider_keys = _provider_keys_with_env(body.keys)
+    logger.info("/edit/quiz called provider=%s model=%s", provider, model)
+    try:
+        quiz = _edit_quiz_embedded(
+            original_quiz=body.original_quiz,
+            edit_instructions=body.edit_instructions,
+            num_questions=body.num_questions,
+            difficulty=body.difficulty or "medium",
+            provider=provider,
+            model=model,
+            provider_keys=provider_keys,
+        )
+        quiz_html = build_quiz_html(quiz, source_title=quiz.get("title") or body.original_quiz.get("title") or "Edited quiz")
+        download_meta = _html_download_payload(
+            uid=uid,
+            chat_id=body.chatId,
+            kind="quiz",
+            title=quiz.get("title") or "Edited quiz",
+            html_text=quiz_html,
+            job_id=body.jobId,
+        )
+        return {"status": "ok", "quiz": quiz, **download_meta}
+    except Exception as e:
+        logger.exception("/edit/quiz failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

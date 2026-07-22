@@ -199,7 +199,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Edit mode state - for editing existing videos
   const [isEditMode, setIsEditMode] = useState(false);
   const [isQuizMode, setIsQuizMode] = useState(false);
-  const [quotedMessage, setQuotedMessage] = useState<{ messageId: string; content: string; media: import('@/types').MediaAttachment } | null>(null);
+  type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'quiz';
+  const [quotedMessage, setQuotedMessage] = useState<{ messageId: string; content: string; media?: import('@/types').MediaAttachment; quizData?: QuizData; artifactKind?: ArtifactKind } | null>(null);
   // backend integration state
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [widgetHtml, setWidgetHtml] = useState<string | null>(null);
@@ -265,12 +266,116 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   };
 
 
+
+  const normalizeArtifactKind = (media?: import('@/types').MediaAttachment | null, msg?: any): ArtifactKind | undefined => {
+    const explicit = (media as any)?.artifactKind as ArtifactKind | undefined;
+    if (explicit) return explicit;
+    if (!media) {
+      if (msg?.quizAnchor || msg?.quizData) return 'quiz';
+      return undefined;
+    }
+    if (media.type === 'video') return 'video';
+    if (media.type === 'audio') return 'podcast';
+    if (media.type === 'widget') {
+      const title = String(media.title || msg?.content || '').toLowerCase();
+      if (title.includes('story')) return 'story';
+      return 'widget';
+    }
+    return undefined;
+  };
+
+  const artifactLabel = (kind?: ArtifactKind) => {
+    switch (kind) {
+      case 'video': return 'video';
+      case 'audio':
+      case 'podcast': return 'podcast';
+      case 'story': return 'story';
+      case 'widget': return 'widget';
+      case 'quiz': return 'quiz';
+      default: return 'artifact';
+    }
+  };
+
+  const plainTextFromHtml = (html?: string, fallback = ''): string => {
+    const raw = String(html || '').trim();
+    if (!raw) return fallback;
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(raw, 'text/html');
+      doc.querySelectorAll('script, style, noscript, svg, canvas').forEach((el) => el.remove());
+      const text = (doc.body?.innerText || doc.body?.textContent || '').replace(/\s+/g, ' ').trim();
+      return text || fallback;
+    } catch {
+      return raw
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || fallback;
+    }
+  };
+
+  const quizToText = (quiz?: QuizData | null): string => {
+    if (!quiz) return '';
+    const pieces: string[] = [];
+    if (quiz.title) pieces.push(`Title: ${quiz.title}`);
+    if (quiz.description) pieces.push(`Description: ${quiz.description}`);
+    for (const [idx, q] of (quiz.questions || []).entries()) {
+      pieces.push(`Question ${idx + 1}: ${q.prompt}`);
+      (q.options || []).forEach((opt, optIdx) => {
+        pieces.push(`${String.fromCharCode(65 + optIdx)}. ${opt}`);
+      });
+      if (typeof q.correctIndex === 'number') {
+        pieces.push(`Correct answer: ${String.fromCharCode(65 + q.correctIndex)}. ${q.options?.[q.correctIndex] || ''}`);
+      }
+    }
+    return pieces.join('\n');
+  };
+
+  const startEditArtifact = (
+    msg: any,
+    index: number,
+    kindOverride?: ArtifactKind,
+    quizData?: QuizData,
+  ) => {
+    const kind = kindOverride || normalizeArtifactKind(msg?.media, msg) || (quizData ? 'quiz' : undefined);
+    if (!kind) {
+      toast({ title: "Cannot edit", description: "This artifact does not have enough information to edit.", duration: 4000 });
+      return;
+    }
+    if (kind === 'video' && !msg.media?.sceneCode) {
+      toast({ title: "Cannot edit this video", description: "This video was generated before edit mode was available. Generate a new video to enable editing.", duration: 4000 });
+      return;
+    }
+    if ((kind === 'story' || kind === 'widget') && !msg.media?.widgetCode) {
+      toast({ title: "Cannot edit this artifact", description: "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
+      return;
+    }
+    if (kind === 'quiz' && !quizData && !msg?.quizData) {
+      toast({ title: "Cannot edit this quiz", description: "The quiz data is missing. Regenerate the quiz to enable editing.", duration: 4000 });
+      return;
+    }
+
+    setIsEditMode(true);
+    setIsQuizMode(false);
+    setQuotedMessage({
+      messageId: String(msg?.messageId || `bot-${index}`),
+      content: msg?.content || '',
+      media: msg?.media,
+      quizData: quizData || msg?.quizData,
+      artifactKind: kind,
+    });
+    textareaRef.current?.focus();
+  };
+
+
   const [vttUrl, setVttUrl] = useState<string | null>(null); // object URL for converted WebVTT captions
-  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget' } | null>(null);
+  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget'; artifactKind?: ArtifactKind } | null>(null);
   type PersistedMediaSelection = {
     chatId: string;
     messageId?: string;
     type: "video" | "audio" | "widget";
+    artifactKind?: ArtifactKind;
     url?: string;
     subtitleUrl?: string;
     artifactId?: string;
@@ -669,6 +774,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         artifactId: media.artifactId,
         gcsPath: media.gcsPath,
         type: "widget",
+        artifactKind: normalizeArtifactKind(media, message),
       });
       setVttUrl(null);
       setSrtText(null);
@@ -681,6 +787,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           chatId: chatKey,
           messageId,
           type: "widget",
+          artifactKind: normalizeArtifactKind(media, message),
           url: widgetDownloadUrl,
           widgetCode: media.widgetCode,
           artifactId: media.artifactId,
@@ -715,6 +822,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       artifactId: media.artifactId,
       gcsPath: media.gcsPath,
       type: media.type,
+      artifactKind: normalizeArtifactKind(media, message),
     });
     setVttUrl(null);
     setSrtText(null);
@@ -739,6 +847,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         chatId: chatKey,
         messageId,
         type: media.type,
+        artifactKind: normalizeArtifactKind(media, message),
         url: mediaUrl,
         subtitleUrl,
         artifactId: media.artifactId,
@@ -756,6 +865,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistMediaSelection({
         chatId: chatKey,
         type: "widget",
+        artifactKind: currentMediaMeta?.artifactKind,
         url: htmlDownloadUrl || undefined,
         widgetCode: widgetHtml,
         artifactId: currentMediaMeta?.artifactId,
@@ -769,6 +879,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistMediaSelection({
         chatId: chatKey,
         type: currentMediaMeta.type,
+        artifactKind: currentMediaMeta.artifactKind || currentMediaMeta.type,
         url: videoUrl,
         artifactId: currentMediaMeta.artifactId,
         gcsPath: currentMediaMeta.gcsPath,
@@ -839,6 +950,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   gcsPath: m.media.gcsPath as string | undefined,
                   sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
                   widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
+                  artifactKind: (m.media.artifactKind as ArtifactKind | undefined),
                   downloadFilename: m.media.downloadFilename as string | undefined,
                 } : undefined;
                 // Preserve quiz data
@@ -997,6 +1109,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             type: "widget",
             url: persisted.url,
             widgetCode: persisted.widgetCode,
+            artifactKind: persisted.artifactKind,
             artifactId: persisted.artifactId,
             gcsPath: persisted.gcsPath,
             title: persisted.title,
@@ -1009,6 +1122,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           messageId: persisted.messageId,
           media: {
             type: persisted.type,
+            artifactKind: persisted.artifactKind,
             url: persisted.url,
             subtitleUrl: persisted.subtitleUrl,
             artifactId: persisted.artifactId,
@@ -1961,6 +2075,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             gcsPath: media.gcsPath,
             sceneCode: media.sceneCode,  // Include sceneCode for video editing
             widgetCode: media.widgetCode,        // BUG FIX: persist widget HTML
+            artifactKind: (media as any).artifactKind,
             downloadFilename: media.downloadFilename,
           };
         }
@@ -2107,13 +2222,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Use signed URL if available, otherwise use regular URL
         const audioUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(audioUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio' });
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio', artifactKind: 'podcast' });
         setSubtitleLang((data.lang as string) || undefined);
 
 
         // Create media attachment for persistent access - always use signed URL if available
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'audio',
+          artifactKind: 'podcast' as any,
           url: audioUrl, // Use signed URL for persistence
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
           title: `${podcastMode === "debate" ? "Debate Podcast" : "Podcast"}: ${prompt.slice(0, 50)}...`,
@@ -2399,6 +2515,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const widgetDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Widget: ${prompt.slice(0, 50)}`, "upcurved_widget.html");
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'widget',
+          artifactKind: 'widget' as any,
           url: widgetDownloadUrl,
           widgetCode: data.widget_html,
           title: `Widget: ${prompt.slice(0, 50)}`,
@@ -2411,7 +2528,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           String(finalChatId)
         );
         setVideoUrl(null);
-        setCurrentMediaMeta({ type: 'widget' });
+        setCurrentMediaMeta({ type: 'widget', artifactKind: 'widget' });
         setSrtText(null);
         setVttUrl(null);
         setSubtitleLang(undefined);
@@ -3092,12 +3209,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           const storyDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Story Scenes: ${prompt.slice(0, 50)}`, "upcurved_story.html");
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
+            artifactKind: 'story' as any,
             url: storyDownloadUrl,
             widgetCode: data.widget_html,
             title: `Story Scenes: ${prompt.slice(0, 50)}...`,
             downloadFilename: storyDownloadFilename,
           };
-          setCurrentMediaMeta({ type: 'widget' });
+          setCurrentMediaMeta({ type: 'widget', artifactKind: 'story' });
           setWidgetHtml(data.widget_html);
           setHtmlDownloadUrl(storyDownloadUrl || null);
           setHtmlDownloadFilename(storyDownloadFilename || null);
@@ -3124,7 +3242,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Use signed URL if available, otherwise use regular URL
         const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
 
         // Debug subtitle URL
@@ -3139,6 +3257,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Create media attachment for persistent access
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'video',
+          artifactKind: 'video' as any,
           url: videoUrl,
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
           title: `${videoMode === "story" ? "Story Video" : "Video"}: ${prompt.slice(0, 50)}...`,
@@ -3405,8 +3524,277 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }
 
+
+  async function handleQuizHtmlArtifactDirect(msg: any) {
+    const media = msg.media;
+    const kind = normalizeArtifactKind(media, msg);
+    if (!media?.widgetCode || (kind !== 'story' && kind !== 'widget')) {
+      toast({ title: "Cannot generate quiz", description: "This artifact does not have readable HTML content.", duration: 4000 });
+      return;
+    }
+
+    const transcript = plainTextFromHtml(media.widgetCode, msg.content).slice(0, 14000);
+    if (!transcript || transcript.length < 30) {
+      toast({ title: "Cannot generate quiz", description: "There was not enough readable text in this artifact.", duration: 4000 });
+      return;
+    }
+
+    if (!ensureLlmKey("quiz")) return;
+
+    stopPlayback();
+    setQuizLoading(true);
+    setApiError(null);
+
+    const safe: ApiKeys = {
+      claude: apiKeys?.claude || "",
+      gemini: apiKeys?.gemini || "",
+      openrouter: apiKeys?.openrouter || "",
+      provider: apiKeys?.provider || "",
+      model: apiKeys?.model || "",
+    };
+
+    let persistedId: string | undefined;
+
+    try {
+      const mediaTitle = media.title || (kind === 'story' ? 'story' : 'widget');
+      const userPrompt = `❓ Quiz from ${mediaTitle}`;
+
+      persistedId = await ensurePersistedActiveChat(userPrompt);
+      const finalChatId = persistedId || activeChatId;
+      if (!finalChatId) {
+        toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+        return;
+      }
+      setActiveChatId(finalChatId);
+      await processAndAddMessage(userPrompt, true, undefined, persistedId);
+
+      const controller = new AbortController();
+      quizAbortRef.current = controller;
+
+      const response = await apiQuiz({
+        transcript,
+        sceneCode: "",
+        provider: safe.provider || undefined,
+        model: safe.model || undefined,
+        provider_keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
+        chatId: String(finalChatId),
+        jobId: makeJobId(),
+      } as any, controller.signal);
+
+      const quizChatId = persistedId || activeChatId;
+      if (quizChatId && response.quiz?.questions?.length) {
+        const quizPayload = {
+          ...response.quiz,
+          downloadUrl: toPlayableMediaUrl(response.download_url),
+          downloadFilename: response.download_filename,
+        };
+        const quizTitle = (quizPayload?.title as string) || `${artifactLabel(kind)} Quiz`;
+        const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
+          quizAnchor: true,
+          quizTitle,
+          quizData: quizPayload,
+        });
+
+        if (quizMsgId) {
+          setQuizzesByChat(prev => ({
+            ...prev,
+            [String(quizChatId)]: {
+              ...(prev[String(quizChatId)] || {}),
+              [quizMsgId]: { data: quizPayload, index: 0, answers: [], score: null, selected: null, revealed: false }
+            }
+          }));
+        }
+      } else {
+        await processAndAddMessage('❌ Quiz generation failed.', false, undefined, persistedId);
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        setApiError(err.message);
+        toast({ title: "Quiz generation failed", description: err.message, duration: 4000 });
+        await processAndAddMessage(`❌ Quiz generation failed: ${err.message}`, false, undefined, persistedId);
+      } else {
+        await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
+      }
+    } finally {
+      setQuizLoading(false);
+      quizAbortRef.current = null;
+    }
+  }
+
+  async function handleEditNonVideoArtifact(kind: ArtifactKind) {
+    if (!isEditMode || !quotedMessage) {
+      toast({ title: "Nothing selected", description: "Please select an artifact to edit first.", duration: 4000 });
+      return;
+    }
+
+    const editInstructions = query.trim();
+    if (!editInstructions) {
+      toast({ title: "Enter edit instructions", description: "Please describe what changes you want to make.", duration: 4000 });
+      return;
+    }
+
+    if (!ensureLlmKey("quiz")) return;
+
+    const safe: ApiKeys = {
+      claude: apiKeys?.claude || "",
+      gemini: apiKeys?.gemini || "",
+      openrouter: apiKeys?.openrouter || "",
+      provider: apiKeys?.provider || "",
+      model: apiKeys?.model || "",
+    };
+
+    const chatIdForGeneration = typeof activeChatId === 'string' ? activeChatId : String(activeChatId);
+    if (!chatIdForGeneration || chatIdForGeneration === "null") {
+      toast({ title: "No active chat", description: "Please open a chat and try again.", duration: 4000 });
+      return;
+    }
+
+    const sourceTitle = quotedMessage.media?.title || quotedMessage.quizData?.title || artifactLabel(kind);
+    const userEditMessage = `✏️ Edit ${artifactLabel(kind)}: ${editInstructions}`;
+
+    try {
+      await processAndAddMessage(userEditMessage, true, undefined, chatIdForGeneration);
+      setQuery("");
+
+      if (kind === 'widget' || kind === 'story') {
+        const originalHtml = quotedMessage.media?.widgetCode || '';
+        if (!originalHtml.trim()) {
+          toast({ title: "Cannot edit", description: "The original HTML source is missing.", duration: 4000 });
+          return;
+        }
+
+        setWidgetLoading(true);
+        const controller = new AbortController();
+        widgetAbortRef.current = controller;
+        const endpoint = kind === 'story' ? '/edit/story' : '/edit/widget';
+        const res = await apiFetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            original_html: originalHtml,
+            edit_instructions: editInstructions,
+            original_title: sourceTitle,
+            keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
+            provider: safe.provider || undefined,
+            model: safe.model || undefined,
+            sessionId: ensureChatSessionId(),
+            jobId: makeJobId(),
+            chatId: String(chatIdForGeneration),
+          }),
+          signal: controller.signal,
+        });
+        const { data } = await parseResponse(res);
+
+        if (res.ok && data?.status === 'ok' && data?.widget_html) {
+          const downloadUrl = toPlayableMediaUrl(data.download_url);
+          const fallbackName = kind === 'story' ? 'upcurved_story.html' : 'upcurved_widget.html';
+          const downloadFilename = data.download_filename || htmlFilenameFromTitle(`Edited ${artifactLabel(kind)}: ${sourceTitle}`, fallbackName);
+          const titlePrefix = kind === 'story' ? 'Edited Story' : 'Edited Widget';
+          const mediaAttachment: import('@/types').MediaAttachment = {
+            type: 'widget',
+            artifactKind: kind as any,
+            url: downloadUrl,
+            widgetCode: data.widget_html,
+            title: `${titlePrefix}: ${sourceTitle}`,
+            downloadFilename,
+          };
+          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : 'Widget'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
+          setVideoUrl(null);
+          setCurrentMediaMeta({ type: 'widget', artifactKind: kind });
+          setWidgetHtml(data.widget_html);
+          setHtmlDownloadUrl(downloadUrl || null);
+          setHtmlDownloadFilename(downloadFilename || null);
+        } else {
+          const msg = data?.message || data?.detail || `${artifactLabel(kind)} editing failed.`;
+          await processAndAddMessage(`❌ ${artifactLabel(kind)} editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+        }
+      } else if (kind === 'quiz') {
+        const originalQuiz = quotedMessage.quizData;
+        if (!originalQuiz?.questions?.length) {
+          toast({ title: "Cannot edit", description: "The original quiz JSON is missing.", duration: 4000 });
+          return;
+        }
+
+        setQuizLoading(true);
+        const controller = new AbortController();
+        quizAbortRef.current = controller;
+        const res = await apiFetch('/edit/quiz', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            original_quiz: originalQuiz,
+            edit_instructions: editInstructions,
+            num_questions: originalQuiz.questions?.length || 5,
+            difficulty: 'medium',
+            keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
+            provider: safe.provider || undefined,
+            model: safe.model || undefined,
+            sessionId: ensureChatSessionId(),
+            jobId: makeJobId(),
+            chatId: String(chatIdForGeneration),
+          }),
+          signal: controller.signal,
+        });
+        const { data } = await parseResponse(res);
+
+        if (res.ok && data?.status === 'ok' && data?.quiz?.questions?.length) {
+          const quizPayload = {
+            ...data.quiz,
+            downloadUrl: toPlayableMediaUrl(data.download_url),
+            downloadFilename: data.download_filename,
+          };
+          const quizTitle = (quizPayload?.title as string) || 'Edited Quiz';
+          const quizMsgId = await processAndAddMessage('', false, undefined, String(chatIdForGeneration), {
+            quizAnchor: true,
+            quizTitle,
+            quizData: quizPayload,
+          });
+          if (quizMsgId) {
+            setQuizzesByChat(prev => ({
+              ...prev,
+              [String(chatIdForGeneration)]: {
+                ...(prev[String(chatIdForGeneration)] || {}),
+                [quizMsgId]: { data: quizPayload, index: 0, answers: [], score: null, selected: null, revealed: false }
+              }
+            }));
+          }
+        } else {
+          const msg = data?.message || data?.detail || 'Quiz editing failed.';
+          await processAndAddMessage(`❌ Quiz editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+        }
+      } else {
+        toast({ title: "Unsupported edit", description: "This artifact type cannot be edited yet.", duration: 4000 });
+      }
+
+      setIsEditMode(false);
+      setIsQuizMode(false);
+      setQuotedMessage(null);
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        await processAndAddMessage(`⏹️ Canceled ${artifactLabel(kind)} editing.`, false, undefined, chatIdForGeneration);
+      } else {
+        const msg = err?.message || "Request failed";
+        toast({ title: `${artifactLabel(kind)} edit failed`, description: msg, duration: 4000 });
+        await processAndAddMessage(`❌ ${artifactLabel(kind)} editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+      }
+    } finally {
+      setWidgetLoading(false);
+      setQuizLoading(false);
+      widgetAbortRef.current = null;
+      quizAbortRef.current = null;
+    }
+  }
+
+
+
   // Handle video editing in edit mode
   async function handleEditVideo() {
+    const selectedKind = quotedMessage?.artifactKind || normalizeArtifactKind(quotedMessage?.media, quotedMessage);
+    if (selectedKind && selectedKind !== 'video') {
+      await handleEditNonVideoArtifact(selectedKind);
+      return;
+    }
+
     if (!isEditMode || !quotedMessage?.media?.sceneCode) {
       toast({ title: "No video to edit", description: "Please select a video to edit first.", duration: 4000 });
       return;
@@ -3489,11 +3877,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       if (res.ok && data?.status === "ok" && data?.video_url) {
         const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video' });
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video' });
         setSubtitleLang((data.lang as string) || undefined);
 
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'video',
+          artifactKind: 'video' as any,
           url: videoUrl,
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
           title: `Edited Video: ${editInstructions.slice(0, 30)}...`,
@@ -3970,6 +4359,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           title: m.media.title as string | undefined,
           sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
           widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
+          artifactKind: (m.media.artifactKind as ArtifactKind | undefined),
+          downloadFilename: m.media.downloadFilename as string | undefined,
         } : undefined;
         // Ensure all messages have createdAt for proper ordering
         const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -4606,6 +4997,76 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               </div>
                             </div>
                           )}
+                          {/* Follow-up actions. Downloads live only in the right panel. */}
+                          {msg.media && msg.media.type === 'audio' && msg.media.subtitleUrl && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
+                              onClick={() => void handleQuizMediaDirect(msg)}
+                              title="Generate quiz from podcast"
+                              disabled={busy || podcastLoading || quizLoading || widgetLoading}
+                            >
+                              <Brain className="w-4 h-4" />
+                            </Button>
+                          )}
+
+                          {msg.media && msg.media.type === 'video' && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="absolute top-2 right-16 opacity-0 group-hover:opacity-100 h-7 w-7"
+                                onClick={() => {
+                                  if (!msg.media?.subtitleUrl) {
+                                    toast({ title: "No captions", description: "This video needs captions to generate a quiz.", duration: 4000 });
+                                    return;
+                                  }
+                                  void handleQuizMediaDirect(msg);
+                                }}
+                                title="Generate quiz from video"
+                                disabled={busy || podcastLoading || quizLoading || widgetLoading}
+                              >
+                                <Brain className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
+                                onClick={() => startEditArtifact(msg, index, 'video')}
+                                title="Edit this video"
+                                disabled={busy || podcastLoading || quizLoading || widgetLoading}
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                            </>
+                          )}
+
+                          {msg.media && msg.media.type === 'widget' && msg.media.widgetCode && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="absolute top-2 right-16 opacity-0 group-hover:opacity-100 h-7 w-7"
+                                onClick={() => void handleQuizHtmlArtifactDirect(msg)}
+                                title={`Generate quiz from ${artifactLabel(normalizeArtifactKind(msg.media, msg))}`}
+                                disabled={busy || podcastLoading || quizLoading || widgetLoading}
+                              >
+                                <Brain className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
+                                onClick={() => startEditArtifact(msg, index, normalizeArtifactKind(msg.media, msg))}
+                                title={`Edit this ${artifactLabel(normalizeArtifactKind(msg.media, msg))}`}
+                                disabled={busy || podcastLoading || quizLoading || widgetLoading}
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                            </>
+                          )}
+
                           {msg.content && (
                             <Button
                               variant="ghost"
@@ -4620,70 +5081,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 <Copy className="w-4 h-4" />
                               )}
                             </Button>
-                          )}
-                          {/* Quiz button for podcast messages - appears on hover */}
-                          {msg.media && msg.media.type === 'audio' && msg.media.subtitleUrl && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
-                              onClick={() => {
-                                if (!msg.media?.subtitleUrl) {
-                                  toast({ title: "No captions", description: "This podcast needs captions.", duration: 4000 });
-                                  return;
-                                }
-                                // Generate quiz directly without entering quiz mode
-                                void handleQuizMediaDirect(msg);
-                              }}
-                              title="Generate quiz from podcast"
-                              disabled={busy || podcastLoading || quizLoading || widgetLoading}
-                            >
-                              <Brain className="w-4 h-4" />
-                            </Button>
-                          )}
-                          {/* Edit & Quiz buttons for video messages - appears on hover */}
-                          {msg.media && msg.media.type === 'video' && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="absolute top-2 right-16 opacity-0 group-hover:opacity-100 h-7 w-7"
-                                onClick={() => {
-                                  if (!msg.media?.subtitleUrl) {
-                                    toast({ title: "No captions", description: "This video needs captions. Regenerate it with a podcast to add captions.", duration: 4000 });
-                                    return;
-                                  }
-                                  // Generate quiz directly without entering quiz mode
-                                  void handleQuizMediaDirect(msg);
-                                }}
-                                  title="Generate quiz from video"
-                                  disabled={busy || podcastLoading || quizLoading || widgetLoading}
-                              >
-                                <Brain className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
-                                onClick={() => {
-                                  if (!msg.media?.sceneCode) {
-                                    toast({ title: "Cannot edit this video", description: "This video was generated before edit mode was available. Generate a new video to enable editing.", duration: 4000 });
-                                    return;
-                                  }
-                                  setIsEditMode(true);
-                                  setQuotedMessage({
-                                    messageId: (msg as any).messageId || `bot-${index}`,
-                                    content: msg.content,
-                                    media: msg.media!
-                                  });
-                                  textareaRef.current?.focus();
-                                }}
-                                title="Edit this video"
-                                disabled={busy || podcastLoading || quizLoading || widgetLoading}
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </Button>
-                            </>
                           )}
                         </div>
                       </div>
@@ -4722,16 +5119,28 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               <div>
                                 <div className="flex items-start justify-between gap-3 mb-2">
                                   <h3 className="font-semibold flex items-center gap-2"><span>📝</span>{quiz.data.title || 'Quiz'}</h3>
-                                  {quiz.data.downloadUrl && (
+                                  <div className="flex items-center gap-1 shrink-0">
                                     <Button
                                       variant="secondary"
-                                      size="sm"
-                                      className="h-7 text-xs shrink-0"
-                                      onClick={() => handleHtmlDownload(quiz.data.downloadUrl, quiz.data.downloadFilename || htmlFilenameFromTitle(quiz.data.title, "upcurved_quiz.html"))}
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      onClick={() => startEditArtifact({ messageId: quizId, content: '', quizAnchor: true, quizData: quiz.data }, index, 'quiz', quiz.data)}
+                                      title="Edit this quiz"
+                                      disabled={busy || podcastLoading || quizLoading || widgetLoading}
                                     >
-                                      <Download className="w-3 h-3 mr-1" /> HTML
+                                      <Pencil className="w-3 h-3" />
                                     </Button>
-                                  )}
+                                    {quiz.data.downloadUrl && (
+                                      <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        className="h-7 text-xs"
+                                        onClick={() => handleHtmlDownload(quiz.data.downloadUrl, quiz.data.downloadFilename || htmlFilenameFromTitle(quiz.data.title, "upcurved_quiz.html"))}
+                                      >
+                                        <Download className="w-3 h-3 mr-1" /> HTML
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                                 <p className="text-sm mb-4 opacity-80">Question {quiz.index + 1} of {quiz.data.questions.length}</p>
                                 <div className="bg-white/10 rounded-md p-4 backdrop-blur-sm">
@@ -4795,16 +5204,28 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               <div>
                                 <div className="flex items-start justify-between gap-3 mb-2">
                                   <h3 className="font-semibold flex items-center gap-2"><span>🏆</span>Results</h3>
-                                  {quiz.data.downloadUrl && (
+                                  <div className="flex items-center gap-1 shrink-0">
                                     <Button
                                       variant="secondary"
-                                      size="sm"
-                                      className="h-7 text-xs shrink-0"
-                                      onClick={() => handleHtmlDownload(quiz.data.downloadUrl, quiz.data.downloadFilename || htmlFilenameFromTitle(quiz.data.title, "upcurved_quiz.html"))}
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      onClick={() => startEditArtifact({ messageId: quizId, content: '', quizAnchor: true, quizData: quiz.data }, index, 'quiz', quiz.data)}
+                                      title="Edit this quiz"
+                                      disabled={busy || podcastLoading || quizLoading || widgetLoading}
                                     >
-                                      <Download className="w-3 h-3 mr-1" /> HTML
+                                      <Pencil className="w-3 h-3" />
                                     </Button>
-                                  )}
+                                    {quiz.data.downloadUrl && (
+                                      <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        className="h-7 text-xs"
+                                        onClick={() => handleHtmlDownload(quiz.data.downloadUrl, quiz.data.downloadFilename || htmlFilenameFromTitle(quiz.data.title, "upcurved_quiz.html"))}
+                                      >
+                                        <Download className="w-3 h-3 mr-1" /> HTML
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                                 <p className="text-sm mb-1">Score: {quiz.score}/{quiz.data.questions.length}</p>
                                 <p className="mb-4 font-medium">{quiz.score === quiz.data.questions.length ? 'Perfect score! Outstanding! 🎉' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.8) ? 'Great job, almost perfect! ✨' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.6) ? 'Nice work. keep practicing! 👍' : 'You can boost this score, give it another shot! 💪'}</p>
@@ -4853,9 +5274,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 <div className="flex-1 min-w-0">
                   <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
                     <Pencil className="w-3 h-3" />
-                    Editing video
+                    Editing {artifactLabel(quotedMessage.artifactKind || normalizeArtifactKind(quotedMessage.media, quotedMessage))}
                   </div>
-                  <p className="text-sm truncate">{quotedMessage.media.title || 'Video'}</p>
+                  <p className="text-sm truncate">{quotedMessage.media?.title || quotedMessage.quizData?.title || 'Artifact'}</p>
                 </div>
                 <button
                   onClick={() => {
@@ -4892,7 +5313,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 ref={textareaRef}
                 placeholder={
                   isEditMode
-                    ? "Describe what changes you want to make to the video..."
+                    ? `Describe what changes you want to make to this ${artifactLabel(quotedMessage?.artifactKind || normalizeArtifactKind(quotedMessage?.media, quotedMessage))}...`
                     : uploadedFiles.length > 0
                     ? `${uploadedFiles.length} file(s) attached. Press Generate to continue.`
                     : "Enter a prompt..."
@@ -4912,7 +5333,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     variant="default"
                     className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
                     onClick={() => void handleEditVideo()}
-                    title={busy ? "Stop editing" : "Apply edits to video"}
+                    title={busy || widgetLoading || quizLoading ? "Stop editing" : "Apply edits"}
                     disabled={!query.trim()}
                   >
                     {busy ? <Square className="w-5 h-5" /> : <Pencil className="w-5 h-5" />}
