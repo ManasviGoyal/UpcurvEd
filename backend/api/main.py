@@ -1,18 +1,24 @@
+# backend/api/main.py
 import json
 import logging
 import mimetypes
 import os
 import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 from difflib import SequenceMatcher
 from typing import Literal
 from uuid import uuid4
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+import requests
 
 from backend.agent.code_sanitize import sanitize_minimally
 from backend.agent.llm.clients import call_llm
@@ -20,6 +26,7 @@ from backend.agent.minigraph import echo_manim_code
 from backend.agent.prompts import EDIT_SYSTEM, build_edit_user_prompt
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
 from backend.utils import app_logging  # noqa: F401
+from backend.utils.html_exports import build_quiz_html, make_download_filename, safe_job_id, save_html_file
 
 logger = logging.getLogger(f"app.{__name__}")
 APP_MODE = os.environ.get("APP_MODE", "cloud").strip().lower()
@@ -338,6 +345,9 @@ class QuizIn(BaseModel):
     model: str | None = None
     context: str | None = None
     userEmail: str | None = None
+    jobId: str | None = None
+    chatId: str | None = None
+    sessionId: str | None = None
 
 
 class PodcastIn(BaseModel):
@@ -372,6 +382,16 @@ class EditVideoIn(BaseModel):
     sessionId: str | None = None
 
 
+class BurnCaptionsIn(BaseModel):
+    video_url: str
+    subtitle_url: str | None = None
+    subtitle_text: str | None = None
+    filename: str | None = None
+    artifactId: str | None = None
+    gcsPath: str | None = None
+    chatId: str | None = None
+
+
 class ChatCreateIn(BaseModel):
     title: str | None = Field(default="New Chat")
     model: str | None = None
@@ -400,6 +420,7 @@ class MessageMedia(BaseModel):
     gcsPath: str | None = None
     sceneCode: str | None = None
     widgetCode: str | None = None
+    downloadFilename: str | None = None
 
 
 class MessageCreateIn(BaseModel):
@@ -505,6 +526,175 @@ def _srt_to_vtt_text(srt_text: str) -> str:
         return "WEBVTT\n\n" + "\n".join(body) + "\n"
 
 
+def _html_download_payload(
+    *,
+    uid: str,
+    chat_id: str | None,
+    kind: str,
+    title: str | None,
+    html_text: str,
+    job_id: str | None = None,
+) -> dict:
+    """Save/export a self-contained HTML artifact and return download metadata."""
+    jid = safe_job_id(job_id)
+    filename = make_download_filename(kind, title)
+    data = html_text.encode("utf-8")
+    content_type = "text/html; charset=utf-8"
+    gcs_bucket = _get_bucket_name()
+
+    if gcs_bucket:
+        chat_path = chat_id or "uncategorized"
+        gcs_path = f"{uid}/chats/{chat_path}/exports/{jid}_{filename}"
+        _upload_bytes(gcs_bucket, gcs_path, data, content_type)
+        artifact_id = _save_artifact(
+            uid, chat_id, kind, gcs_path, len(data), content_type, derived=True
+        )
+        return {
+            "download_url": _sign_url(gcs_bucket, gcs_path),
+            "download_filename": filename,
+            "download_artifact_id": artifact_id,
+            "download_gcs_path": gcs_path,
+        }
+
+    local_path = save_html_file(jid, filename, html_text)
+    return {
+        "download_url": to_static_url(local_path),
+        "download_filename": filename,
+        "download_artifact_id": None,
+        "download_gcs_path": None,
+    }
+
+
+
+def _find_ffmpeg_bin() -> str:
+    for key in ("UPCURVED_FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE", "FFMPEG_BINARY"):
+        value = (os.environ.get(key) or "").strip()
+        if value and pathlib.Path(value).exists():
+            return value
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+
+    raise RuntimeError("ffmpeg not found. Set UPCURVED_FFMPEG_PATH or install ffmpeg.")
+
+
+def _static_url_to_path(url: str) -> pathlib.Path | None:
+    try:
+        parsed = urlparse(url)
+        path = parsed.path if parsed.scheme else url
+        if path.startswith("/static/"):
+            candidate = pathlib.Path(STORAGE) / path.replace("/static/", "", 1)
+            if candidate.exists():
+                return candidate
+    except Exception:
+        return None
+    return None
+
+
+def _download_url_to_file(url: str, dest: pathlib.Path, *, timeout: int = 180) -> pathlib.Path:
+    local = _static_url_to_path(url)
+    if local is not None:
+        return local
+
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    dest.write_bytes(response.content)
+    return dest
+
+
+def _write_caption_text(text: str, out_dir: pathlib.Path) -> pathlib.Path:
+    clean = (text or "").replace("\r\n", "\n").strip()
+    if not clean:
+        raise ValueError("subtitle_text is empty")
+
+    suffix = ".vtt" if clean.upper().startswith("WEBVTT") else ".srt"
+    path = out_dir / f"captions{suffix}"
+    path.write_text(clean + "\n", encoding="utf-8")
+    return path
+
+
+def _materialize_caption_file(
+    *,
+    subtitle_url: str | None,
+    subtitle_text: str | None,
+    tmp_dir: pathlib.Path,
+) -> pathlib.Path:
+    if subtitle_text and subtitle_text.strip():
+        return _write_caption_text(subtitle_text, tmp_dir)
+
+    if not subtitle_url:
+        raise ValueError("Missing subtitle_url or subtitle_text")
+
+    local = _static_url_to_path(subtitle_url)
+    if local is not None:
+        # Copy to a simple temp filename so the ffmpeg subtitles filter has no
+        # spaces/special path characters to escape.
+        text = local.read_text(encoding="utf-8", errors="ignore")
+        return _write_caption_text(text, tmp_dir)
+
+    response = requests.get(subtitle_url, timeout=120)
+    response.raise_for_status()
+    return _write_caption_text(response.text, tmp_dir)
+
+
+def _safe_media_filename(name: str | None, fallback: str) -> str:
+    raw = (name or fallback or "upcurved_video_captions.mp4").strip()
+    raw = re.sub(r"[^a-zA-Z0-9._-]+", "_", raw)
+    raw = re.sub(r"_+", "_", raw).strip("._") or fallback
+    if not raw.lower().endswith(".mp4"):
+        raw += ".mp4"
+    return raw
+
+
+def _ffmpeg_filter_path(path: pathlib.Path) -> str:
+    # The subtitles filter receives this as one ffmpeg argument. The temp path
+    # is intentionally simple, but escape characters that are meaningful inside
+    # ffmpeg filter expressions.
+    return path.as_posix().replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+def _burn_captions_with_ffmpeg(
+    *,
+    video_path: pathlib.Path,
+    subtitle_path: pathlib.Path,
+    output_path: pathlib.Path,
+    logs_dir: pathlib.Path,
+) -> None:
+    ffmpeg_bin = _find_ffmpeg_bin()
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    subtitles_filter = f"subtitles={_ffmpeg_filter_path(subtitle_path)}"
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(video_path),
+        "-vf",
+        subtitles_filter,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    (logs_dir / "burn_captions_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
+    (logs_dir / "burn_captions_stdout.txt").write_text(proc.stdout or "", encoding="utf-8")
+    (logs_dir / "burn_captions_stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
+
+    if proc.returncode != 0 or not output_path.exists():
+        detail = (proc.stderr or proc.stdout or "Unknown ffmpeg error")[-1500:]
+        raise RuntimeError(f"ffmpeg caption burn failed: {detail}")
+
+
+
 @app.post("/generate")
 def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
     try:
@@ -523,13 +713,24 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             )
             widget_html = story_res.get("widget_html")
             if story_res.get("status") == "ok" and widget_html:
+                story_plan = story_res.get("story_plan") or {}
+                story_title = story_plan.get("title") if isinstance(story_plan, dict) else body.prompt
+                download_meta = _html_download_payload(
+                    uid=uid,
+                    chat_id=body.chatId,
+                    kind="story",
+                    title=story_title or body.prompt,
+                    html_text=widget_html,
+                    job_id=body.jobId,
+                )
                 return {
                     "ok": True,
                     "status": "ok",
                     "widget_html": widget_html,
-                    "story_plan": story_res.get("story_plan"),
+                    "story_plan": story_plan,
                     "generation_mode": "story",
                     "message": "Story scene slider generated.",
+                    **download_meta,
                 }
             return {
                 "ok": False,
@@ -953,7 +1154,7 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
 
 
 @app.post("/quiz/embedded")
-def quiz_embedded(body: QuizIn):
+def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
     try:
         provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
         provider_keys = _provider_keys_with_env(body.keys)
@@ -966,7 +1167,16 @@ def quiz_embedded(body: QuizIn):
             provider_keys=provider_keys,
             context=body.context,
         )
-        return {"status": "ok", "quiz": quiz}
+        quiz_html = build_quiz_html(quiz, source_title=body.prompt)
+        download_meta = _html_download_payload(
+            uid=uid,
+            chat_id=body.chatId,
+            kind="quiz",
+            title=quiz.get("title") or body.prompt,
+            html_text=quiz_html,
+            job_id=body.jobId,
+        )
+        return {"status": "ok", "quiz": quiz, **download_meta}
     except Exception as e:
         logger.exception("/quiz/embedded failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1001,7 +1211,16 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
             provider_keys=provider_keys,
             context=context,
         )
-        return {"status": "ok", "quiz": quiz}
+        quiz_html = build_quiz_html(quiz, source_title="Media quiz")
+        download_meta = _html_download_payload(
+            uid=uid,
+            chat_id=body.get("chatId"),
+            kind="quiz",
+            title=quiz.get("title") or "Media quiz",
+            html_text=quiz_html,
+            job_id=body.get("jobId"),
+        )
+        return {"status": "ok", "quiz": quiz, **download_meta}
     except Exception as e:
         logger.exception("/quiz/media failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1119,8 +1338,17 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             model=model,
             provider_keys=provider_keys,
         )
-        logger.info("/widget completed: ok, html_len=%d", len(result.get("widget_html", "")))
-        return {"ok": True, "status": "ok", "widget_html": result["widget_html"]}
+        widget_html = result["widget_html"]
+        download_meta = _html_download_payload(
+            uid=uid,
+            chat_id=body.chatId,
+            kind="widget",
+            title=body.prompt,
+            html_text=widget_html,
+            job_id=body.jobId,
+        )
+        logger.info("/widget completed: ok, html_len=%d", len(widget_html))
+        return {"ok": True, "status": "ok", "widget_html": widget_html, **download_meta}
     except Exception as e:
         logger.exception("/widget failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1900,6 +2128,95 @@ def _delete_account_impl(uid: str):
         "artifacts_removed": total_artifacts,
         "gcs_files_removed": total_gcs_files,
     }
+
+
+@app.post("/api/media/burn-captions")
+def burn_captions_video(body: BurnCaptionsIn, uid: str = Depends(require_firebase_user)):
+    """
+    Create a derived MP4 with captions burned directly into the video.
+
+    This is used by the right-panel Download button when CC is toggled on.
+    If CC is off, the frontend downloads the original MP4 normally.
+    """
+    if not body.video_url or not str(body.video_url).strip():
+        raise HTTPException(status_code=400, detail="video_url is required")
+
+    if not (body.subtitle_text and body.subtitle_text.strip()) and not (
+        body.subtitle_url and str(body.subtitle_url).strip()
+    ):
+        raise HTTPException(status_code=400, detail="subtitle_url or subtitle_text is required")
+
+    export_id = f"burn_{uuid4().hex[:8]}"
+    job_dir = pathlib.Path(STORAGE) / "jobs" / export_id
+    logs_dir = job_dir / "logs"
+    out_path = job_dir / "video_captions.mp4"
+    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="upcurved_burn_"))
+
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        video_path = _download_url_to_file(str(body.video_url), tmp_dir / "source.mp4")
+        subtitle_path = _materialize_caption_file(
+            subtitle_url=str(body.subtitle_url) if body.subtitle_url else None,
+            subtitle_text=body.subtitle_text,
+            tmp_dir=tmp_dir,
+        )
+
+        _burn_captions_with_ffmpeg(
+            video_path=video_path,
+            subtitle_path=subtitle_path,
+            output_path=out_path,
+            logs_dir=logs_dir,
+        )
+
+        filename = _safe_media_filename(body.filename, "upcurved_video_captions.mp4")
+        download_url = to_static_url(out_path)
+        signed_video_url = None
+        gcs_path = None
+        artifact_id = None
+
+        gcs_bucket = _get_bucket_name()
+        if gcs_bucket:
+            data = out_path.read_bytes()
+            chat_path = body.chatId or "uncategorized"
+            gcs_path = f"{uid}/chats/{chat_path}/video_{export_id}_captions.mp4"
+            _upload_bytes(gcs_bucket, gcs_path, data, "video/mp4")
+            signed_video_url = _sign_url(gcs_bucket, gcs_path)
+            artifact_id = _save_artifact(
+                uid,
+                body.chatId,
+                "video",
+                gcs_path,
+                len(data),
+                "video/mp4",
+                derived=True,
+            )
+            download_url = signed_video_url
+
+        return {
+            "ok": True,
+            "status": "ok",
+            "download_url": download_url,
+            "signed_video_url": signed_video_url,
+            "filename": filename,
+            "job_id": export_id,
+            "artifact_id": artifact_id,
+            "gcs_path": gcs_path,
+            "message": "Captioned video created.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("/api/media/burn-captions failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 
 
 def _to_ms(ts) -> int | None:

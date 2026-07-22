@@ -1,7 +1,7 @@
 // frontend/src/types/index.ts
 export interface MediaAttachment {
   type: 'video' | 'audio' | 'widget';
-  url?: string;                    // optional — widgets have no URL
+  url?: string;                    // media URL, or downloadable HTML URL for widgets/stories
   subtitleUrl?: string;
   title?: string;
   artifactId?: string;
@@ -9,6 +9,7 @@ export interface MediaAttachment {
   sceneCode?: string;
   scriptGcsPath?: string;
   widgetCode?: string;             // full HTML document for sandboxed iframe
+  downloadFilename?: string;       // suggested filename for downloadable HTML exports
 }
 
 export interface Message {

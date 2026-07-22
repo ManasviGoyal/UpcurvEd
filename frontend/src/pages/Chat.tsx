@@ -1,3 +1,4 @@
+// frontend/src/pages/Chat.tsx
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { FC } from "react";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,7 @@ import {
   Zap,
   ExternalLink,
 } from "lucide-react";
-import type { User, Chat, ColorTheme, Theme, ApiKeys } from "@/types";
+import type { User, Chat, ColorTheme, Theme, ApiKeys, MediaAttachment } from "@/types";
 import {
   apiListChats,
   apiCreateChat,
@@ -202,6 +203,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // backend integration state
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [widgetHtml, setWidgetHtml] = useState<string | null>(null);
+  const [htmlDownloadUrl, setHtmlDownloadUrl] = useState<string | null>(null);
+  const [htmlDownloadFilename, setHtmlDownloadFilename] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0); // 0-100 visual progress during render
@@ -221,7 +224,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const [widgetLoading, setWidgetLoading] = useState(false);
   // Embedded quiz runtime state per chat, anchored to a specific messageId
   // quizzesByChat[chatId][messageId] => QuizRuntime
-  interface QuizData { title: string; description?: string; questions: { prompt: string; options: string[]; correctIndex: number }[] }
+  interface QuizData { title: string; description?: string; questions: { prompt: string; options: string[]; correctIndex: number }[]; downloadUrl?: string; downloadFilename?: string }
   interface QuizRuntime { data: QuizData; index: number; answers: number[]; score: number | null; selected: number | null; revealed: boolean }
   const [quizzesByChat, setQuizzesByChat] = useState<Record<string, Record<string, QuizRuntime>>>({});
   const [subtitleLang, setSubtitleLang] = useState<string | undefined>(undefined);
@@ -274,6 +277,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     gcsPath?: string;
     widgetCode?: string;
     title?: string;
+    downloadFilename?: string;
     updatedAt: number;
   };
   const videoAbortRef = useRef<AbortController | null>(null);
@@ -304,6 +308,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (/^https?:\/\//i.test(value)) return value;
     if (value.startsWith("blob:")) return value;
     return apiUrl(value);
+  };
+
+  const htmlFilenameFromTitle = (title?: string | null, fallback = "upcurved_export.html") => {
+    const base = String(title || fallback)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || "upcurved_export";
+    return base.endsWith(".html") ? base : `${base}.html`;
   };
 
   const ensureLlmKey = (action: "video" | "quiz"): boolean => {
@@ -649,6 +662,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     if (media.type === "widget" && media.widgetCode) {
       stopPlayback();
+      const widgetDownloadUrl = toPlayableMediaUrl(media.url);
+      const widgetDownloadFilename = media.downloadFilename || htmlFilenameFromTitle(media.title, "upcurved_widget.html");
       setVideoUrl(null);
       setCurrentMediaMeta({
         artifactId: media.artifactId,
@@ -659,15 +674,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setSrtText(null);
       setSubtitleLang(undefined);
       setWidgetHtml(media.widgetCode);
+      setHtmlDownloadUrl(widgetDownloadUrl || null);
+      setHtmlDownloadFilename(widgetDownloadFilename || null);
       if (persist && chatKey) {
         persistMediaSelection({
           chatId: chatKey,
           messageId,
           type: "widget",
+          url: widgetDownloadUrl,
           widgetCode: media.widgetCode,
           artifactId: media.artifactId,
           gcsPath: media.gcsPath,
           title: media.title,
+          downloadFilename: widgetDownloadFilename,
           updatedAt: Date.now(),
         });
       }
@@ -690,6 +709,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     setWidgetHtml(null);
+    setHtmlDownloadUrl(null);
+    setHtmlDownloadFilename(null);
     setCurrentMediaMeta({
       artifactId: media.artifactId,
       gcsPath: media.gcsPath,
@@ -735,9 +756,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistMediaSelection({
         chatId: chatKey,
         type: "widget",
+        url: htmlDownloadUrl || undefined,
         widgetCode: widgetHtml,
         artifactId: currentMediaMeta?.artifactId,
         gcsPath: currentMediaMeta?.gcsPath,
+        downloadFilename: htmlDownloadFilename || undefined,
         updatedAt: Date.now(),
       });
       return;
@@ -753,7 +776,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         updatedAt: Date.now(),
       });
     }
-  }, [activeChatId, widgetHtml, videoUrl, currentMediaMeta?.type, currentMediaMeta?.artifactId, currentMediaMeta?.gcsPath, vttUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeChatId, widgetHtml, htmlDownloadUrl, htmlDownloadFilename, videoUrl, currentMediaMeta?.type, currentMediaMeta?.artifactId, currentMediaMeta?.gcsPath, vttUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const formatTime = (secs: number) => {
     if (!isFinite(secs) || secs < 0) secs = 0;
@@ -816,6 +839,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   gcsPath: m.media.gcsPath as string | undefined,
                   sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
                   widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
+                  downloadFilename: m.media.downloadFilename as string | undefined,
                 } : undefined;
                 // Preserve quiz data
                 const extras: any = {};
@@ -954,6 +978,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const messages = Array.isArray(activeChat.messages) ? activeChat.messages : [];
       if (!chatKey || !messages.length) {
         setWidgetHtml(null);
+        setHtmlDownloadUrl(null);
+        setHtmlDownloadFilename(null);
         setVideoUrl(null);
         setCurrentMediaMeta(null);
         return;
@@ -965,7 +991,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         target = messages.find((m: any) => String(m?.messageId || "") === persisted.messageId && m?.media);
       }
       if (!target && persisted?.type === "widget" && persisted?.widgetCode) {
-        target = { messageId: persisted.messageId, media: { type: "widget", widgetCode: persisted.widgetCode, artifactId: persisted.artifactId, gcsPath: persisted.gcsPath, title: persisted.title } };
+        target = {
+          messageId: persisted.messageId,
+          media: {
+            type: "widget",
+            url: persisted.url,
+            widgetCode: persisted.widgetCode,
+            artifactId: persisted.artifactId,
+            gcsPath: persisted.gcsPath,
+            title: persisted.title,
+            downloadFilename: persisted.downloadFilename,
+          },
+        };
       }
       if (!target && persisted?.url && (persisted?.type === "video" || persisted?.type === "audio")) {
         target = {
@@ -985,6 +1022,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
       if (!target?.media) {
         setWidgetHtml(null);
+        setHtmlDownloadUrl(null);
+        setHtmlDownloadFilename(null);
         setVideoUrl(null);
         setCurrentMediaMeta(null);
         return;
@@ -1627,6 +1666,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (dest == null) return;
     abortAllGeneration();
     setWidgetHtml(null);
+    setHtmlDownloadUrl(null);
+    setHtmlDownloadFilename(null);
     if (dest === NEW_CHAT_SENTINEL) {
       startDraftChat();
       return;
@@ -1689,6 +1730,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setUploadedFiles([]);
     setApiError(null);
     setWidgetHtml(null);
+    setHtmlDownloadUrl(null);
+    setHtmlDownloadFilename(null);
     setVideoUrl(null);
     setSrtText(null);
     setCurrentMediaMeta(null);
@@ -1918,6 +1961,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             gcsPath: media.gcsPath,
             sceneCode: media.sceneCode,  // Include sceneCode for video editing
             widgetCode: media.widgetCode,        // BUG FIX: persist widget HTML
+            downloadFilename: media.downloadFilename,
           };
         }
         // Persist quiz data if present in extras
@@ -2009,6 +2053,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setApiError(null);
     // Reset current media
     setWidgetHtml(null);
+    setHtmlDownloadUrl(null);
+    setHtmlDownloadFilename(null);
     setVideoUrl(null);
     setSrtText(null);
     // Use the provided chat ID or fall back to activeChatId
@@ -2237,11 +2283,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const safe: ApiKeys = { claude: apiKeys?.claude || '', gemini: apiKeys?.gemini || '', 
         openrouter: apiKeys?.openrouter || "", provider: apiKeys?.provider || '', model: apiKeys?.model || '' };
       const sessionId = ensureChatSessionId();
-  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter }, provider: safe.provider || undefined, model: safe.model || undefined, sessionId };
+  const jobId = makeJobId();
+  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter }, provider: safe.provider || undefined, model: safe.model || undefined, sessionId, jobId, chatId: String(finalChatId) };
       console.debug('POST /quiz/embedded', body);
       const controller = new AbortController();
       quizAbortRef.current = controller;
-      const res = await fetch(apiUrl('/quiz/embedded'), {
+      const res = await apiFetch('/quiz/embedded', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2253,11 +2300,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       if (quizChatId && res.ok && data?.status === 'ok' && data?.quiz?.questions?.length) {
         // Insert a hidden bot anchor message (no visible bubble) to attach the quiz UI
         // Store quiz data in message extras so it persists on refresh
-        const quizTitle = (data.quiz?.title as string) || 'Quiz';
+        const quizPayload = {
+          ...data.quiz,
+          downloadUrl: toPlayableMediaUrl(data.download_url),
+          downloadFilename: data.download_filename,
+        };
+        const quizTitle = (quizPayload?.title as string) || 'Quiz';
         const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
           quizAnchor: true,
           quizTitle,
-          quizData: data.quiz // Store quiz data in message for persistence
+          quizData: quizPayload // Store quiz data in message for persistence
         });
           if (quizMsgId) {
             // Initialize runtime for this quiz
@@ -2265,7 +2317,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               ...prev,
               [String(quizChatId)]: {
                 ...(prev[String(quizChatId)] || {}),
-                [quizMsgId]: { data: data.quiz, index: 0, answers: [], score: null, selected: null, revealed: false }
+                [quizMsgId]: { data: quizPayload, index: 0, answers: [], score: null, selected: null, revealed: false }
               }
             }));
           }
@@ -2343,10 +2395,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       if (data?.status === "ok" && data?.widget_html) {
         // Store widget HTML in media attachment (no URL, no GCS — fully inline)
+        const widgetDownloadUrl = toPlayableMediaUrl(data.download_url);
+        const widgetDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Widget: ${prompt.slice(0, 50)}`, "upcurved_widget.html");
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'widget',
+          url: widgetDownloadUrl,
           widgetCode: data.widget_html,
           title: `Widget: ${prompt.slice(0, 50)}`,
+          downloadFilename: widgetDownloadFilename,
         };
         const widgetMessageId = await processAndAddMessage(
           "✅ Interactive widget generated.",
@@ -2360,6 +2416,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         setVttUrl(null);
         setSubtitleLang(undefined);
         setWidgetHtml(data.widget_html);
+        setHtmlDownloadUrl(widgetDownloadUrl || null);
+        setHtmlDownloadFilename(widgetDownloadFilename || null);
       } else {
         await processAndAddMessage("❌ Widget generation failed.", false, undefined, persistedId);
       }
@@ -2976,6 +3034,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setBusy(true);
     setApiError(null);
     setWidgetHtml(null);
+    setHtmlDownloadUrl(null);
+    setHtmlDownloadFilename(null);
     setVideoUrl(null);
     setSrtText(null);
   setSubtitleLang(undefined);
@@ -3028,13 +3088,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       if (res.ok && data?.status === "ok") {
         if (videoMode === "story" && data?.widget_html) {
+          const storyDownloadUrl = toPlayableMediaUrl(data.download_url);
+          const storyDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Story Scenes: ${prompt.slice(0, 50)}`, "upcurved_story.html");
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
+            url: storyDownloadUrl,
             widgetCode: data.widget_html,
             title: `Story Scenes: ${prompt.slice(0, 50)}...`,
+            downloadFilename: storyDownloadFilename,
           };
           setCurrentMediaMeta({ type: 'widget' });
           setWidgetHtml(data.widget_html);
+          setHtmlDownloadUrl(storyDownloadUrl || null);
+          setHtmlDownloadFilename(storyDownloadFilename || null);
           await processAndAddMessage(
             "✅ Story mode scene slider generated.",
             false,
@@ -3293,16 +3359,23 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider: safe.provider || undefined,
         model: safe.model || undefined,
         provider_keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
-      }, videoAbort.signal);
+        chatId: String(finalChatId),
+        jobId: makeJobId(),
+      } as any, videoAbort.signal);
 
       // Store quiz data like embedded quiz for interactive UI
       const quizChatId = persistedId || activeChatId;
       if (quizChatId && response.quiz?.questions?.length) {
-        const quizTitle = (response.quiz?.title as string) || 'Media Quiz';
+        const quizPayload = {
+          ...response.quiz,
+          downloadUrl: toPlayableMediaUrl(response.download_url),
+          downloadFilename: response.download_filename,
+        };
+        const quizTitle = (quizPayload?.title as string) || 'Media Quiz';
         const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
           quizAnchor: true,
           quizTitle,
-          quizData: response.quiz
+          quizData: quizPayload
         });
 
         if (quizMsgId) {
@@ -3311,7 +3384,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             ...prev,
             [String(quizChatId)]: {
               ...(prev[String(quizChatId)] || {}),
-              [quizMsgId]: { data: response.quiz, index: 0, answers: [], score: null, selected: null, revealed: false }
+              [quizMsgId]: { data: quizPayload, index: 0, answers: [], score: null, selected: null, revealed: false }
             }
           }));
         }
@@ -3357,6 +3430,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setBusy(true);
     setApiError(null);
     setWidgetHtml(null);
+    setHtmlDownloadUrl(null);
+    setHtmlDownloadFilename(null);
     setVideoUrl(null);
     setSrtText(null);
     setSubtitleLang(undefined);
@@ -3670,6 +3745,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             title: m.media.title as string | undefined,
             sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
             widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
+            downloadFilename: m.media.downloadFilename as string | undefined,
           } : undefined;
           // Ensure all messages have createdAt for proper ordering
           const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -4180,21 +4256,123 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }, []);
 
   // Download handler - downloads directly without opening new tab
+  const sanitizeDownloadFilename = (name?: string, fallback = "upcurved_export.html") => {
+    const cleaned = String(name || fallback)
+      .trim()
+      .replace(/[^\w.\-]+/g, "_")
+      .replace(/_+/g, "_");
+
+    return cleaned.endsWith(".html") ? cleaned : `${cleaned}.html`;
+  };
+
+  const handleHtmlDownload = async (downloadUrl?: string, filename?: string) => {
+    if (!downloadUrl) {
+      toast({
+        title: "Download unavailable",
+        description: "No downloadable HTML file was found for this item.",
+        duration: 4000,
+      });
+      return;
+    }
+
+    try {
+      const resolvedUrl = apiUrl(downloadUrl);
+      const response = await fetch(resolvedUrl);
+
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(
+        blob.type ? blob : new Blob([blob], { type: "text/html;charset=utf-8" })
+      );
+
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = sanitizeDownloadFilename(filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+      console.error("HTML download failed", error);
+      toast({
+        title: "Download failed",
+        description: "The HTML file could not be downloaded.",
+        duration: 5000,
+      });
+    }
+  };
+
   const handleDownload = async () => {
     if (!videoUrl) return;
 
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    // const timeStr = now.toISOString().slice(11, 19).replace(/:/g, '-'); // HH-MM-SS
     const artifactId = currentMediaMeta?.artifactId ? `_${currentMediaMeta.artifactId}` : '';
-    const fileName = currentMediaMeta?.type === 'video'
+    let fileName = currentMediaMeta?.type === 'video'
       ? `upcurved_video_${dateStr}${artifactId}.mp4`
       : `upcurved_podcast_${dateStr}${artifactId}.mp3`;
+    let downloadSource = videoUrl;
 
     try {
-      const response = await fetch(videoUrl);
+      const shouldBurnCaptions =
+        currentMediaMeta?.type === 'video' &&
+        isCaptionsOn &&
+        Boolean(vttUrl || srtText || activeScript);
+
+      if (shouldBurnCaptions) {
+        toast({
+          title: 'Preparing captioned video',
+          description: 'Burning captions into the MP4. This may take a moment.',
+          duration: 5000,
+        });
+
+        let subtitleText = activeScript || srtText || undefined;
+
+        // If captions are currently displayed from a generated blob URL, the backend
+        // cannot fetch that URL directly, so send the caption text in the request.
+        if (!subtitleText && vttUrl && /^blob:/i.test(vttUrl)) {
+          try {
+            const captionResponse = await fetch(vttUrl);
+            if (captionResponse.ok) {
+              subtitleText = await captionResponse.text();
+            }
+          } catch {}
+        }
+
+        const captionedFilename = fileName.replace(/\.mp4$/i, '_captions.mp4');
+        const burnResponse = await apiFetch('/api/media/burn-captions', {
+          method: 'POST',
+          body: JSON.stringify({
+            video_url: videoUrl,
+            subtitle_url: vttUrl && !/^blob:/i.test(vttUrl) ? vttUrl : undefined,
+            subtitle_text: subtitleText,
+            filename: captionedFilename,
+            artifactId: currentMediaMeta?.artifactId,
+            gcsPath: currentMediaMeta?.gcsPath,
+          }),
+        });
+
+        if (!burnResponse.ok) {
+          let detail = `caption burn failed: ${burnResponse.status}`;
+          try {
+            const payload = await burnResponse.json();
+            detail = payload?.detail || payload?.message || detail;
+          } catch {}
+          throw new Error(detail);
+        }
+
+        const burnData = await burnResponse.json();
+        downloadSource = apiUrl(burnData.download_url || burnData.signed_video_url || burnData.video_url);
+        fileName = burnData.filename || captionedFilename;
+      }
+
+      const response = await fetch(downloadSource);
       if (!response.ok) {
-        throw new Error('Failed to fetch video');
+        throw new Error('Failed to fetch media');
       }
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -4206,12 +4384,22 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-      toast({ title: 'Download started', description: 'File download initiated' });
+      toast({
+        title: 'Download started',
+        description: shouldBurnCaptions ? 'Captioned video download initiated' : 'File download initiated',
+      });
     } catch (error) {
       console.error('Download failed:', error);
-      toast({ title: 'Download failed', description: 'Could not download the file', variant: 'destructive' });
+      toast({
+        title: 'Download failed',
+        description: error instanceof Error ? error.message : 'Could not download the file',
+        variant: 'destructive',
+      });
     }
   };
+
+
+
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
@@ -4284,6 +4472,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setIsQuizMode(false);
       setQuotedMessage(null);
       setWidgetHtml(null);
+      setHtmlDownloadUrl(null);
+      setHtmlDownloadFilename(null);
       setVideoUrl(null);
       setCurrentMediaMeta(null);
       setVttUrl(null);
@@ -4530,7 +4720,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                           <div className={`rounded-xl p-5 w-full max-w-lg bg-gradient-to-br ${getThemeGradient(colorTheme)} text-white shadow-lg`}>
                             {quiz.score == null ? (
                               <div>
-                                <h3 className="font-semibold mb-2 flex items-center gap-2"><span>📝</span>{quiz.data.title || 'Quiz'}</h3>
+                                <div className="flex items-start justify-between gap-3 mb-2">
+                                  <h3 className="font-semibold flex items-center gap-2"><span>📝</span>{quiz.data.title || 'Quiz'}</h3>
+                                  {quiz.data.downloadUrl && (
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
+                                      className="h-7 text-xs shrink-0"
+                                      onClick={() => handleHtmlDownload(quiz.data.downloadUrl, quiz.data.downloadFilename || htmlFilenameFromTitle(quiz.data.title, "upcurved_quiz.html"))}
+                                    >
+                                      <Download className="w-3 h-3 mr-1" /> HTML
+                                    </Button>
+                                  )}
+                                </div>
                                 <p className="text-sm mb-4 opacity-80">Question {quiz.index + 1} of {quiz.data.questions.length}</p>
                                 <div className="bg-white/10 rounded-md p-4 backdrop-blur-sm">
                                   <p className="font-medium mb-3">{quiz.data.questions[quiz.index].prompt}</p>
@@ -4591,7 +4793,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               </div>
                             ) : (
                               <div>
-                                <h3 className="font-semibold mb-2 flex items-center gap-2"><span>🏆</span>Results</h3>
+                                <div className="flex items-start justify-between gap-3 mb-2">
+                                  <h3 className="font-semibold flex items-center gap-2"><span>🏆</span>Results</h3>
+                                  {quiz.data.downloadUrl && (
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
+                                      className="h-7 text-xs shrink-0"
+                                      onClick={() => handleHtmlDownload(quiz.data.downloadUrl, quiz.data.downloadFilename || htmlFilenameFromTitle(quiz.data.title, "upcurved_quiz.html"))}
+                                    >
+                                      <Download className="w-3 h-3 mr-1" /> HTML
+                                    </Button>
+                                  )}
+                                </div>
                                 <p className="text-sm mb-1">Score: {quiz.score}/{quiz.data.questions.length}</p>
                                 <p className="mb-4 font-medium">{quiz.score === quiz.data.questions.length ? 'Perfect score! Outstanding! 🎉' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.8) ? 'Great job, almost perfect! ✨' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.6) ? 'Nice work. keep practicing! 👍' : 'You can boost this score, give it another shot! 💪'}</p>
                                 <Button onClick={() => retakeQuiz(quizId)} variant="secondary" className="w-full font-semibold">Retake Quiz</Button>
@@ -4915,6 +5129,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             )}
           </Card>
 
+          {widgetHtml && htmlDownloadUrl && (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleHtmlDownload(htmlDownloadUrl, htmlDownloadFilename || "upcurved_export.html")}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download HTML
+              </Button>
+            </div>
+          )}
+
           {!widgetHtml && (
             <div className="space-y-4">
             <Slider
@@ -5102,7 +5329,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   <Button
                     variant="ghost"
                     size="icon"
-                    title="Download"
+                    title={currentMediaMeta?.type === "video" && isCaptionsOn ? "Download MP4 with burned-in captions" : "Download"}
                     disabled={!videoUrl}
                     onClick={handleDownload}
                     className="h-7 w-7 ml-2"
