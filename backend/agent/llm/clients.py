@@ -23,6 +23,18 @@ def _default_openrouter_model() -> str:
 
 
 # ---------- OpenRouter ----------
+def _openrouter_error_message(data: object, fallback: str = "OpenRouter returned an unexpected response.") -> str:
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message") or err.get("code")
+            if msg:
+                return str(msg)
+        if data.get("message"):
+            return str(data.get("message"))
+    return fallback
+
+
 def _call_openrouter(
     api_key: str,
     model: str | None,
@@ -32,6 +44,9 @@ def _call_openrouter(
     max_tokens: int | None = None,
 ) -> str:
     model = model or _default_openrouter_model()
+
+    if not user or not str(user).strip():
+        raise LLMError("Prompt is empty.")
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -43,7 +58,7 @@ def _call_openrouter(
     messages = []
     if system and str(system).strip():
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": user or ""})
+    messages.append({"role": "user", "content": str(user)})
 
     payload = {
         "model": model,
@@ -60,11 +75,36 @@ def _call_openrouter(
         timeout=120,
     )
 
-    if response.status_code >= 400:
-        raise RuntimeError(f"OpenRouter API error {response.status_code}: {response.text[:800]}")
+    try:
+        data = response.json()
+    except Exception:
+        data = None
 
-    data = response.json()
-    return data["choices"][0]["message"]["content"] or ""
+    if response.status_code >= 400:
+        detail = _openrouter_error_message(data, response.text[:800])
+        raise RuntimeError(f"OpenRouter API error {response.status_code}: {detail}")
+
+    if not isinstance(data, dict):
+        raise RuntimeError(f"OpenRouter returned non-JSON response: {response.text[:300]}")
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        detail = _openrouter_error_message(data)
+        raise RuntimeError(f"OpenRouter response missing choices. Model: {model}. Reason: {detail}")
+
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    message = first.get("message") if isinstance(first, dict) else {}
+    content = ""
+    if isinstance(message, dict):
+        content = message.get("content") or ""
+    elif isinstance(first, dict):
+        content = first.get("text") or ""
+
+    if not str(content).strip():
+        finish = first.get("finish_reason") if isinstance(first, dict) else None
+        raise RuntimeError(f"OpenRouter returned empty content. Model: {model}. finish_reason={finish}")
+
+    return str(content)
 
 
 class LLMError(RuntimeError):

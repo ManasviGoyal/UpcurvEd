@@ -12,9 +12,11 @@ from html import escape
 from backend.agent.llm.clients import call_llm
 from backend.agent.prompts import (
     WIDGET_EDIT_SYSTEM,
+    WIDGET_FALLBACK_SPEC_SYSTEM,
     WIDGET_REPAIR_SYSTEM,
     WIDGET_SYSTEM,
     build_widget_edit_user_prompt,
+    build_widget_fallback_spec_user_prompt,
     build_widget_repair_user_prompt,
     build_widget_user_prompt,
 )
@@ -260,102 +262,163 @@ def _derive_prompt_spec(
     api_key: str,
     model: str | None,
     topic: str,
+    reason: str | None = None,
 ) -> dict:
-    system = (
-        "Return ONLY strict JSON for a simulation UI spec. "
-        "No markdown. No comments."
-    )
-    user = (
-        f"Topic: {topic}\n"
-        "Return JSON with keys:\n"
-        "title (string), concept_line (string), "
-        "metrics (array of exactly 3 objects: {label, unit}), "
-        "controls (array of exactly 3 objects: {label, min, max, step, value}), "
-        "insight_low (string), insight_high (string).\n"
-        "Keep labels concise and directly relevant to the topic."
-    )
+    """Ask the model for a compact topic-specific fallback spec, not HTML.
+
+    This is intentionally used only after custom HTML + repair/compact retry fail.
+    It keeps the normal path creative, but gives us a reliable non-generic fallback
+    when a free model truncates a full HTML document.
+    """
     raw = call_llm(
         provider=provider,
         api_key=api_key,
         model=model,
-        system=system,
-        user=user,
+        system=WIDGET_FALLBACK_SPEC_SYSTEM,
+        user=build_widget_fallback_spec_user_prompt(topic=topic, reason=reason),
         temperature=0.0,
-        max_tokens=500,
-        max_output_tokens=500,
+        max_tokens=900,
+        max_output_tokens=900,
     )
     spec = _extract_first_json_object(raw) or {}
-    if not isinstance(spec, dict):
-        return {}
-    return spec
+    return spec if isinstance(spec, dict) else {}
+
+
+def _topic_words(topic: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (topic or "").strip())
+    cleaned = re.sub(r"^(explain|show|teach|create|make|build)\s+", "", cleaned, flags=re.IGNORECASE)
+    return cleaned[:90] or "this concept"
+
+
+def _keyword_spec(topic: str) -> dict:
+    """Small local fallback if the JSON spec call fails too."""
+    t = _topic_words(topic)
+    low = t.lower()
+    if "penguin" in low:
+        return {
+            "title": "Penguin Warmth Explorer",
+            "concept_line": "Explore how huddling, insulation, and cold water affect a penguin's heat loss.",
+            "visual_items": ["Penguin", "Feathers", "Huddle", "Cold water", "Heat loss"],
+            "controls": [
+                {"label": "Water temperature", "min": -20, "max": 10, "step": 1, "value": -5, "low_label": "icy", "high_label": "less cold"},
+                {"label": "Huddle size", "min": 1, "max": 20, "step": 1, "value": 8, "low_label": "alone", "high_label": "large group"},
+                {"label": "Feather insulation", "min": 0, "max": 100, "step": 1, "value": 65, "low_label": "thin", "high_label": "dense/oily"},
+            ],
+            "metrics": [
+                {"label": "Heat loss", "unit": "%"},
+                {"label": "Warmth score", "unit": "%"},
+                {"label": "Energy saved", "unit": "%"},
+            ],
+            "try_this": "Make the water colder, then increase huddle size. What changes?",
+            "notice": "Penguins reduce heat loss with dense feathers and by sharing warmth in groups.",
+            "low_insight": "Cold water and small groups increase heat loss.",
+            "high_insight": "Better insulation and larger huddles help penguins stay warmer.",
+        }
+    return {
+        "title": f"{t.title()} Explorer",
+        "concept_line": f"Adjust variables and watch how they change {t}.",
+        "visual_items": [t.title(), "Variable A", "Variable B", "Result"],
+        "controls": [
+            {"label": f"{t.title()} amount", "min": 0, "max": 100, "step": 1, "value": 50, "low_label": "less", "high_label": "more"},
+            {"label": "Environment level", "min": 0, "max": 100, "step": 1, "value": 45, "low_label": "low", "high_label": "high"},
+            {"label": "Time or scale", "min": 0, "max": 100, "step": 1, "value": 60, "low_label": "small", "high_label": "large"},
+        ],
+        "metrics": [
+            {"label": f"{t.title()} effect", "unit": "%"},
+            {"label": "Pattern strength", "unit": "%"},
+            {"label": "Change rate", "unit": "%"},
+        ],
+        "try_this": "Move one slider at a time. Which variable changes the result most?",
+        "notice": "Changing one variable at a time helps reveal cause and effect.",
+        "low_insight": f"Lower settings show a weaker version of {t}.",
+        "high_insight": f"Higher settings make the pattern in {t} easier to see.",
+    }
+
+
+def _clean_label(value: object, fallback: str, limit: int = 42) -> str:
+    text = re.sub(r"\s+", " ", str(value or fallback)).strip()
+    banned = {"primary factor", "secondary factor", "response", "stability", "concept lab", "interactive concept lab"}
+    if text.lower() in banned:
+        text = fallback
+    return text[:limit]
+
+
+def _num(v: object, fb: float) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return fb
 
 
 def _safe_spec(topic: str, spec: dict | None) -> dict:
-    prompt = (topic or "").strip()
-    prompt_short = prompt[:120] if prompt else "this concept"
-    base = {
-        "title": "Interactive Concept Lab",
-        "concept_line": f"Explore: {prompt_short}",
-        "metrics": [
-            {"label": "Response", "unit": "u"},
-            {"label": "Stability", "unit": "%"},
-            {"label": "Rate", "unit": "u/s"},
-        ],
-        "controls": [
-            {"label": "Primary factor", "min": 0.2, "max": 2.0, "step": 0.01, "value": 1.0},
-            {"label": "Secondary factor", "min": 0.0, "max": 1.0, "step": 0.01, "value": 0.4},
-            {"label": "Pacing", "min": 0.5, "max": 3.0, "step": 0.01, "value": 1.2},
-        ],
-        "insight_low": f"Lower settings simplify the behavior for {prompt_short}.",
-        "insight_high": f"Higher settings produce stronger effects for {prompt_short}.",
-    }
+    fallback = _keyword_spec(topic)
     data = spec if isinstance(spec, dict) else {}
-    title = str(data.get("title") or base["title"])[:80]
-    concept_line = str(data.get("concept_line") or base["concept_line"])[:220]
-    metrics = data.get("metrics") if isinstance(data.get("metrics"), list) else []
-    controls = data.get("controls") if isinstance(data.get("controls"), list) else []
-    if len(metrics) < 3:
-        metrics = base["metrics"]
-    if len(controls) < 3:
-        controls = base["controls"]
+    title = _clean_label(data.get("title"), fallback["title"], 80)
+    concept_line = _clean_label(data.get("concept_line"), fallback["concept_line"], 180)
 
-    def _metric(m: dict, fb: dict) -> dict:
-        if not isinstance(m, dict):
-            return fb
-        return {"label": str(m.get("label") or fb["label"])[:28], "unit": str(m.get("unit") or fb["unit"])[:14]}
+    raw_items = data.get("visual_items") if isinstance(data.get("visual_items"), list) else fallback["visual_items"]
+    visual_items = [_clean_label(item, fallback["visual_items"][0], 24) for item in raw_items[:5]]
+    if len(visual_items) < 3:
+        visual_items = fallback["visual_items"][:]
 
-    def _num(v, fb):
-        try:
-            return float(v)
-        except Exception:
-            return fb
+    raw_controls = data.get("controls") if isinstance(data.get("controls"), list) else fallback["controls"]
+    raw_metrics = data.get("metrics") if isinstance(data.get("metrics"), list) else fallback["metrics"]
+    while len(raw_controls) < 3:
+        raw_controls.append(fallback["controls"][len(raw_controls)])
+    while len(raw_metrics) < 3:
+        raw_metrics.append(fallback["metrics"][len(raw_metrics)])
 
-    def _control(c: dict, fb: dict) -> dict:
-        if not isinstance(c, dict):
-            return fb
-        mn = _num(c.get("min"), fb["min"])
-        mx = _num(c.get("max"), fb["max"])
+    controls = []
+    for i in range(3):
+        src = raw_controls[i] if isinstance(raw_controls[i], dict) else {}
+        fb = fallback["controls"][i]
+        mn = _num(src.get("min"), fb["min"])
+        mx = _num(src.get("max"), fb["max"])
         if mx <= mn:
             mn, mx = fb["min"], fb["max"]
-        step = abs(_num(c.get("step"), fb["step"])) or fb["step"]
-        val = _num(c.get("value"), fb["value"])
-        val = min(max(val, mn), mx)
-        return {
-            "label": str(c.get("label") or fb["label"])[:32],
+        step = abs(_num(src.get("step"), fb["step"])) or fb["step"]
+        value = min(max(_num(src.get("value"), fb["value"]), mn), mx)
+        controls.append({
+            "label": _clean_label(src.get("label"), fb["label"], 36),
             "min": mn,
             "max": mx,
             "step": step,
-            "value": val,
-        }
+            "value": value,
+            "low_label": _clean_label(src.get("low_label"), fb.get("low_label", "low"), 24),
+            "high_label": _clean_label(src.get("high_label"), fb.get("high_label", "high"), 24),
+        })
+
+    metrics = []
+    for i in range(3):
+        src = raw_metrics[i] if isinstance(raw_metrics[i], dict) else {}
+        fb = fallback["metrics"][i]
+        metrics.append({
+            "label": _clean_label(src.get("label"), fb["label"], 34),
+            "unit": _clean_label(src.get("unit"), fb.get("unit", ""), 10),
+        })
 
     return {
-        "title": escape(title),
-        "concept_line": escape(concept_line),
-        "metrics": [_metric(metrics[i], base["metrics"][i]) for i in range(3)],
-        "controls": [_control(controls[i], base["controls"][i]) for i in range(3)],
-        "insight_low": escape(str(data.get("insight_low") or base["insight_low"])[:220]),
-        "insight_high": escape(str(data.get("insight_high") or base["insight_high"])[:220]),
+        "title": title,
+        "concept_line": concept_line,
+        "visual_items": visual_items,
+        "controls": controls,
+        "metrics": metrics,
+        "try_this": _clean_label(data.get("try_this"), fallback["try_this"], 150),
+        "notice": _clean_label(data.get("notice"), fallback["notice"], 150),
+        "low_insight": _clean_label(data.get("low_insight"), fallback["low_insight"], 150),
+        "high_insight": _clean_label(data.get("high_insight"), fallback["high_insight"], 150),
     }
+
+
+def _hanoi_fallback_widget_html(topic: str) -> str:
+    title = "Towers of Hanoi Practice"
+    return """<!DOCTYPE html>
+<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>Towers of Hanoi Practice</title>
+<style>
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#09111f;color:#eaf2ff}.wrapper{display:grid;grid-template-columns:2fr 1fr;min-height:100vh}.viz-col{position:relative;border-right:1px solid #27476f}canvas{width:100%;height:100%;display:block}.panel-col{padding:16px;background:#0f1d35}.panel-title{margin:0 0 6px}.concept-line{color:#c7d8ef;font-size:14px}.section-label{margin-top:14px;font-size:12px;letter-spacing:.08em;color:#9ac5ff;font-weight:800}.row{display:flex;justify-content:space-between;margin:7px 0}.row b{color:#7dd3fc}button,select{width:100%;margin-top:8px;padding:9px;border:0;border-radius:9px;background:#2563eb;color:white;font-weight:700}select{background:#10274a;border:1px solid #315985}.insight-box,.try-box{margin-top:10px;padding:10px;border:1px solid #345b88;border-radius:10px;background:#102445;font-size:13px;color:#d7e8ff}.try-box{background:#14213d;color:#bae6fd}
+</style></head><body><div class=\"wrapper\"><div class=\"viz-col\" id=\"viz-col\"><canvas id=\"sim-canvas\"></canvas></div><div class=\"panel-col\"><h2 class=\"panel-title\">Towers of Hanoi Practice</h2><p class=\"concept-line\">Move one top disk at a time. A larger disk can never sit on a smaller disk.</p><div class=\"section-label\">LIVE DATA</div><div class=\"row\"><span>Moves made</span><b id=\"moves\">0</b></div><div class=\"row\"><span>Minimum moves</span><b id=\"minimum\">7</b></div><div class=\"row\"><span>Selected peg</span><b id=\"selected\">none</b></div><div class=\"section-label\">CONTROLS</div><label>Disks<select id=\"diskCount\"><option value=\"3\">3 disks</option><option value=\"4\">4 disks</option><option value=\"5\">5 disks</option></select></label><button id=\"reset\">Reset puzzle</button><button id=\"hint\">Hint</button><div class=\"try-box\">Try this: solve 3 disks first, then switch to 4. What happens to the minimum moves?</div><div class=\"insight-box\" id=\"insight\">Click a peg to pick up its top disk, then click another peg to move it.</div></div></div><script>
+window.addEventListener('DOMContentLoaded',()=>{const viz=document.getElementById('viz-col'),canvas=document.getElementById('sim-canvas'),ctx=canvas.getContext('2d'),movesEl=document.getElementById('moves'),minEl=document.getElementById('minimum'),selEl=document.getElementById('selected'),insight=document.getElementById('insight'),diskCount=document.getElementById('diskCount'),resetBtn=document.getElementById('reset'),hintBtn=document.getElementById('hint');let n=3,pegs=[],selected=null,moves=0;function fit(){canvas.width=viz.clientWidth;canvas.height=viz.clientHeight;draw()}window.addEventListener('resize',fit);function minMoves(){return Math.pow(2,n)-1}function reset(){n=Number(diskCount.value);pegs=[[],[],[]];for(let d=n;d>=1;d--)pegs[0].push(d);selected=null;moves=0;insight.textContent='Click a peg to pick up its top disk, then click another peg to move it.';update();draw()}function update(){movesEl.textContent=String(moves);minEl.textContent=String(minMoves());selEl.textContent=selected==null?'none':String(selected+1)}function top(i){return pegs[i][pegs[i].length-1]}function pegAt(x){return Math.max(0,Math.min(2,Math.floor(x/(canvas.width/3))))}function handlePeg(i){if(selected==null){if(!pegs[i].length){insight.textContent='That peg is empty. Pick a peg with a top disk.';return}selected=i;insight.textContent='Selected peg '+(i+1)+'. Now choose a target peg.';update();draw();return}if(i===selected){selected=null;insight.textContent='Selection cleared.';update();draw();return}const disk=top(selected),target=top(i);if(target&&target<disk){insight.textContent='Illegal move: a larger disk cannot go on a smaller disk.';selected=null;update();draw();return}pegs[selected].pop();pegs[i].push(disk);moves++;selected=null;if(pegs[2].length===n){insight.textContent='Solved! Minimum possible was '+minMoves()+' moves. Can you match it?'}else{insight.textContent='Legal move. Keep moving the smallest blocking stack first.'}update();draw()}canvas.addEventListener('click',e=>{const r=canvas.getBoundingClientRect();handlePeg(pegAt(e.clientX-r.left))});diskCount.addEventListener('change',reset);resetBtn.addEventListener('click',reset);hintBtn.addEventListener('click',()=>{insight.textContent='Hint: move the top '+(n-1)+' disks out of the way, move the largest disk, then rebuild the stack.'});function draw(){const w=canvas.width,h=canvas.height;ctx.fillStyle='#071020';ctx.fillRect(0,0,w,h);ctx.fillStyle='#dbeafe';ctx.font='bold 22px system-ui';ctx.fillText('Move the tower to peg 3',24,34);const baseY=h*0.78,pegH=h*0.45;for(let i=0;i<3;i++){const x=w*(i+0.5)/3;ctx.strokeStyle=selected===i?'#facc15':'#93c5fd';ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(x,baseY);ctx.lineTo(x,baseY-pegH);ctx.stroke();ctx.fillStyle='#cbd5e1';ctx.font='14px system-ui';ctx.textAlign='center';ctx.fillText('Peg '+(i+1),x,baseY+28);pegs[i].forEach((disk,idx)=>{const maxW=w/3*0.72,minW=w/3*0.30,dw=minW+(disk-1)*(maxW-minW)/Math.max(1,n-1),dy=baseY-18-idx*24;ctx.fillStyle=['#60a5fa','#34d399','#fbbf24','#f472b6','#a78bfa'][disk-1]||'#7dd3fc';ctx.beginPath();ctx.roundRect(x-dw/2,dy,dw,20,7);ctx.fill();ctx.fillStyle='#08111f';ctx.font='bold 12px system-ui';ctx.fillText(String(disk),x,dy+14)})}ctx.textAlign='left';requestAnimationFrame(draw)}fit();reset()});
+</script></body></html>"""
 
 
 def _topic_fallback_widget_html(
@@ -364,7 +427,12 @@ def _topic_fallback_widget_html(
     provider: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
+    reason: str | None = None,
 ) -> str:
+    low = (topic or "").lower()
+    if "hanoi" in low or "tower of" in low or "towers of" in low:
+        return _hanoi_fallback_widget_html(topic)
+
     derived = {}
     if provider and api_key:
         try:
@@ -373,65 +441,37 @@ def _topic_fallback_widget_html(
                 api_key=api_key,
                 model=model,
                 topic=topic,
+                reason=reason,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("widget: JSON fallback spec generation failed (%s); using local topic spec", exc)
             derived = {}
-    s = _safe_spec(topic, derived)
-    m1, m2, m3 = s["metrics"]
-    c1, c2, c3 = s["controls"]
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{s["title"]}</title>
-<style>
-body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0a1024;color:#eaf2ff}}
-.wrapper{{display:grid;grid-template-columns:2fr 1fr;min-height:100vh}}
-.viz-col{{border-right:1px solid #223e6d;position:relative}} #sim-canvas{{width:100%;height:100%;display:block}}
-.panel-col{{padding:14px;background:#0f1d40}} .section-label{{margin-top:10px;font-size:12px;letter-spacing:.08em;color:#9ac5ff;font-weight:700}}
-.row{{display:flex;justify-content:space-between;margin:6px 0}} .row b{{color:#7de0ff}} input[type=range]{{width:100%}}
-.hint{{font-size:12px;color:#bfd4ff;margin-top:8px}} .insight-box{{margin-top:10px;padding:8px;border:1px solid #345b88;border-radius:8px;font-size:13px;color:#bae6fd}}
-</style></head><body>
-<div class="wrapper"><div class="viz-col" id="viz-col"><canvas id="sim-canvas"></canvas></div><div class="panel-col">
-<h2 class="panel-title">{s["title"]}</h2><p class="concept-line">{s["concept_line"]}</p>
-<div class="section-label">LIVE DATA</div>
-<div class="row"><span>{m1["label"]}</span><b id="m1">0.00 {m1["unit"]}</b></div>
-<div class="row"><span>{m2["label"]}</span><b id="m2">0.00 {m2["unit"]}</b></div>
-<div class="row"><span>{m3["label"]}</span><b id="m3">0.00 {m3["unit"]}</b></div>
-<div class="section-label">CONTROLS</div>
-<label>{c1["label"]}<input id="a" type="range" min="{c1["min"]}" max="{c1["max"]}" step="{c1["step"]}" value="{c1["value"]}"></label>
-<label>{c2["label"]}<input id="b" type="range" min="{c2["min"]}" max="{c2["max"]}" step="{c2["step"]}" value="{c2["value"]}"></label>
-<label>{c3["label"]}<input id="c" type="range" min="{c3["min"]}" max="{c3["max"]}" step="{c3["step"]}" value="{c3["value"]}"></label>
-<label class="hint"><input id="trail" type="checkbox" checked> Show motion trail</label>
-<div class="insight-box" id="insight">{s["insight_low"]}</div>
-</div></div>
-<script>
-window.addEventListener('DOMContentLoaded',()=>{{
-const viz=document.getElementById('viz-col'), cv=document.getElementById('sim-canvas'), x=cv.getContext('2d');
-const a=document.getElementById('a'), b=document.getElementById('b'), c=document.getElementById('c'), trail=document.getElementById('trail');
-const m1=document.getElementById('m1'), m2=document.getElementById('m2'), m3=document.getElementById('m3'), insight=document.getElementById('insight');
-let t=0, history=[]; const fit=()=>{{cv.width=viz.clientWidth;cv.height=viz.clientHeight;}}; fit(); window.addEventListener('resize',fit);
-const lowMsg={json.dumps(s["insight_low"])}; const highMsg={json.dumps(s["insight_high"])};
-const tick=()=>{{
-  const w=cv.width,h=cv.height, av=Number(a.value), bv=Number(b.value), cvv=Number(c.value);
-  const speed=(0.004+0.012*cvv), amp=(0.12+0.2*av)*Math.min(w,h), varc=(0.2+0.8*bv);
-  t += speed*60;
-  const px = w*0.5 + Math.cos(t*0.02)*(amp*(0.6+0.4*Math.sin(t*0.013*varc)));
-  const py = h*0.5 + Math.sin(t*0.017)*(amp*(0.45+0.35*Math.cos(t*0.009*varc)));
-  const response = (Math.abs(px-w*0.5)+Math.abs(py-h*0.5))/Math.max(1,(w+h)*0.25);
-  const stability = Math.max(0, 100 - varc*50 - Math.abs(Math.sin(t*0.01))*20);
-  const rate = speed*120;
-  m1.textContent = response.toFixed(2) + " {m1["unit"]}";
-  m2.textContent = stability.toFixed(1) + " {m2["unit"]}";
-  m3.textContent = rate.toFixed(2) + " {m3["unit"]}";
-  insight.textContent = (av + bv + cvv) > 2.2 ? highMsg : lowMsg;
-  x.fillStyle='#060e22'; x.fillRect(0,0,w,h);
-  x.strokeStyle='rgba(125,211,252,0.12)'; for(let gy=0; gy<h; gy+=36){{x.beginPath();x.moveTo(0,gy);x.lineTo(w,gy);x.stroke();}}
-  x.strokeStyle='rgba(125,211,252,0.15)'; for(let gx=0; gx<w; gx+=36){{x.beginPath();x.moveTo(gx,0);x.lineTo(gx,h);x.stroke();}}
-  if(trail.checked){{ history.push([px,py]); if(history.length>220) history.shift(); x.strokeStyle='#7de0ff'; x.beginPath(); history.forEach((p,i)=> i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1])); x.stroke(); }} else {{ history=[]; }}
-  x.fillStyle='#facc15'; x.beginPath(); x.arc(w*0.5,h*0.5,9,0,Math.PI*2); x.fill();
-  x.fillStyle='#60a5fa'; x.beginPath(); x.arc(px,py,7,0,Math.PI*2); x.fill();
-  requestAnimationFrame(tick);
-}}; requestAnimationFrame(tick); }});
-</script></body></html>"""
 
+    s = _safe_spec(topic, derived)
+    spec_json = json.dumps(s, ensure_ascii=False)
+    title = escape(s["title"])
+    concept_line = escape(s["concept_line"])
+    c1, c2, c3 = s["controls"]
+    m1, m2, m3 = s["metrics"]
+    return f'''<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{title}</title>
+<style>
+body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#08111f;color:#eaf2ff}}.wrapper{{display:grid;grid-template-columns:2fr 1fr;min-height:100vh}}.viz-col{{position:relative;border-right:1px solid #27476f}}#sim-canvas{{width:100%;height:100%;display:block}}.panel-col{{padding:16px;background:#0f1d35;overflow:auto}}.panel-title{{margin:0 0 6px}}.concept-line{{color:#c7d8ef;font-size:14px;line-height:1.35}}.section-label{{margin-top:14px;font-size:12px;letter-spacing:.08em;color:#9ac5ff;font-weight:800}}.row{{display:flex;justify-content:space-between;gap:12px;margin:7px 0}}.row b{{color:#7dd3fc;text-align:right}}label{{display:block;margin:10px 0;color:#dbeafe;font-size:13px}}input[type=range]{{width:100%}}.scale{{display:flex;justify-content:space-between;font-size:11px;color:#9fb7da}}button{{width:100%;margin-top:8px;padding:9px;border:0;border-radius:9px;background:#2563eb;color:white;font-weight:700}}.insight-box,.try-box{{margin-top:10px;padding:10px;border:1px solid #345b88;border-radius:10px;background:#102445;font-size:13px;line-height:1.35;color:#d7e8ff}}.try-box{{background:#14213d;color:#bae6fd}}
+</style></head><body><div class="wrapper"><div class="viz-col" id="viz-col"><canvas id="sim-canvas"></canvas></div><div class="panel-col"><h2 class="panel-title">{title}</h2><p class="concept-line">{concept_line}</p><div class="section-label">LIVE DATA</div><div class="row"><span>{escape(m1["label"])}</span><b id="m1">0 {escape(m1["unit"])}</b></div><div class="row"><span>{escape(m2["label"])}</span><b id="m2">0 {escape(m2["unit"])}</b></div><div class="row"><span>{escape(m3["label"])}</span><b id="m3">0 {escape(m3["unit"])}</b></div><div class="section-label">CONTROLS</div><label>{escape(c1["label"])}<input id="a" type="range" min="{c1["min"]}" max="{c1["max"]}" step="{c1["step"]}" value="{c1["value"]}"><span class="scale"><em>{escape(c1["low_label"])}</em><em>{escape(c1["high_label"])}</em></span></label><label>{escape(c2["label"])}<input id="b" type="range" min="{c2["min"]}" max="{c2["max"]}" step="{c2["step"]}" value="{c2["value"]}"><span class="scale"><em>{escape(c2["low_label"])}</em><em>{escape(c2["high_label"])}</em></span></label><label>{escape(c3["label"])}<input id="c" type="range" min="{c3["min"]}" max="{c3["max"]}" step="{c3["step"]}" value="{c3["value"]}"><span class="scale"><em>{escape(c3["low_label"])}</em><em>{escape(c3["high_label"])}</em></span></label><button id="reset">Reset</button><div class="try-box">Try this: {escape(s["try_this"])}</div><div class="insight-box" id="insight">{escape(s["notice"])}</div></div></div><script>
+window.addEventListener('DOMContentLoaded',()=>{{
+const SPEC={spec_json};
+const viz=document.getElementById('viz-col'),cv=document.getElementById('sim-canvas'),ctx=cv.getContext('2d');
+const a=document.getElementById('a'),b=document.getElementById('b'),c=document.getElementById('c'),reset=document.getElementById('reset'),insight=document.getElementById('insight');
+const m1=document.getElementById('m1'),m2=document.getElementById('m2'),m3=document.getElementById('m3');
+let t=0,pulse=0,focus=0;function fit(){{cv.width=viz.clientWidth;cv.height=viz.clientHeight;}}fit();window.addEventListener('resize',fit);
+function norm(el){{const min=Number(el.min),max=Number(el.max);return (Number(el.value)-min)/Math.max(1e-6,max-min);}}
+function scoreVals(){{const vals=[norm(a),norm(b),norm(c)];const score=Math.max(0,Math.min(100,(vals[0]*.38+vals[1]*.34+vals[2]*.28)*100));const balance=Math.max(0,100-Math.abs(vals[0]-vals[1])*65-Math.abs(vals[1]-vals[2])*35);const change=Math.max(0,Math.min(100,(vals[2]*.55+Math.abs(vals[0]-vals[1])*.45)*100));return [score,balance,change,vals];}}
+function update(){{const [score,balance,change]=scoreVals();m1.textContent=score.toFixed(0)+' '+(SPEC.metrics[0].unit||'');m2.textContent=balance.toFixed(0)+' '+(SPEC.metrics[1].unit||'');m3.textContent=change.toFixed(0)+' '+(SPEC.metrics[2].unit||'');insight.textContent=score>62?SPEC.high_insight:score<38?SPEC.low_insight:SPEC.notice;}}
+[a,b,c].forEach(el=>el.addEventListener('input',()=>{{pulse=1;update();}}));reset.addEventListener('click',()=>{{[a,b,c].forEach((el,i)=>el.value=SPEC.controls[i].value);focus=0;pulse=1;update();}});cv.addEventListener('click',e=>{{const r=cv.getBoundingClientRect();focus=(Math.floor((e.clientX-r.left)/(cv.width/Math.max(1,SPEC.visual_items.length)))+1)%SPEC.visual_items.length;insight.textContent='Focus: '+SPEC.visual_items[focus]+'. Now adjust one control and watch the change.';pulse=1;}});
+function roundRect(x,y,w,h,r){{ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}}
+function draw(){{const w=cv.width,h=cv.height;const [score,balance,change,vals]=scoreVals();t+=0.018;pulse*=0.94;ctx.fillStyle='#071020';ctx.fillRect(0,0,w,h);ctx.strokeStyle='rgba(147,197,253,.12)';for(let x=0;x<w;x+=42){{ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}}for(let y=0;y<h;y+=42){{ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}}ctx.fillStyle='#dbeafe';ctx.font='bold 22px system-ui';ctx.textAlign='left';ctx.fillText(SPEC.title,24,36);ctx.font='14px system-ui';ctx.fillStyle='#9fb7da';ctx.fillText('Click a label to focus it, or adjust the sliders to test cause and effect.',24,60);const cx=w*.5,cy=h*.48;ctx.strokeStyle='rgba(125,211,252,.35)';ctx.lineWidth=3;ctx.beginPath();ctx.arc(cx,cy,Math.min(w,h)*(.18+.08*vals[0]+pulse*.02),0,Math.PI*2);ctx.stroke();const items=SPEC.visual_items.slice(0,5);items.forEach((name,i)=>{{const ang=-Math.PI/2+i*(Math.PI*2/items.length)+t*.12;const rad=Math.min(w,h)*(.24+.04*vals[1]);const x=cx+Math.cos(ang)*rad,y=cy+Math.sin(ang)*rad;ctx.fillStyle=i===focus?'#facc15':'#60a5fa';ctx.beginPath();ctx.arc(x,y,18+vals[2]*10+(i===focus?5:0),0,Math.PI*2);ctx.fill();ctx.fillStyle='#eaf2ff';ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillText(name,x,y+34);ctx.strokeStyle='rgba(186,230,253,.28)';ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(x,y);ctx.stroke();}});ctx.fillStyle='#34d399';roundRect(cx-70,cy-32,140,64,16);ctx.fill();ctx.fillStyle='#082032';ctx.font='bold 15px system-ui';ctx.textAlign='center';ctx.fillText(Math.round(score)+'%',cx,cy-2);ctx.font='12px system-ui';ctx.fillText(SPEC.metrics[0].label,cx,cy+17);const barY=h-92;SPEC.controls.forEach((ctl,i)=>{{const x=36+i*(w-72)/3,bw=(w-120)/3;ctx.fillStyle='rgba(148,163,184,.22)';roundRect(x,barY,bw,16,8);ctx.fill();ctx.fillStyle=['#7dd3fc','#a7f3d0','#fde68a'][i];roundRect(x,barY,bw*vals[i],16,8);ctx.fill();ctx.fillStyle='#cbd5e1';ctx.font='12px system-ui';ctx.textAlign='left';ctx.fillText(ctl.label,x,barY-9);}});requestAnimationFrame(draw);}}update();requestAnimationFrame(draw);
+}});
+</script></body></html>'''
 
 
 def _repair_edited_widget_html(
@@ -596,26 +636,27 @@ def generate_widget(
                 )
         except Exception as e2:
             logger.warning(
-                "widget: compact retry failed (%s); not using generic fallback",
+                "widget: compact retry failed (%s); generating topic-specific JSON fallback",
                 e2,
             )
-            if os.environ.get("UPCURVED_WIDGET_ALLOW_GENERIC_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}:
-                html = _topic_fallback_widget_html(
-                    prompt,
-                    provider=prov,
-                    api_key=api_key,
-                    model=model,
-                )
-                ok4, reason4 = _validate_widget_html(html)
-                if not ok4:
-                    if first_error:
-                        raise RuntimeError(f"Widget fallback invalid after generation error: {first_error}") from e2
-                    raise RuntimeError(f"Widget fallback invalid: {reason4}") from e2
-            else:
+            if os.environ.get("UPCURVED_WIDGET_DISABLE_JSON_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}:
                 raise RuntimeError(
                     "Widget generation failed after retry. The model returned incomplete, invalid, "
                     "or non-topic-specific HTML. Try again or switch models."
                 ) from e2
+
+            html = _topic_fallback_widget_html(
+                prompt,
+                provider=prov,
+                api_key=api_key,
+                model=model,
+                reason=str(e2),
+            )
+            ok4, reason4 = _validate_widget_html(html)
+            if not ok4:
+                if first_error:
+                    raise RuntimeError(f"Widget fallback invalid after generation error: {first_error}") from e2
+                raise RuntimeError(f"Widget fallback invalid: {reason4}") from e2
 
 
     assert html is not None

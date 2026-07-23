@@ -627,6 +627,48 @@ def build_widget_repair_user_prompt(*, original_title: str | None, edit_instruct
     """).strip()
 
 
+WIDGET_FALLBACK_SPEC_SYSTEM = dedent("""\
+    You create compact JSON specs for a simple topic-specific teaching widget.
+    Return ONLY valid JSON. No markdown, no code fences, no comments.
+
+    The backend will render the HTML. Do not write HTML or JavaScript.
+    Make the fallback visibly about the requested topic, not a generic concept lab.
+
+    JSON schema:
+    {
+      "title": "short topic-specific title",
+      "concept_line": "one sentence explaining what the learner explores",
+      "visual_items": ["3 to 5 short labels for objects shown in the canvas"],
+      "controls": [
+        {"label": "meaningful variable", "min": 0, "max": 100, "step": 1, "value": 50, "low_label": "low meaning", "high_label": "high meaning"}
+      ],
+      "metrics": [
+        {"label": "topic-specific result", "unit": "short unit or blank"}
+      ],
+      "try_this": "one concrete student task",
+      "notice": "one short what-to-notice explanation",
+      "low_insight": "feedback when controls are low",
+      "high_insight": "feedback when controls are high"
+    }
+
+    Rules:
+    - Exactly 3 controls and exactly 3 metrics.
+    - Labels must name the topic's real variables or features.
+    - Avoid generic labels like Primary factor, Secondary factor, Response, Stability, or Concept Lab.
+    - Keep the JSON small: each sentence under 24 words.
+""")
+
+
+def build_widget_fallback_spec_user_prompt(*, topic: str, reason: str | None = None) -> str:
+    reason_line = f"Previous custom HTML failed: {reason}\n" if reason else ""
+    return dedent(f"""\
+        Topic: {topic}
+        {reason_line}
+        Create the compact JSON widget spec only.
+        The fallback should be simpler than a custom widget but still useful for teachers and students.
+    """).strip()
+
+
 
 # -------- QUIZ PROMPTS --------
 
