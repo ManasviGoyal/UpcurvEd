@@ -1,14 +1,16 @@
 """Structured Manim video generation for UpcurvEd.
 
-One model response contains a compact tagged JSON plan plus separate raw Manim body blocks.
-Standard scenes render deterministically. Custom scenes receive static validation, one focused
-repair attempt, and a deterministic fallback only when the creative visual is not essential.
-Graph scenes are essential: they repair or fail rather than silently becoming generic cards.
+One model response contains low-fragility tagged scene fields plus separate raw Manim bodies.
+The parser salvages complete scenes independently and retains legacy JSON compatibility for
+existing bundles/models. Standard scenes render deterministically. Custom scenes receive static
+validation, one focused repair attempt, and a deterministic fallback when the creative visual is
+not essential. Graph scenes remain essential.
 """
 
 from __future__ import annotations
 
 import ast
+import html
 import json
 import logging
 import os
@@ -50,7 +52,9 @@ _PLAN_START = "<<<PLAN_JSON>>>"
 _PLAN_END = "<<<END_PLAN_JSON>>>"
 _RAW_PLAN_START = "<<<RAW_MODEL_RESPONSE>>>"
 _RAW_PLAN_END = "<<<END_RAW_MODEL_RESPONSE>>>"
-_VIDEO_PLAN_TAG = "VIDEO_PLAN"
+_VIDEO_META_TAG = "VIDEO_META"
+_SCENE_PLAN_TAG = "SCENE_PLAN"
+_VIDEO_PLAN_TAG = "VIDEO_PLAN"  # legacy JSON transport
 _MANIM_BODY_TAG = "MANIM_BODY"
 
 _ALLOWED_TYPES = {
@@ -298,12 +302,169 @@ def _clean_body_block(body: str) -> str:
 
 
 def _extract_tagged_section(text: str, tag: str) -> str | None:
+    """Extract one fully closed tagged section. Retained for legacy VIDEO_PLAN JSON."""
     pattern = re.compile(
         rf"<{re.escape(tag)}\s*>\s*(.*?)\s*</{re.escape(tag)}\s*>",
         flags=re.IGNORECASE | re.DOTALL,
     )
     match = pattern.search(str(text or ""))
     return match.group(1).strip() if match else None
+
+
+def _extract_tagged_blocks(
+    text: str,
+    tag: str,
+    *,
+    stop_tags: tuple[str, ...] = (),
+) -> list[tuple[str, str]]:
+    """Extract blocks independently and salvage a block whose closing tag is omitted.
+
+    The body ends at its closing tag, the next block of the same type, or an explicit stop tag.
+    This makes one malformed scene unable to invalidate earlier complete scenes.
+    """
+    source = str(text or "")
+    opening = re.compile(rf"<{re.escape(tag)}\b(?P<attrs>[^>]*)>", re.IGNORECASE)
+    starts = list(opening.finditer(source))
+    blocks: list[tuple[str, str]] = []
+    for index, match in enumerate(starts):
+        content_start = match.end()
+        boundary = starts[index + 1].start() if index + 1 < len(starts) else len(source)
+        for stop_tag in stop_tags:
+            stop = re.search(
+                rf"<{re.escape(stop_tag)}\b",
+                source[content_start:boundary],
+                flags=re.IGNORECASE,
+            )
+            if stop:
+                boundary = min(boundary, content_start + stop.start())
+
+        closing = re.search(
+            rf"</{re.escape(tag)}\s*>",
+            source[content_start:boundary],
+            flags=re.IGNORECASE,
+        )
+        content_end = content_start + closing.start() if closing else boundary
+        body = source[content_start:content_end].strip()
+        if body:
+            blocks.append((match.group("attrs") or "", body))
+    return blocks
+
+
+def _tag_field_values(block: str, tag: str) -> list[str]:
+    """Read repeated field tags with line-oriented fallbacks for minor model mistakes."""
+    source = str(block or "")
+    pattern = re.compile(
+        rf"<{re.escape(tag)}\s*>\s*(.*?)\s*</{re.escape(tag)}\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    values = [html.unescape(match.group(1).strip()) for match in pattern.finditer(source)]
+    if values:
+        return [value for value in values if value]
+
+    # Accept TAG: value when a model forgets the XML-like wrapper.
+    line_pattern = re.compile(
+        rf"^\s*{re.escape(tag)}\s*:\s*(.+?)\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    values = [html.unescape(match.group(1).strip()) for match in line_pattern.finditer(source)]
+    if values:
+        return [value for value in values if value]
+
+    # Accept a one-line opening tag without its closing partner.
+    open_line_pattern = re.compile(
+        rf"<{re.escape(tag)}\s*>\s*([^\r\n<]+)",
+        flags=re.IGNORECASE,
+    )
+    return [
+        html.unescape(match.group(1).strip())
+        for match in open_line_pattern.finditer(source)
+        if match.group(1).strip()
+    ]
+
+
+def _first_tag_field(block: str, tag: str, default: str = "") -> str:
+    values = _tag_field_values(block, tag)
+    return values[0] if values else default
+
+
+def _attribute_value(attrs: str, name: str) -> str:
+    match = re.search(
+        rf"\b{re.escape(name)}\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s>]+))",
+        str(attrs or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return html.unescape(next((group for group in match.groups() if group), "").strip())
+
+
+def _parse_tagged_video_plan(text: str) -> tuple[dict[str, Any], str] | None:
+    """Parse the model-facing tagged plan without any JSON dependency."""
+    source = str(text or "").strip()
+    scene_blocks = _extract_tagged_blocks(
+        source,
+        _SCENE_PLAN_TAG,
+        stop_tags=(_MANIM_BODY_TAG,),
+    )
+    if not scene_blocks:
+        return None
+
+    meta_blocks = _extract_tagged_blocks(
+        source,
+        _VIDEO_META_TAG,
+        stop_tags=(_SCENE_PLAN_TAG, _MANIM_BODY_TAG),
+    )
+    meta = meta_blocks[0][1] if meta_blocks else ""
+    plan: dict[str, Any] = {
+        "title": _first_tag_field(meta, "TITLE"),
+        "subtitle": _first_tag_field(meta, "SUBTITLE"),
+        "audience": _first_tag_field(meta, "AUDIENCE"),
+        "scenes": [],
+    }
+
+    scalar_fields = {
+        "type": "TYPE",
+        "learning_role": "LEARNING_ROLE",
+        "learner_question": "LEARNER_QUESTION",
+        "visual_mode": "VISUAL_MODE",
+        "title": "TITLE",
+        "subtitle": "SUBTITLE",
+        "narration": "NARRATION",
+        "visual": "VISUAL",
+        "formula": "FORMULA",
+        "duration_sec": "DURATION_SEC",
+        "code_goal": "CODE_GOAL",
+        "manim_body_ref": "MANIM_BODY_REF",
+    }
+    list_fields = {
+        "required_visual_elements": "REQUIRED_VISUAL_ELEMENT",
+        "labels": "LABEL",
+        "calculation_steps": "CALCULATION_STEP",
+    }
+
+    for index, (attrs, block) in enumerate(scene_blocks, start=1):
+        scene: dict[str, Any] = {
+            "id": _attribute_value(attrs, "id") or _first_tag_field(block, "ID") or index,
+        }
+        for key, tag_name in scalar_fields.items():
+            value = _first_tag_field(block, tag_name)
+            if value:
+                scene[key] = value
+        for key, tag_name in list_fields.items():
+            values = _tag_field_values(block, tag_name)
+            if values:
+                scene[key] = values
+
+        # Ignore an empty accidental SCENE_PLAN shell while keeping every usable partial scene.
+        if len(scene) > 1:
+            plan["scenes"].append(scene)
+
+    if not plan["scenes"]:
+        return None
+
+    body_start = re.search(r"<MANIM_BODY\b", source, flags=re.IGNORECASE)
+    transport_text = source[: body_start.start()].strip() if body_start else source
+    return plan, transport_text
 
 
 def _extract_manim_body_sections(text: str) -> dict[str, str]:
@@ -361,10 +522,16 @@ def _parse_structured_response(
     raw: str,
 ) -> tuple[dict[str, Any], dict[str, str], str, str | None, bool]:
     text = str(raw or "").strip()
-    plan_text = _extract_tagged_section(text, _VIDEO_PLAN_TAG)
     bodies = _extract_manim_body_sections(text)
 
-    # Backward compatibility for models or saved data that still return one JSON object.
+    tagged = _parse_tagged_video_plan(text)
+    if tagged is not None:
+        parsed, transport_text = tagged
+        return parsed, bodies, transport_text, None, False
+
+    # Backward compatibility for older providers, saved responses, and existing tests that
+    # still use one JSON VIDEO_PLAN object.
+    plan_text = _extract_tagged_section(text, _VIDEO_PLAN_TAG)
     source_plan_text = text if plan_text is None else plan_text
     parsed, parsed_plan_text, was_repaired = _extract_json_object_with_local_repair(source_plan_text)
     repaired_plan_text = parsed_plan_text if was_repaired else None
@@ -403,7 +570,14 @@ def _write_response_debug_artifacts(
 ) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     (logs_dir / f"{prefix}_response_raw.txt").write_text(raw_text, encoding="utf-8")
-    (logs_dir / f"{prefix}_plan_raw.json").write_text(plan_text, encoding="utf-8")
+    (logs_dir / f"{prefix}_plan_transport.txt").write_text(plan_text, encoding="utf-8")
+    # Preserve the old debug filename only when the transport really is legacy JSON.
+    try:
+        json.loads(_json_object_candidate(plan_text))
+    except Exception:
+        pass
+    else:
+        (logs_dir / f"{prefix}_plan_raw.json").write_text(plan_text, encoding="utf-8")
     if plan_was_repaired and repaired_plan_text is not None:
         (logs_dir / f"{prefix}_plan_repaired.json").write_text(
             repaired_plan_text,
@@ -581,6 +755,82 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _topic_requires_explicit_worked_math(topic: str) -> bool:
+    lowered = str(topic or "").lower()
+    markers = (
+        "solve",
+        "calculate",
+        "calculation",
+        "worked example",
+        "work an example",
+        "derive",
+        "find the value",
+        "find x",
+        "show the steps",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list[str]:
+    """Repair safe structural omissions locally before considering another model call."""
+    fixes: list[str] = []
+    scenes = plan.get("scenes")
+    if not isinstance(scenes, list):
+        return fixes
+
+    requires_worked_math = _topic_requires_explicit_worked_math(topic)
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        scene_type = str(scene.get("type") or "")
+        visual_mode = str(scene.get("visual_mode") or "")
+        body = str(scene.get("manim_body") or "").strip()
+
+        if visual_mode == "graph" and not scene.get("required_visual_elements"):
+            inferred = _short_text(
+                scene.get("visual") or scene.get("learner_question") or scene.get("title"),
+                64,
+                "important graph feature",
+            )
+            scene["required_visual_elements"] = [inferred]
+            fixes.append(f"Scene {index}: inferred a required graph feature locally.")
+
+        # A non-graph custom scene without code can safely become a deterministic component
+        # scene. This avoids a whole-plan repair call for an optional creative flourish.
+        if scene_type == "custom_manim_scene" and not body and visual_mode != "graph":
+            scene["type"] = "concept_scene"
+            if visual_mode not in {"diagram", "comparison", "process", "text"}:
+                scene["visual_mode"] = "diagram"
+            scene.pop("manim_body", None)
+            scene.pop("manim_body_ref", None)
+            scene.pop("code_goal", None)
+            fixes.append(
+                f"Scene {index}: converted a code-less optional custom scene to a deterministic concept scene."
+            )
+
+        formula = str(scene.get("formula") or "").strip()
+        steps = [str(value) for value in (scene.get("calculation_steps") or []) if str(value).strip()]
+        weak_example = (
+            str(scene.get("learning_role") or "") == "example"
+            and formula
+            and (
+                len(steps) < 3
+                or sum("=" in step for step in steps) < 2
+                or any(_looks_like_instruction_instead_of_math(step) for step in steps)
+            )
+        )
+        # For a broad explanation, preserve the useful formula scene but stop pretending it is
+        # a completed worked example. Explicit solve/calculate requests remain eligible for one
+        # focused plan repair call.
+        if weak_example and not requires_worked_math:
+            scene["learning_role"] = "formula"
+            fixes.append(
+                f"Scene {index}: reclassified an incomplete optional example as a formula explanation."
+            )
+
+    return fixes
+
+
 def _repair_plan_if_needed(
     plan: dict[str, Any],
     *,
@@ -590,10 +840,20 @@ def _repair_plan_if_needed(
     model: str | None,
     logs_dir: pathlib.Path,
 ) -> tuple[dict[str, Any], bool]:
+    local_fixes = _apply_local_plan_quality_fixes(plan, topic=topic)
+    if local_fixes:
+        (logs_dir / "plan_local_fixes.json").write_text(
+            _safe_json(local_fixes), encoding="utf-8"
+        )
+        logger.info("structured_video_plan_local_fixes fixes=%s", local_fixes)
+
     errors = _plan_quality_errors(plan)
     if not errors:
-        return plan, False
+        return plan, bool(local_fixes)
 
+    # Only essential teaching failures remain here: usually a required graph with no usable
+    # custom body, or an explicitly requested worked calculation with incomplete math. One
+    # focused repair call is allowed; ordinary missing fields were already handled locally.
     (logs_dir / "plan_quality_errors.json").write_text(_safe_json(errors), encoding="utf-8")
     logger.warning("structured_video_plan_repair errors=%s", errors)
     raw = call_llm(
@@ -602,8 +862,8 @@ def _repair_plan_if_needed(
         model=model,
         system=STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM,
         user=build_structured_video_plan_repair_prompt(plan=plan, errors=errors),
-        temperature=0.12,
-        max_tokens=7000,
+        temperature=0.08,
+        max_tokens=6200,
     )
     raw_text = _coerce_llm_text(raw)
     (logs_dir / "plan_repair_response_raw.txt").write_text(raw_text, encoding="utf-8")
@@ -620,12 +880,20 @@ def _repair_plan_if_needed(
     parsed = _attach_manim_bodies(parsed, bodies)
     parsed = _inherit_missing_scene_fields(parsed, plan)
     repaired = _normalize_plan(parsed, topic=topic)
+    second_local_fixes = _apply_local_plan_quality_fixes(repaired, topic=topic)
+    if second_local_fixes:
+        (logs_dir / "plan_repair_local_fixes.json").write_text(
+            _safe_json(second_local_fixes), encoding="utf-8"
+        )
     remaining = _plan_quality_errors(repaired)
     if remaining:
         (logs_dir / "plan_repair_remaining_errors.json").write_text(
             _safe_json(remaining), encoding="utf-8"
         )
-        raise RuntimeError("The model could not produce the required graph or worked math example: " + "; ".join(remaining))
+        raise RuntimeError(
+            "The model could not produce the required graph or worked math example: "
+            + "; ".join(remaining)
+        )
     return repaired, True
 
 
@@ -1145,7 +1413,7 @@ def generate_structured_manim_video(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=tagged_plan_and_bodies_one_call",
+        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=tagged_fields_and_bodies_one_call",
         final_job_id,
         provider_name,
         model,

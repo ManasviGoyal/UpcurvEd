@@ -174,54 +174,73 @@ Creative rules:
 """
 
 
+STORY_PLAN_SYSTEM = f"""{ARTIFACT_SAFETY_INSTRUCTION}
+
+Create one accurate, engaging six-scene educational story plan.
+Return tagged plain text only. Do not return JSON, markdown, commentary, or code fences.
+
+Required transport:
+<STORY_META>
+<TITLE>Short title</TITLE>
+<AUDIENCE>children ages 8-12</AUDIENCE>
+<CHARACTERS>Guide | Curious Learner</CHARACTERS>
+<SCIENCE_BIG_IDEA>One accurate core learning idea</SCIENCE_BIG_IDEA>
+<KEY_VOCABULARY>term | term | term</KEY_VOCABULARY>
+<MISCONCEPTION_TO_FIX>Optional common misconception</MISCONCEPTION_TO_FIX>
+<MORAL>Specific learning takeaway</MORAL>
+<CONCLUSION>Curiosity question or practical takeaway</CONCLUSION>
+</STORY_META>
+
+Then return exactly six independent scene blocks:
+<STORY_SCENE id="1">
+<HEADING>Short scene heading</HEADING>
+<LESSON>One or two accurate explanatory sentences</LESSON>
+<SCIENCE_FACT>A specific fact, rule, mechanism, or worked relationship</SCIENCE_FACT>
+<VOCABULARY>term | term</VOCABULARY>
+<CAUSE_EFFECT>cause -> effect or input -> result</CAUSE_EFFECT>
+<MISCONCEPTION_FIX>Optional correction</MISCONCEPTION_FIX>
+<CAPTION>Short narrator line with concrete learning</CAPTION>
+<SPEECH_BUBBLE>Optional, no more than eight words</SPEECH_BUBBLE>
+<VISUAL>Specific drawable visual description</VISUAL>
+<VISUAL_STRATEGY>One allowed strategy</VISUAL_STRATEGY>
+<HOST_ROLE>lead | small_guide | observer | absent</HOST_ROLE>
+<ESSENTIAL_LABELS>short label | short equation or value</ESSENTIAL_LABELS>
+<ANIMATION_GOAL>One visible change over time</ANIMATION_GOAL>
+<DURATION_SEC>10</DURATION_SEC>
+</STORY_SCENE>
+
+Transport rules:
+- Close every tag, but each scene is parsed independently if a closing scene tag is omitted.
+- Put each field on its own line.
+- Do not use angle brackets inside field values. Write "less than" instead of the < symbol.
+- Do not use JSON punctuation, arrays, escaped quotes, or nested markup.
+- Use a vertical bar to separate list items.
+- Return exactly six STORY_SCENE blocks numbered 1 through 6.
+"""
+
+
 def _story_prompt(topic: str, host_character: str | None = None, theme: str | None = None) -> str:
     host_options = ", ".join(sorted(HOST_PRESETS.keys()))
     theme_options = ", ".join(sorted(THEME_PRESETS.keys()))
-    host_line = f"Main character preference: {host_character}\n" if host_character else ""
-    theme_line = f"Visual theme preference: {theme}\n" if theme else ""
     strategies = ", ".join(_VISUAL_STRATEGIES)
+    host_line = f"Preferred main character: {host_character}\n" if host_character else ""
+    theme_line = f"Preferred visual theme: {theme}\n" if theme else ""
     return (
-        f"Educational story for children about: {topic}\n"
+        f"Topic: {topic}\n"
         f"Available main characters: {host_options}\n"
         f"Available visual themes: {theme_options}\n"
-        f"Available visual strategies: {strategies}\n"
+        f"Allowed visual strategies: {strategies}\n"
         f"{host_line}"
         f"{theme_line}"
-        "Return ONLY one strict JSON object, no markdown or comments. "
-        "Use double quotes and include every required comma.\n"
-        "{"
-        "\"title\":\"...\","
-        "\"audience\":\"children ages 8-12\","
-        "\"characters\":[\"...\"],"
-        "\"science_big_idea\":\"one accurate core learning idea\","
-        "\"key_vocabulary\":[\"term\",\"term\",\"term\"],"
-        "\"misconception_to_fix\":\"common misconception, if relevant\","
-        "\"moral\":\"specific learning takeaway\","
-        "\"conclusion\":\"curiosity question or practical takeaway\","
-        "\"scenes\":[{"
-        "\"heading\":\"...\","
-        "\"lesson\":\"1-2 accurate sentences explaining the idea\","
-        "\"science_fact\":\"specific accurate fact, rule, or mechanism\","
-        "\"vocabulary\":[\"term\",\"term\"],"
-        "\"cause_effect\":\"cause -> effect or input -> result\","
-        "\"misconception_fix\":\"optional correction\","
-        "\"caption\":\"short narrator line with concrete learning\","
-        "\"speech_bubble\":\"optional, max 8 words\","
-        "\"visual\":\"specific drawable visual description\","
-        "\"visual_strategy\":\"one available strategy\","
-        "\"host_role\":\"lead | small_guide | observer | absent\","
-        "\"essential_labels\":[\"short label\",\"short equation or value\"],"
-        "\"animation_goal\":\"one visible change over time\","
-        "\"duration_sec\":10"
-        "}]}\n"
-        "Rules: exactly 6 scenes, each exactly 10 seconds. "
-        "Use at least four different visual strategies and never repeat one in consecutive scenes. "
-        "Let the learning visual dominate; do not place the same character beside the same table in every scene. "
-        "Use characters in some scenes but allow diagrams, maps, charts, object transformations, and equations to stand alone. "
-        "Each scene must teach one concrete idea through a specific real-world situation, mechanism, comparison, measurement, or worked example. "
-        "Choose essential_labels that can be displayed directly, including useful numbers, units, fractions, equations, or short names. "
-        "Avoid unsupported precision. If exact numbers vary, say about or give a range. "
-        "If the topic includes a named character, keep that name consistent."
+        "Plan exactly six scenes, each exactly 10 seconds.\n"
+        "Use at least four different visual strategies and never repeat one in consecutive scenes.\n"
+        "Let the learning visual dominate. Do not place the same character beside the same table in every scene.\n"
+        "Use characters in some scenes, but allow diagrams, maps, charts, object transformations, equations, and simulations to stand alone.\n"
+        "Each scene must teach one concrete idea through a real-world situation, mechanism, comparison, measurement, or worked example.\n"
+        "Choose useful essential labels such as numbers, units, fractions, equations, ratios, angles, or short names.\n"
+        "Avoid unsupported precision. When exact numbers vary, say about or give a range.\n"
+        "Keep named characters consistent throughout the story.\n"
+        "Return only the tagged STORY_META and STORY_SCENE transport described by the system instruction."
     )
 
 
@@ -314,6 +333,158 @@ def _extract_json(raw: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise RuntimeError("Story model must return one JSON object.")
     return parsed
+
+
+_TAG_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _tag_values(block: str, tag: str) -> list[str]:
+    name = str(tag or "").strip().upper()
+    if not _TAG_NAME_RE.fullmatch(name):
+        return []
+    pattern = re.compile(
+        rf"<{name}(?:\s+[^>]*)?>(.*?)(?:</{name}>|(?=\n\s*<[A-Z][A-Z0-9_]*(?:\s+[^>]*)?>)|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    values: list[str] = []
+    for match in pattern.finditer(str(block or "")):
+        value = re.sub(r"\s+", " ", match.group(1)).strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _tag_value(block: str, tag: str, default: str = "") -> str:
+    values = _tag_values(block, tag)
+    return values[0] if values else default
+
+
+def _tag_list(block: str, singular_tag: str, plural_tag: str | None = None) -> list[str]:
+    raw_values = _tag_values(block, singular_tag)
+    if plural_tag:
+        raw_values.extend(_tag_values(block, plural_tag))
+    items: list[str] = []
+    for raw in raw_values:
+        for piece in re.split(r"\s*(?:\||;|,|\n|•)\s*", raw):
+            value = re.sub(r"^\s*(?:[-*•]\s+|\d+[.)]\s+)", "", piece).strip()
+            if value and value.lower() not in {item.lower() for item in items}:
+                items.append(value)
+    return items
+
+
+def _story_tag_block(raw: str, tag: str) -> str:
+    text = str(raw or "")
+    name = str(tag or "").strip().upper()
+    if not _TAG_NAME_RE.fullmatch(name):
+        return ""
+    open_match = re.search(rf"<{name}(?:\s+[^>]*)?>", text, flags=re.IGNORECASE)
+    if not open_match:
+        return ""
+    close_match = re.search(rf"</{name}>", text[open_match.end() :], flags=re.IGNORECASE)
+    if close_match:
+        return text[open_match.end() : open_match.end() + close_match.start()]
+    next_scene = re.search(r"<STORY_SCENE\b", text[open_match.end() :], flags=re.IGNORECASE)
+    if next_scene:
+        return text[open_match.end() : open_match.end() + next_scene.start()]
+    return text[open_match.end() :]
+
+
+def _story_scene_blocks(raw: str) -> list[tuple[int, str]]:
+    text = str(raw or "")
+    openings = list(
+        re.finditer(
+            r"<STORY_SCENE\b([^>]*)>",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    blocks: list[tuple[int, str]] = []
+    used_ids: set[int] = set()
+    for position, opening in enumerate(openings):
+        attrs = opening.group(1) or ""
+        id_match = re.search(r"\bid\s*=\s*[\"']?(\d+)", attrs, flags=re.IGNORECASE)
+        scene_id = int(id_match.group(1)) if id_match else position + 1
+        if scene_id in used_ids:
+            scene_id = position + 1
+        used_ids.add(scene_id)
+        next_open = openings[position + 1].start() if position + 1 < len(openings) else len(text)
+        close_match = re.search(r"</STORY_SCENE>", text[opening.end() : next_open], flags=re.IGNORECASE)
+        block_end = opening.end() + close_match.start() if close_match else next_open
+        blocks.append((scene_id, text[opening.end() : block_end]))
+    return blocks
+
+
+def _parse_tagged_story_plan(raw: str) -> dict[str, Any] | None:
+    scene_blocks = _story_scene_blocks(raw)
+    if not scene_blocks:
+        return None
+
+    meta = _story_tag_block(raw, "STORY_META")
+    plan: dict[str, Any] = {
+        "title": _tag_value(meta, "TITLE"),
+        "audience": _tag_value(meta, "AUDIENCE"),
+        "characters": _tag_list(meta, "CHARACTER", "CHARACTERS"),
+        "science_big_idea": _tag_value(meta, "SCIENCE_BIG_IDEA"),
+        "key_vocabulary": _tag_list(meta, "KEY_TERM", "KEY_VOCABULARY"),
+        "misconception_to_fix": _tag_value(meta, "MISCONCEPTION_TO_FIX"),
+        "moral": _tag_value(meta, "MORAL"),
+        "conclusion": _tag_value(meta, "CONCLUSION"),
+        "scenes": [],
+    }
+
+    for scene_id, block in sorted(scene_blocks, key=lambda item: item[0])[:6]:
+        scene = {
+            "id": scene_id,
+            "heading": _tag_value(block, "HEADING"),
+            "lesson": _tag_value(block, "LESSON"),
+            "science_fact": _tag_value(block, "SCIENCE_FACT"),
+            "vocabulary": _tag_list(block, "TERM", "VOCABULARY"),
+            "cause_effect": _tag_value(block, "CAUSE_EFFECT"),
+            "misconception_fix": _tag_value(block, "MISCONCEPTION_FIX"),
+            "caption": _tag_value(block, "CAPTION"),
+            "speech_bubble": _tag_value(block, "SPEECH_BUBBLE"),
+            "visual": _tag_value(block, "VISUAL"),
+            "visual_strategy": _tag_value(block, "VISUAL_STRATEGY"),
+            "host_role": _tag_value(block, "HOST_ROLE"),
+            "essential_labels": _tag_list(block, "ESSENTIAL_LABEL", "ESSENTIAL_LABELS"),
+            "animation_goal": _tag_value(block, "ANIMATION_GOAL"),
+            "duration_sec": _tag_value(block, "DURATION_SEC", "10"),
+        }
+        plan["scenes"].append(scene)
+
+    logger.info(
+        "story_plan_tagged_transport_parsed scenes=%d title_present=%s",
+        len(plan["scenes"]),
+        bool(plan.get("title")),
+    )
+    return plan
+
+
+def _extract_story_plan(raw: str, topic: str) -> dict[str, Any]:
+    tagged = _parse_tagged_story_plan(raw)
+    if tagged is not None:
+        return tagged
+
+    # Backward compatibility for older providers/prompts and saved test fixtures.
+    try:
+        legacy = _extract_json(raw)
+        logger.warning("story_plan_used_legacy_json_transport")
+        return legacy
+    except Exception as exc:
+        # Transport failure should not abort the entire artifact. Normalization will
+        # construct six deterministic topic-aware scenes, and the existing second
+        # visual-bundle call can still add custom drawings to those scenes.
+        logger.warning(
+            "story_plan_transport_unusable; using local topic defaults error=%s",
+            str(exc) or type(exc).__name__,
+        )
+        return {
+            "title": f"{topic} Story",
+            "science_big_idea": f"Understanding {topic} means connecting it to real situations, patterns, quantities, and cause and effect.",
+            "moral": f"Look for useful examples of {topic} in everyday life.",
+            "conclusion": f"Where can you notice or use {topic} today?",
+            "scenes": [],
+        }
 
 
 def _compact_text(value: Any, limit: int = 220) -> str:
@@ -1583,12 +1754,12 @@ def generate_story_video(
         provider=prov,
         api_key=key,
         model=model,
-        system=ARTIFACT_SAFETY_INSTRUCTION,
+        system=STORY_PLAN_SYSTEM,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
-        temperature=0.45,
-        max_tokens=3800,
+        temperature=0.35,
+        max_tokens=3600,
     )
-    plan = _normalize_story_plan(_extract_json(raw), prompt)
+    plan = _normalize_story_plan(_extract_story_plan(raw, prompt), prompt)
     host_payload = _resolve_host_payload(host_character)
     draw_js_by_scene, fallback_js_by_scene = _prepare_story_drawings(
         plan,
@@ -2263,12 +2434,12 @@ def generate_story_slider(
         provider=prov,
         api_key=key,
         model=model,
-        system=ARTIFACT_SAFETY_INSTRUCTION,
+        system=STORY_PLAN_SYSTEM,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
-        temperature=0.45,
-        max_tokens=3800,
+        temperature=0.35,
+        max_tokens=3600,
     )
-    plan = _normalize_story_plan(_extract_json(raw), prompt)
+    plan = _normalize_story_plan(_extract_story_plan(raw, prompt), prompt)
     host_payload = _resolve_host_payload(host_character)
     draw_js_by_scene, fallback_js_by_scene = _prepare_story_drawings(
         plan,
