@@ -135,11 +135,19 @@ export const SettingsPage = ({
 
   return (
     <div
-      className={`flex items-center justify-center min-h-screen ${
-        asDialog ? "bg-transparent" : "bg-secondary"
+      className={`flex min-h-0 items-start justify-center overflow-hidden p-3 sm:items-center sm:p-6 ${
+        asDialog ? "bg-transparent" : "min-h-screen bg-secondary"
       }`}
     >
-      <Card className="w-full max-w-md p-8">
+      <Card
+        className="
+          w-full max-w-md
+          max-h-[calc(100dvh-1.5rem)]
+          overflow-y-auto
+          overscroll-contain
+          p-5 sm:max-h-[calc(100dvh-3rem)] sm:p-8
+        "
+      >
         <h2 className="text-2xl font-bold mb-6">Settings</h2>
 
         <div className="space-y-4">
