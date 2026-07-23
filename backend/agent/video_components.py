@@ -47,13 +47,83 @@ def portable_math_text(value: Any) -> str:
     return text
 
 
+def _looks_equation_like(value: Any) -> bool:
+    text = portable_math_text(value)
+    if not text:
+        return False
+    if "=" in text or re.search(r"(?:<=|>=|!=)", text):
+        return True
+    if re.search(r"[A-Za-z0-9)]\s*[+*/^]\s*[A-Za-z0-9(]", text):
+        return True
+    if re.search(r"[A-Za-z0-9)]\s*-\s*(?:\d|[A-Za-z]\b|\()", text):
+        return True
+    return bool(re.search(r"\b(?:sqrt|sin|cos|tan|log|ln)\s*\(", text, flags=re.IGNORECASE))
+
+
+def _math_to_speech(value: Any) -> str:
+    text = portable_math_text(value)
+    text = re.sub(r"\^2\b", " squared", text)
+    text = re.sub(r"\^3\b", " cubed", text)
+    text = re.sub(r"\^\s*([A-Za-z0-9.-]+)", r" to the power of \1", text)
+    text = re.sub(r"\bsqrt\s*\(", "the square root of (", text, flags=re.IGNORECASE)
+    for source, target in (
+        ("+/-", " plus or minus "),
+        (">=", " is greater than or equal to "),
+        ("<=", " is less than or equal to "),
+        ("!=", " is not equal to "),
+        ("=", " equals "),
+        ("*", " times "),
+        ("/", " divided by "),
+        ("+", " plus "),
+        ("-", " minus "),
+    ):
+        text = text.replace(source, target)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _fallback_step_narration(step: str, index: int, total: int) -> str:
+    spoken = _math_to_speech(step) if _looks_equation_like(step) else str(step or "").strip()
+    spoken = re.sub(
+        r"^\s*(?:first|firstly|next|then|after that|finally|lastly)\s*[:,.-]?\s*",
+        "",
+        spoken,
+        flags=re.IGNORECASE,
+    ).strip().rstrip(" .")
+    if not spoken:
+        spoken = "Notice what changes in this step"
+    if total <= 1:
+        return spoken + "."
+    prefix = "First" if index == 0 else ("Finally" if index == total - 1 else "Next")
+    return f"{prefix}: {spoken}."
+
+
 def _scene_for_render(scene: dict[str, Any]) -> dict[str, Any]:
     rendered = dict(scene)
     if rendered.get("formula"):
         rendered["formula"] = portable_math_text(rendered["formula"])
-    steps = rendered.get("calculation_steps")
-    if isinstance(steps, list):
-        rendered["calculation_steps"] = [portable_math_text(step) for step in steps if str(step).strip()]
+
+    raw_steps = rendered.get("steps") or rendered.get("calculation_steps") or []
+    steps = [
+        portable_math_text(step) if _looks_equation_like(step) else str(step).strip()
+        for step in raw_steps
+        if str(step).strip()
+    ][:6]
+    provided = [
+        str(value).strip()
+        for value in (rendered.get("step_narrations") or [])
+        if str(value).strip()
+    ][:6]
+    narrations = [
+        provided[index]
+        if index < len(provided)
+        else _fallback_step_narration(step, index, len(steps))
+        for index, step in enumerate(steps)
+    ]
+    if steps:
+        rendered["steps"] = steps
+        rendered["step_narrations"] = narrations
+        # Keep the old name in the generated wrapper so saved custom bodies continue to work.
+        rendered["calculation_steps"] = steps
     return rendered
 
 
@@ -81,15 +151,21 @@ class GeneratedScene(VoiceoverScene):
         title_text = str(scene.get("title") or scene.get("heading") or "Key idea")
         subtitle_text = str(scene.get("subtitle") or "")
         narration = str(scene.get("narration") or title_text)
-        visual_goal = str(scene.get("visual") or scene.get("visual_goal") or "")
         learner_question = str(scene.get("learner_question") or "")
         labels = [str(x) for x in (scene.get("labels") or []) if str(x).strip()][:5]
         formula_text = str(scene.get("formula") or "").replace("\n", " ").strip()
-        calculation_steps = [
+        steps = [
             str(x).replace("\n", " ").strip()
-            for x in (scene.get("calculation_steps") or [])
+            for x in (scene.get("steps") or scene.get("calculation_steps") or [])
             if str(x).strip()
         ][:6]
+        step_narrations = [
+            str(x).replace("\n", " ").strip()
+            for x in (scene.get("step_narrations") or [])
+            if str(x).strip()
+        ][:6]
+        while len(step_narrations) < len(steps):
+            step_narrations.append(steps[len(step_narrations)])
 
         def clean_text(text):
             value = str(text or "").replace("\n", " ").strip()
@@ -145,7 +221,7 @@ class GeneratedScene(VoiceoverScene):
         if scene_type == "title_scene":
             line = mn.Line(start=[-3.9, 0, 0], end=[3.9, 0, 0], color=mn.BLUE_C)
             title = fit_text(title_text, 47, mn.WHITE, 11.0).next_to(line, mn.UP, buff=0.38)
-            subtitle_source = subtitle_text or learner_question or visual_goal
+            subtitle_source = subtitle_text or learner_question
             subtitle = fit_text(subtitle_source, 26, mn.BLUE_B, 10.5).next_to(line, mn.DOWN, buff=0.38)
             formula = formula_mob(formula_text, 27) if formula_text else None
             if formula is not None:
@@ -172,38 +248,47 @@ class GeneratedScene(VoiceoverScene):
         header = fit_text(title_text, 35, mn.WHITE, 10.6).to_edge(mn.UP, buff=0.4)
         self.play(mn.FadeIn(header, shift=mn.DOWN * 0.08), run_time=0.4)
 
-        # Worked examples show one active equation at a time to prevent visual stacking.
-        if learning_role == "example" and calculation_steps:
+        # Any instructional sequence uses deterministic cumulative pacing. Earlier steps stay
+        # visible, each step receives its own voiceover, and the completed sequence is held.
+        if steps:
             formula = formula_mob(formula_text, 28) if formula_text else None
             if formula is not None:
                 formula.next_to(header, mn.DOWN, buff=0.25)
             anchor = formula if formula is not None else header
-            step_position = anchor.get_center() + mn.DOWN * 1.15
-            current_step = None
+
+            step_font = 25 if len(steps) <= 3 else (23 if len(steps) <= 4 else 21)
+            step_mobs = mn.VGroup(*[
+                fit_text(step_text, step_font, mn.WHITE, 10.2)
+                for step_text in steps
+            ])
+            step_mobs.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.22)
+            if step_mobs.height > 4.35:
+                step_mobs.scale_to_fit_height(4.35)
+            step_mobs.next_to(anchor, mn.DOWN, buff=0.38)
+            if step_mobs.get_bottom()[1] < -3.15:
+                step_mobs.shift(mn.UP * (-3.15 - step_mobs.get_bottom()[1]))
+
             with self.voiceover(text=narration) as tracker:
-                used = 0.4
                 if formula is not None:
                     self.play(mn.Write(formula), run_time=0.7)
-                    used += 0.7
-                for step_text in calculation_steps:
-                    next_step = fit_text(
-                        step_text,
-                        25 if len(step_text) < 70 else 21,
-                        mn.WHITE,
-                        10.2,
-                    ).move_to(step_position)
-                    if current_step is None:
-                        self.play(mn.Write(next_step), run_time=0.65)
-                    else:
-                        self.play(mn.ReplacementTransform(current_step, next_step), run_time=0.75)
-                    current_step = next_step
-                    used += 0.75
-                answer_box = mn.SurroundingRectangle(
-                    current_step, color=mn.GREEN_C, buff=0.16, corner_radius=0.08
-                )
-                self.play(mn.Create(answer_box), mn.Indicate(current_step), run_time=0.75)
-                used += 0.75
-                hold_voiceover(tracker, used)
+                    hold_voiceover(tracker, 0.7)
+                else:
+                    self.play(mn.Indicate(header), run_time=0.55)
+                    hold_voiceover(tracker, 0.55)
+
+            for index, step_mob in enumerate(step_mobs):
+                spoken = step_narrations[index] if index < len(step_narrations) else steps[index]
+                with self.voiceover(text=spoken) as tracker:
+                    self.play(mn.Write(step_mob), run_time=0.65)
+                    hold_voiceover(tracker, 0.65)
+                self.wait(0.75)
+
+            final_step = step_mobs[-1]
+            completion_box = mn.SurroundingRectangle(
+                final_step, color=mn.GREEN_C, buff=0.16, corner_radius=0.08
+            )
+            self.play(mn.Create(completion_box), mn.Indicate(final_step), run_time=0.75)
+            self.wait(3.0)
             clean_out(bg)
             return
 
@@ -329,7 +414,9 @@ class GeneratedScene(VoiceoverScene):
         labels = [str(x) for x in (scene.get("labels") or []) if str(x).strip()][:5]
         visual = str(scene.get("visual") or scene.get("visual_goal") or scene.get("code_goal") or "")
         formula = str(scene.get("formula") or "").replace("\n", " ").strip()
-        calculation_steps = [str(x).replace("\n", " ").strip() for x in (scene.get("calculation_steps") or []) if str(x).strip()][:6]
+        steps = [str(x).replace("\n", " ").strip() for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()][:6]
+        step_narrations = [str(x).replace("\n", " ").strip() for x in (scene.get("step_narrations") or []) if str(x).strip()][:6]
+        calculation_steps = steps  # legacy alias for existing saved custom bodies
         learning_role = str(scene.get("learning_role") or "").lower()
         learner_question = str(scene.get("learner_question") or "")
         visual_mode = str(scene.get("visual_mode") or "").lower()
@@ -365,11 +452,37 @@ class GeneratedScene(VoiceoverScene):
         def formula_label(text, size=30, color=mn.YELLOW):
             return label(clean_text(text), size=size, color=color)
 
-        def calculation_step_label(text, size=24, color=mn.WHITE, max_width=10.4):
+        def instruction_step_label(text, size=24, color=mn.WHITE, max_width=10.4):
             mob = label(clean_text(text), size=size, color=color)
             if mob.width > max_width:
                 mob.scale_to_fit_width(max_width)
             return mob
+
+        def calculation_step_label(text, size=24, color=mn.WHITE, max_width=10.4):
+            return instruction_step_label(
+                text, size=size, color=color, max_width=max_width
+            )
+
+        def add_instruction_step(
+            existing,
+            text,
+            *,
+            position=None,
+            size=24,
+            color=mn.WHITE,
+            run_time=0.8,
+            max_width=10.4,
+            buff=0.2,
+        ):
+            group = existing if isinstance(existing, mn.VGroup) else mn.VGroup()
+            target = instruction_step_label(
+                text, size=size, color=color, max_width=max_width
+            )
+            group.add(target)
+            group.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=buff)
+            group.move_to(mn.DOWN * 0.2 if position is None else position)
+            self.play(mn.Write(target), run_time=run_time)
+            return group
 
         def next_calculation_step(
             current,
@@ -381,6 +494,7 @@ class GeneratedScene(VoiceoverScene):
             run_time=0.8,
             max_width=10.4,
         ):
+            # Legacy replacement helper retained for older saved custom bodies.
             target = calculation_step_label(
                 text, size=size, color=color, max_width=max_width
             )

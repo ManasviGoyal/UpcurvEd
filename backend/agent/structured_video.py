@@ -144,6 +144,99 @@ def _normalize_math(value: Any, limit: int = 220) -> str:
     return _short_text(portable_math_text(value), limit, "")
 
 
+def _looks_equation_like(value: Any) -> bool:
+    """Return True only when text has strong signs of mathematical notation."""
+    text = portable_math_text(value)
+    if not text:
+        return False
+    if "=" in text or re.search(r"(?:<=|>=|!=)", text):
+        return True
+    if re.search(r"[A-Za-z0-9)]\s*[+*/^]\s*[A-Za-z0-9(]", text):
+        return True
+    if re.search(r"[A-Za-z0-9)]\s*-\s*(?:\d|[A-Za-z]\b|\()", text):
+        return True
+    if re.search(r"\b(?:sqrt|sin|cos|tan|log|ln)\s*\(", text, flags=re.IGNORECASE):
+        return True
+    return bool(re.search(r"\b\d+(?:\.\d+)?\s*%", text))
+
+
+def _normalize_step_text(value: Any, limit: int = 280) -> str:
+    text = _short_text(value, limit, "")
+    if not text:
+        return ""
+    return _normalize_math(text, limit) if _looks_equation_like(text) else text
+
+
+def _math_to_speech(value: Any) -> str:
+    text = portable_math_text(value)
+    replacements = (
+        ("+/-", " plus or minus "),
+        (">=", " is greater than or equal to "),
+        ("<=", " is less than or equal to "),
+        ("!=", " is not equal to "),
+        ("=", " equals "),
+        ("*", " times "),
+        ("/", " divided by "),
+        ("+", " plus "),
+        ("-", " minus "),
+    )
+    text = re.sub(r"\^2\b", " squared", text)
+    text = re.sub(r"\^3\b", " cubed", text)
+    text = re.sub(r"\^\s*([A-Za-z0-9.-]+)", r" to the power of \1", text)
+    text = re.sub(r"\bsqrt\s*\(", "the square root of (", text, flags=re.IGNORECASE)
+    for source, target in replacements:
+        text = text.replace(source, target)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _strip_sequence_prefix(value: str) -> str:
+    return re.sub(
+        r"^\s*(?:first|firstly|next|then|after that|finally|lastly)\s*[:,.-]?\s*",
+        "",
+        str(value or ""),
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _fallback_step_narration(step_text: str, index: int, total: int) -> str:
+    spoken = _math_to_speech(step_text) if _looks_equation_like(step_text) else _short_text(step_text, 420, "")
+    spoken = _strip_sequence_prefix(spoken).rstrip(" .")
+    if not spoken:
+        spoken = "Notice what changes in this step"
+    if total <= 1:
+        return spoken + "."
+    if index <= 0:
+        prefix = "First"
+    elif index >= total - 1:
+        prefix = "Finally"
+    else:
+        prefix = "Next"
+    return f"{prefix}: {spoken}."
+
+
+def _estimate_speech_seconds(value: Any, words_per_minute: float = 140.0) -> float:
+    words = re.findall(r"[A-Za-z0-9']+", str(value or ""))
+    if not words:
+        return 0.0
+    return max(1.2, len(words) * 60.0 / max(80.0, words_per_minute))
+
+
+def _minimum_sequence_duration(
+    narration: str,
+    step_narrations: list[str],
+    *,
+    has_formula: bool,
+) -> float:
+    """Estimate subtitle metadata duration for the deterministic sequence renderer."""
+    intro_animation = 0.75 if has_formula else 0.55
+    intro = max(intro_animation, _estimate_speech_seconds(narration))
+    steps = sum(
+        max(0.65, _estimate_speech_seconds(step_narration)) + 0.75
+        for step_narration in step_narrations
+    )
+    return 0.4 + intro + steps + 0.75 + 3.0 + 0.6
+
+
 def _normalize_string_list(value: Any, *, limit: int, item_limit: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -387,6 +480,42 @@ def _first_tag_field(block: str, tag: str, default: str = "") -> str:
     return values[0] if values else default
 
 
+def _tagged_step_pairs(block: str) -> tuple[list[str], list[str]]:
+    """Preserve STEP_TEXT/STEP_NARRATION pairing even when one narration is omitted."""
+    token_pattern = re.compile(
+        r"<(STEP_TEXT|CALCULATION_STEP|STEP_NARRATION)\s*>\s*(.*?)\s*</\1\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    steps: list[str] = []
+    narrations: list[str] = []
+    for match in token_pattern.finditer(str(block or "")):
+        tag_name = match.group(1).upper()
+        value = html.unescape(match.group(2).strip())
+        if not value:
+            continue
+        if tag_name in {"STEP_TEXT", "CALCULATION_STEP"}:
+            steps.append(value)
+            narrations.append("")
+        elif steps:
+            for index in range(len(narrations) - 1, -1, -1):
+                if not narrations[index]:
+                    narrations[index] = value
+                    break
+
+    if steps:
+        return steps, narrations
+
+    generic_steps = _tag_field_values(block, "STEP_TEXT")
+    legacy_steps = _tag_field_values(block, "CALCULATION_STEP")
+    steps = generic_steps or legacy_steps
+    flat_narrations = _tag_field_values(block, "STEP_NARRATION")
+    narrations = [
+        flat_narrations[index] if index < len(flat_narrations) else ""
+        for index in range(len(steps))
+    ]
+    return steps, narrations
+
+
 def _attribute_value(attrs: str, name: str) -> str:
     match = re.search(
         rf"\b{re.escape(name)}\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s>]+))",
@@ -439,7 +568,6 @@ def _parse_tagged_video_plan(text: str) -> tuple[dict[str, Any], str] | None:
     list_fields = {
         "required_visual_elements": "REQUIRED_VISUAL_ELEMENT",
         "labels": "LABEL",
-        "calculation_steps": "CALCULATION_STEP",
     }
 
     for index, (attrs, block) in enumerate(scene_blocks, start=1):
@@ -454,6 +582,11 @@ def _parse_tagged_video_plan(text: str) -> tuple[dict[str, Any], str] | None:
             values = _tag_field_values(block, tag_name)
             if values:
                 scene[key] = values
+
+        parsed_steps, parsed_step_narrations = _tagged_step_pairs(block)
+        if parsed_steps:
+            scene["steps"] = parsed_steps
+            scene["step_narrations"] = parsed_step_narrations
 
         # Ignore an empty accidental SCENE_PLAN shell while keeping every usable partial scene.
         if len(scene) > 1:
@@ -644,21 +777,44 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         )
         labels = _normalize_labels(incoming.get("labels"))
         formula = _normalize_math(incoming.get("formula") or incoming.get("equation"), 220)
-        calculation_steps = [
-            _normalize_math(step, 240)
-            for step in _normalize_string_list(
-                incoming.get("calculation_steps") or incoming.get("worked_steps"),
-                limit=6,
-                item_limit=260,
-            )
+        raw_steps = (
+            incoming.get("steps")
+            or incoming.get("calculation_steps")
+            or incoming.get("worked_steps")
+        )
+        steps = [
+            _normalize_step_text(step, 280)
+            for step in _normalize_string_list(raw_steps, limit=6, item_limit=300)
         ]
-        calculation_steps = [step for step in calculation_steps if step]
+        steps = [step for step in steps if step]
+        raw_step_narrations = incoming.get("step_narrations")
+        provided_step_narrations = (
+            [
+                _short_text(value, 460, "")
+                for value in raw_step_narrations[:6]
+            ]
+            if isinstance(raw_step_narrations, list)
+            else []
+        )
+        step_narrations = [
+            provided_step_narrations[index]
+            if index < len(provided_step_narrations) and provided_step_narrations[index]
+            else _fallback_step_narration(step, index, len(steps))
+            for index, step in enumerate(steps)
+        ]
 
         try:
             duration = float(incoming.get("duration_sec") or 10)
         except Exception:
             duration = 10.0
-        duration = max(4.0, min(35.0, duration))
+        duration = max(4.0, min(90.0, duration))
+        if steps:
+            duration = max(
+                duration,
+                min(90.0, _minimum_sequence_duration(
+                    narration, step_narrations, has_formula=bool(formula)
+                )),
+            )
 
         scene: dict[str, Any] = {
             "id": incoming.get("id") or index,
@@ -676,8 +832,9 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         }
         if formula:
             scene["formula"] = formula
-        if calculation_steps:
-            scene["calculation_steps"] = calculation_steps
+        if steps:
+            scene["steps"] = steps
+            scene["step_narrations"] = step_narrations
         if scene_type == "custom_manim_scene":
             scene["code_goal"] = _short_text(incoming.get("code_goal") or visual, 240, visual)
             scene["manim_body_ref"] = _body_ref_for_scene(incoming, index)
@@ -728,7 +885,7 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
         scene_type = str(scene.get("type") or "")
         body = str(scene.get("manim_body") or "").strip()
         formula = str(scene.get("formula") or "").strip()
-        steps = [str(x) for x in (scene.get("calculation_steps") or []) if str(x).strip()]
+        steps = [str(x) for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
 
         if scene_type == "custom_manim_scene" and not body:
             errors.append(f"Scene {index}: custom_manim_scene is missing manim_body.")
@@ -742,15 +899,15 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
         if role == "example" and formula:
             if len(steps) < 3:
                 errors.append(
-                    f"Scene {index}: worked formula example needs at least three explicit calculation_steps: substitution, simplification, and final answer."
+                    f"Scene {index}: worked formula example needs at least three explicit STEP_TEXT values: substitution, simplification, and final answer."
                 )
             else:
                 if sum("=" in step for step in steps) < 2:
-                    errors.append(f"Scene {index}: calculation_steps must show actual equations, not only prose.")
+                    errors.append(f"Scene {index}: worked math STEP_TEXT values must show actual equations, not only prose.")
                 if any(_looks_like_instruction_instead_of_math(step) for step in steps):
                     errors.append(f"Scene {index}: replace calculation instructions with the completed math.")
                 if "=" not in steps[-1] and not any(word in steps[-1].lower() for word in ("answer", "therefore", "so ")):
-                    errors.append(f"Scene {index}: final calculation_step must state the answer explicitly.")
+                    errors.append(f"Scene {index}: final worked-math STEP_TEXT must state the answer explicitly.")
 
     return errors
 
@@ -809,7 +966,7 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
             )
 
         formula = str(scene.get("formula") or "").strip()
-        steps = [str(value) for value in (scene.get("calculation_steps") or []) if str(value).strip()]
+        steps = [str(value) for value in (scene.get("steps") or scene.get("calculation_steps") or []) if str(value).strip()]
         weak_example = (
             str(scene.get("learning_role") or "") == "example"
             and formula
@@ -913,7 +1070,11 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
 
     if cleaned.count("self.voiceover") < 1:
         errors.append("Custom scene needs at least 1 self.voiceover block.")
-    animation_actions = cleaned.count("self.play") + cleaned.count("next_calculation_step(")
+    animation_actions = (
+        cleaned.count("self.play")
+        + cleaned.count("next_calculation_step(")
+        + cleaned.count("add_instruction_step(")
+    )
     if animation_actions < 3:
         errors.append("Custom scene needs at least 3 visible animation actions.")
 
@@ -946,13 +1107,17 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
         if not any(marker in cleaned for marker in feature_markers):
             errors.append("Graph scene must visibly mark the graph feature discussed in narration.")
 
-    if str(scene.get("learning_role") or "") == "example" and scene.get("calculation_steps"):
+    scene_steps = scene.get("steps") or scene.get("calculation_steps") or []
+    if str(scene.get("learning_role") or "") == "example" and scene_steps:
         if (
-            "calculation_steps" not in cleaned
+            "steps" not in cleaned
+            and "calculation_steps" not in cleaned
+            and "instruction_step_label(" not in cleaned
             and "calculation_step_label(" not in cleaned
+            and "add_instruction_step(" not in cleaned
             and "next_calculation_step(" not in cleaned
         ):
-            errors.append("Worked example must visibly animate calculation_steps.")
+            errors.append("Worked example must visibly animate its instructional steps.")
 
     try:
         ast.parse("def _scene_body():\n" + "\n".join("    " + line for line in cleaned.splitlines()))
@@ -1303,6 +1468,8 @@ def _inherit_missing_scene_fields(
     }
     preserved_fields = (
         "formula",
+        "steps",
+        "step_narrations",
         "calculation_steps",
         "learning_role",
         "learner_question",

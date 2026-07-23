@@ -95,7 +95,6 @@ def _format_structured_plan(plan: dict[str, Any]) -> str:
     list_fields = (
         ("REQUIRED_VISUAL_ELEMENT", "required_visual_elements"),
         ("LABEL", "labels"),
-        ("CALCULATION_STEP", "calculation_steps"),
     )
 
     for index, scene in enumerate(scenes, start=1):
@@ -113,6 +112,18 @@ def _format_structured_plan(plan: dict[str, Any]) -> str:
                 for value in values:
                     if value not in (None, ""):
                         lines.append(_tag(tag_name, value))
+
+        steps = scene.get("steps") or scene.get("calculation_steps") or []
+        step_narrations = scene.get("step_narrations") or []
+        if isinstance(steps, list):
+            for step_index, step in enumerate(steps):
+                if step in (None, ""):
+                    continue
+                lines.append(_tag("STEP_TEXT", step))
+                if isinstance(step_narrations, list) and step_index < len(step_narrations):
+                    narration = step_narrations[step_index]
+                    if narration not in (None, ""):
+                        lines.append(_tag("STEP_NARRATION", narration))
         lines.append("</SCENE_PLAN>")
     return "\n".join(lines)
 
@@ -138,7 +149,7 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     Exact transport pattern:
     <VIDEO_META>
     <TITLE>Short video title</TITLE>
-    <SUBTITLE>Optional subtitle</SUBTITLE>
+    <SUBTITLE>Optional learner-facing subtitle</SUBTITLE>
     <AUDIENCE>general learners</AUDIENCE>
     </VIDEO_META>
 
@@ -147,31 +158,45 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     <LEARNING_ROLE>intuition</LEARNING_ROLE>
     <VISUAL_MODE>text</VISUAL_MODE>
     <TITLE>Short scene title</TITLE>
+    <SUBTITLE>Optional educational subtitle</SUBTITLE>
     <NARRATION>Student-facing narration.</NARRATION>
-    <VISUAL>Specific visible action or relationship.</VISUAL>
+    <VISUAL>Internal production direction describing the visible action.</VISUAL>
     <DURATION_SEC>8</DURATION_SEC>
     </SCENE_PLAN>
 
     <SCENE_PLAN id="2">
-    <TYPE>custom_manim_scene</TYPE>
+    <TYPE>process_scene</TYPE>
     <LEARNING_ROLE>example</LEARNING_ROLE>
     <LEARNER_QUESTION>What should the learner understand here?</LEARNER_QUESTION>
-    <VISUAL_MODE>motion</VISUAL_MODE>
+    <VISUAL_MODE>process</VISUAL_MODE>
     <TITLE>Short scene title</TITLE>
-    <NARRATION>Student-facing explanation.</NARRATION>
-    <VISUAL>A concrete topic-specific animation.</VISUAL>
-    <REQUIRED_VISUAL_ELEMENT>first concrete element</REQUIRED_VISUAL_ELEMENT>
-    <REQUIRED_VISUAL_ELEMENT>second concrete element</REQUIRED_VISUAL_ELEMENT>
+    <NARRATION>Brief introduction to the sequence.</NARRATION>
+    <VISUAL>Internal production direction for the supporting visual.</VISUAL>
     <FORMULA>portable plain-text formula when needed</FORMULA>
-    <CALCULATION_STEP>completed substitution when needed</CALCULATION_STEP>
-    <CALCULATION_STEP>completed simplification when needed</CALCULATION_STEP>
-    <CALCULATION_STEP>explicit final answer when needed</CALCULATION_STEP>
-    <DURATION_SEC>12</DURATION_SEC>
-    <CODE_GOAL>What the custom animation must demonstrate.</CODE_GOAL>
-    <MANIM_BODY_REF>scene_2</MANIM_BODY_REF>
+    <STEP_TEXT>First visible instructional step</STEP_TEXT>
+    <STEP_NARRATION>Natural spoken explanation of that first step.</STEP_NARRATION>
+    <STEP_TEXT>Second visible instructional step</STEP_TEXT>
+    <STEP_NARRATION>Natural spoken explanation of that second step.</STEP_NARRATION>
+    <STEP_TEXT>Final visible step or conclusion</STEP_TEXT>
+    <STEP_NARRATION>Natural spoken explanation of the final step.</STEP_NARRATION>
+    <DURATION_SEC>18</DURATION_SEC>
     </SCENE_PLAN>
 
-    <MANIM_BODY id="scene_2">
+    For a custom scene only:
+    <SCENE_PLAN id="3">
+    <TYPE>custom_manim_scene</TYPE>
+    <LEARNING_ROLE>interpretation</LEARNING_ROLE>
+    <VISUAL_MODE>motion</VISUAL_MODE>
+    <TITLE>Topic-specific motion</TITLE>
+    <NARRATION>Student-facing explanation.</NARRATION>
+    <VISUAL>Internal production direction for the animation.</VISUAL>
+    <REQUIRED_VISUAL_ELEMENT>first concrete element</REQUIRED_VISUAL_ELEMENT>
+    <REQUIRED_VISUAL_ELEMENT>second concrete element</REQUIRED_VISUAL_ELEMENT>
+    <CODE_GOAL>Internal instruction describing what the code must demonstrate.</CODE_GOAL>
+    <MANIM_BODY_REF>scene_3</MANIM_BODY_REF>
+    </SCENE_PLAN>
+
+    <MANIM_BODY id="scene_3">
     body statements only
     </MANIM_BODY>
 
@@ -179,9 +204,21 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Never output JSON, Python dictionaries, markdown fences, or prose outside the tags.
     - Put each field in its own opening and closing tag. Close each SCENE_PLAN before starting
       the next one. Omit optional fields rather than returning empty tags.
-    - Repeat REQUIRED_VISUAL_ELEMENT, LABEL, and CALCULATION_STEP tags for multiple values.
+    - Repeat REQUIRED_VISUAL_ELEMENT and LABEL tags for multiple values.
+    - For a sequence, repeat STEP_TEXT and immediately follow each one with its matching
+      STEP_NARRATION. CALCULATION_STEP may be read for legacy compatibility, but new output
+      must use STEP_TEXT.
     - Keep each field compact. Do not place structural closing tags inside field values.
     - Output all SCENE_PLAN blocks before any MANIM_BODY blocks.
+
+    Field visibility rules:
+    - Learner-facing fields are TITLE, SUBTITLE, LEARNER_QUESTION, NARRATION, LABEL, FORMULA,
+      STEP_TEXT, and STEP_NARRATION. Write only educational content in these fields.
+    - VISUAL, CODE_GOAL, MANIM_BODY_REF, and MANIM_BODY are internal production fields. They
+      may describe fades, movement, layout, camera behavior, or implementation, but they are
+      never shown to learners.
+    - Never place production directions such as how text enters, exits, moves, or transitions
+      inside learner-facing fields.
 
     Allowed values:
     - TYPE: title_scene, question_scene, concept_scene, process_scene, comparison_scene,
@@ -194,8 +231,16 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Teach meaning before notation. Define unfamiliar ideas and the problem a formula solves.
     - Graph ideas must show the relevant graph feature before algebra. Every graph scene must
       be custom_manim_scene and must name concrete REQUIRED_VISUAL_ELEMENT fields.
-    - Worked examples must contain completed substitution, simplification, and final answer.
-      Never return instructions such as "compute the roots" as CALCULATION_STEP values.
+    - Use STEP_TEXT and STEP_NARRATION for any ordered instructional sequence: calculations,
+      scientific processes, historical developments, procedures, comparisons, coding logic,
+      cause-and-effect chains, or other staged explanations.
+    - Every STEP_TEXT must describe a visible learner-facing state, action, relationship, or
+      conclusion. Every matching STEP_NARRATION must explain that step naturally and clearly.
+    - For worked mathematics, steps must contain completed substitution, simplification, and
+      final answer. Never return instructions such as "compute the roots" as step text.
+    - Prefer a standard process_scene or concept_scene for text-based sequences so the stable
+      renderer can preserve every step and synchronize narration. Do not use a custom scene
+      merely to animate a list of steps.
     - If narration uses a formula, include FORMULA and show it. Use portable text such as
       x = (-b +/- sqrt(b^2 - 4ac)) / (2a), not LaTeX or special math glyphs.
     - LABEL is optional and topic-specific. Do not use Concept, Equation, Step, Input, Output,
@@ -205,9 +250,10 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Do not display internal scene-type names.
 
     Every custom scene needs a unique MANIM_BODY_REF and matching MANIM_BODY block. The wrapper
-    provides: scene, title, narration, labels, visual, formula, calculation_steps,
-    learning_role, learner_question, visual_mode, required_visual_elements, bg, label(...),
-    formula_label(...), calculation_step_label(...), next_calculation_step(...), and
+    provides: scene, title, narration, labels, visual, formula, steps, step_narrations,
+    calculation_steps as a legacy alias, learning_role, learner_question, visual_mode,
+    required_visual_elements, bg, label(...), formula_label(...), instruction_step_label(...),
+    calculation_step_label(...), add_instruction_step(...), next_calculation_step(...), and
     wait_for_voiceover(...).
 
     Custom-body rules:
@@ -220,11 +266,11 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Include at least one voiceover block, three visible animation actions, and meaningful
       motion. Graph bodies must create Axes or NumberPlane, draw the relationship, and mark
       the listed visual features.
-    - For multiple calculation steps, keep one active equation in the calculation area.
-      Replace or fade the previous equation before showing the next. Prefer
-      current_step = next_calculation_step(current_step, calculation_steps[i], position=...).
-    - Keep the final answer visible long enough to interpret. Display FORMULA when present.
-    - Keep strings on one line and close every quote, bracket, and parenthesis.
+    - When a custom scene truly needs instructional steps, keep earlier steps visible, add
+      each new step beneath the previous ones, narrate each step, and hold the completed
+      sequence for at least 2.5 seconds. Prefer add_instruction_step(...).
+    - Display FORMULA when present. Keep strings on one line and close every quote, bracket,
+      and parenthesis.
 """)
 
 
@@ -246,9 +292,10 @@ STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety("""\
     Use the exact field tags from the supplied current plan. Keep good material and make the
     smallest changes needed. Close every field and SCENE_PLAN tag. A graph scene must use real
     axes or a number plane, draw a coordinate-based relationship, and mark the required
-    features. A worked example must show completed substitution, simplification, and final
-    answer. Keep one active equation at a time. Begin each MANIM_BODY at column 1 and indent
-    only statements nested inside with, if, for, or while.
+    features. Preserve STEP_TEXT and STEP_NARRATION pairs for instructional sequences. A
+    worked mathematics example must show completed substitution, simplification, and final
+    answer. Keep earlier steps visible and hold the completed sequence. Begin each MANIM_BODY
+    at column 1 and indent only statements nested inside with, if, for, or while.
 """)
 
 
@@ -279,13 +326,14 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety("""\
 
     You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
     Preserve useful material and improve learning_role, learner_question, visual_mode,
-    required_visual_elements, formula, calculation_steps, and optional labels as needed.
+    required_visual_elements, formula, steps, step_narrations, and optional labels as needed.
     Teach meaning before notation. Graph explanations show the graph feature before algebra.
-    Worked examples show completed substitution, simplification, and final answer.
+    Use STEP_TEXT and STEP_NARRATION for ordered explanations in any subject. Worked math
+    examples show completed substitution, simplification, and final answer.
 
     Use the exact field tags shown in the original plan. Close every field and SCENE_PLAN tag.
-    Custom code follows the generation rules. For multiple calculation steps, keep one active
-    equation and replace or fade out the previous one. Prefer next_calculation_step(...).
+    Custom code follows the generation rules. Keep earlier instructional steps visible, narrate
+    each step, and hold the completed sequence. Prefer a standard scene for step-based teaching.
 """)
 
 
@@ -312,19 +360,20 @@ STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one Manim construct-body. Return corrected Python body statements only.
     Preserve the teaching goal and make the smallest useful correction.
 
-    The wrapper provides: scene, title, narration, labels, visual, formula, calculation_steps,
-    learning_role, learner_question, visual_mode, required_visual_elements, bg, label(...),
-    formula_label(...), calculation_step_label(...), next_calculation_step(...), and
-    wait_for_voiceover(...).
+    The wrapper provides: scene, title, narration, labels, visual, formula, steps,
+    step_narrations, calculation_steps as a legacy alias, learning_role, learner_question,
+    visual_mode, required_visual_elements, bg, label(...), formula_label(...),
+    instruction_step_label(...), calculation_step_label(...), add_instruction_step(...),
+    next_calculation_step(...), and wait_for_voiceover(...).
 
     Use mn. prefixes and simple primitives. No imports, class, def, files, images, SVG, Tex,
     MathTex, network, random, external libraries, eval, exec, or system access. Begin the body
     at column 1 and indent only statements nested inside with, if, for, or while. Include at
     least one voiceover block, three visible animation actions, and meaningful motion. A graph
     must create Axes or NumberPlane, draw the relationship, and mark the required features.
-    For multiple calculation steps, keep one active equation and replace or fade out the prior
-    equation. Prefer next_calculation_step(...). Display formula when present and close every
-    quote, bracket, and parenthesis.
+    When steps are present, keep earlier steps visible, narrate each step, and hold the complete
+    sequence for at least 2.5 seconds. Prefer add_instruction_step(...). Display formula when
+    present and close every quote, bracket, and parenthesis.
 """)
 
 
