@@ -10,6 +10,7 @@ import sys
 from typing import Any
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.prompts import ARTIFACT_SAFETY_INSTRUCTION
 from backend.runner.job_runner import STORAGE, to_static_url
 
 logger = logging.getLogger(f"app.{__name__}")
@@ -163,6 +164,11 @@ Constraints:
 - Do NOT draw heading bars, caption bars, or any text overlay rectangles.
 - Speech bubble text must be short (max 8 words) and placed above the main character.
 """
+
+
+STORY_DRAW_JS_SYSTEM = (
+    f"{ARTIFACT_SAFETY_INSTRUCTION}\n\n{DRAW_JS_SYSTEM}"
+)
 
 
 def _pick_provider_and_key(
@@ -560,7 +566,7 @@ def _generate_scene_draw_js(
         provider=provider,  # type: ignore[arg-type]
         api_key=api_key,
         model=use_model,
-        system=DRAW_JS_SYSTEM,
+        system=STORY_DRAW_JS_SYSTEM,
         user=user,
         temperature=0.25,
         max_tokens=2200,
@@ -1071,7 +1077,7 @@ def generate_story_video(
         provider=prov,
         api_key=key,
         model=model,
-        system=None,
+        system=ARTIFACT_SAFETY_INSTRUCTION,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
         temperature=0.45,
         max_tokens=3800,
@@ -1641,7 +1647,7 @@ def generate_story_slider(
         provider=prov,
         api_key=key,
         model=model,
-        system=None,
+        system=ARTIFACT_SAFETY_INSTRUCTION,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
         temperature=0.45,
         max_tokens=3800,

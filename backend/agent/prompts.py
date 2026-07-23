@@ -6,6 +6,20 @@ from textwrap import dedent
 from typing import Any
 
 
+ARTIFACT_SAFETY_INSTRUCTION = dedent("""\
+    Do not generate content that meaningfully facilitates serious harm, sexual exploitation,
+    abuse, or illegal wrongdoing. Legitimate educational, historical, scientific, preventive,
+    and safety-focused treatment is allowed. When needed, preserve the required output format
+    and redirect to a safe educational treatment instead of providing harmful instructions.
+""").strip()
+
+
+def _with_artifact_safety(prompt: str) -> str:
+    """Prefix an artifact system prompt with the shared safety instruction."""
+    return f"{ARTIFACT_SAFETY_INSTRUCTION}\n\n{dedent(prompt).strip()}"
+
+
+
 # -------- STRUCTURED VIDEO PROMPTS --------
 
 
@@ -46,7 +60,7 @@ def _format_body_blocks(bodies: list[tuple[str, str]], tag: str = "MANIM_BODY") 
     )
 
 
-STRUCTURED_VIDEO_SYSTEM = dedent("""\
+STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     Create one short educational Manim video in one response. Do not use markdown fences.
 
     Output exactly:
@@ -136,7 +150,7 @@ def build_structured_video_user_prompt(goal: str) -> str:
     """).strip()
 
 
-STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = dedent("""\
+STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one educational-video response. Do not use markdown fences.
     Return one complete <VIDEO_PLAN> JSON section followed by MANIM_BODY blocks only for
     custom scenes that are new or changed. Omitted existing bodies will be preserved.
@@ -168,7 +182,7 @@ def build_structured_video_plan_repair_prompt(*, plan: dict, errors: list[str]) 
     """).strip()
 
 
-STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
+STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety("""\
     Edit one structured educational video. Do not use markdown fences.
     Return one complete <VIDEO_PLAN> JSON section followed by MANIM_BODY blocks only for
     custom scenes that are new or changed. Omitted existing bodies will be preserved.
@@ -203,7 +217,7 @@ def build_structured_video_edit_user_prompt(original_plan: dict, edit_instructio
     """).strip()
 
 
-STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = dedent("""\
+STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one Manim construct-body. Return corrected Python body statements only.
     Preserve the teaching goal and make the smallest useful correction.
 
@@ -243,7 +257,7 @@ def build_structured_video_creative_repair_prompt(
 
 # -------- WIDGET PROMPTS --------
 
-WIDGET_SYSTEM = dedent("""\
+WIDGET_SYSTEM = _with_artifact_safety("""\
     Create one self-contained interactive educational HTML widget.
     Return ONLY a complete HTML document. No markdown or explanation.
 
@@ -301,7 +315,7 @@ def build_widget_user_prompt(topic: str) -> str:
     """).strip()
 
 
-WIDGET_SIMPLE_FALLBACK_SYSTEM = dedent("""\
+WIDGET_SIMPLE_FALLBACK_SYSTEM = _with_artifact_safety("""\
     Create a very small, reliable educational HTML widget from scratch.
     Return ONLY a complete standalone HTML document. No markdown or explanation.
 
@@ -332,7 +346,7 @@ def build_widget_simple_fallback_user_prompt(*, topic: str, reason: str | None =
     """).strip()
 
 
-WIDGET_EDIT_SYSTEM = dedent("""\
+WIDGET_EDIT_SYSTEM = _with_artifact_safety("""\
     Revise an existing self-contained educational HTML widget.
     Return ONLY the complete revised HTML document. No markdown or explanation.
 
@@ -362,7 +376,7 @@ def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str,
     """).strip()
 
 
-WIDGET_REPAIR_SYSTEM = dedent("""\
+WIDGET_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one self-contained educational HTML widget.
     Return ONLY the fixed complete HTML document. No markdown or explanation.
 
@@ -394,7 +408,7 @@ def build_widget_repair_user_prompt(*, original_title: str | None, edit_instruct
 
 
 # Final emergency fallback spec. The normal fallback is a fresh simple HTML call above.
-WIDGET_FALLBACK_SPEC_SYSTEM = dedent("""\
+WIDGET_FALLBACK_SPEC_SYSTEM = _with_artifact_safety("""\
     Create compact JSON for a last-resort topic-specific teaching widget.
     Return ONLY valid JSON. No markdown, code fences, or comments.
 
@@ -433,7 +447,7 @@ def build_widget_fallback_spec_user_prompt(*, topic: str, reason: str | None = N
 
 # -------- QUIZ PROMPTS --------
 
-QUIZ_GENERATE_SYSTEM = dedent("""\
+QUIZ_GENERATE_SYSTEM = _with_artifact_safety("""\
     You are a JSON generator. Always return a single valid JSON object.
     Never include markdown code fences, explanations, or comments.
 """)
@@ -477,7 +491,7 @@ def build_quiz_user_prompt(prompt: str, num_questions: int, difficulty: str, con
     """).strip()
 
 
-QUIZ_EDIT_SYSTEM = dedent("""\
+QUIZ_EDIT_SYSTEM = _with_artifact_safety("""\
     You are a JSON-only quiz editor. Always return a single valid JSON object.
     Never include markdown code fences, explanations, or comments.
 """)
@@ -519,7 +533,7 @@ def build_quiz_edit_user_prompt(*, original_quiz: dict, edit_instructions: str, 
 
 # -------- STORY EDIT PROMPTS --------
 
-STORY_EDIT_PATCH_SYSTEM = dedent("""\
+STORY_EDIT_PATCH_SYSTEM = _with_artifact_safety("""\
     You edit the source JSON for an existing educational story slider.
     Return ONLY valid JSON. No markdown, no code fences, no explanation.
 
@@ -580,7 +594,7 @@ def build_story_edit_patch_user_prompt(*, original_title: str | None, scene_summ
     """).strip()
 
 
-STORY_EDIT_FULL_HTML_SYSTEM = dedent("""\
+STORY_EDIT_FULL_HTML_SYSTEM = _with_artifact_safety("""\
     You revise existing self-contained educational story slider HTML.
     Return ONLY a complete HTML document. No markdown, no backticks, no explanation.
     Preserve the existing story slider structure, CSS style, navigation behavior, and JavaScript unless the user explicitly asks to change them.

@@ -7,6 +7,7 @@ from gtts import gTTS
 from langdetect import detect
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.prompts import ARTIFACT_SAFETY_INSTRUCTION
 from backend.runner.job_runner import STORAGE, to_static_url
 from backend.utils.diagnostics import DiagnosticError
 
@@ -402,7 +403,7 @@ def generate_podcast(
             provider=prov,
             api_key=api_key,
             model=model,
-            system=None,
+            system=ARTIFACT_SAFETY_INSTRUCTION,
             user=_podcast_prompt(prompt, mode=mode),
             temperature=0.5,  # Higher temperature for more natural, varied dialogue
         )
