@@ -1,40 +1,53 @@
 # backend/agent/llm/clients.py
-from typing import Literal
+from __future__ import annotations
+
 import os
+from typing import Any
+
 import requests
 
-Provider = Literal["claude", "gemini", "openrouter"]
+from backend.agent.llm.provider_config import (
+    ProviderName,
+    default_openai_model,
+    default_openrouter_model,
+    get_default_model,
+)
+
+Provider = ProviderName
 
 
-def _default_openrouter_model() -> str:
-    """
-    Default to a specific free OpenRouter model for repeatable results.
-
-    Env precedence:
-    1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
-    2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
-    3. nvidia/nemotron-3-ultra-550b-a55b:free
-    """
-    return (
-        os.environ.get("OPENROUTER_MODEL")
-        or os.environ.get("OPENROUTER_FREE_MODEL")
-        or "nvidia/nemotron-3-ultra-550b-a55b:free"
-    ).strip() or "nvidia/nemotron-3-ultra-550b-a55b:free"
+class LLMError(RuntimeError):
+    pass
 
 
-# ---------- OpenRouter ----------
-def _openrouter_error_message(data: object, fallback: str = "OpenRouter returned an unexpected response.") -> str:
+def _require_prompt(user: str) -> str:
+    text = str(user or "").strip()
+    if not text:
+        raise LLMError("Prompt is empty.")
+    return text
+
+
+def _json_error_message(
+    data: object,
+    *,
+    fallback: str,
+) -> str:
     if isinstance(data, dict):
-        err = data.get("error")
-        if isinstance(err, dict):
-            msg = err.get("message") or err.get("code")
-            if msg:
-                return str(msg)
-        if data.get("message"):
-            return str(data.get("message"))
+        error = data.get("error")
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("code") or error.get("type")
+            if message:
+                return str(message)
+        elif isinstance(error, str) and error.strip():
+            return error.strip()
+
+        message = data.get("message") or data.get("detail")
+        if message:
+            return str(message)
     return fallback
 
 
+# ---------- OpenRouter ----------
 def _call_openrouter(
     api_key: str,
     model: str | None,
@@ -43,36 +56,40 @@ def _call_openrouter(
     temperature: float = 0.2,
     max_tokens: int | None = None,
 ) -> str:
-    model = model or _default_openrouter_model()
-
-    if not user or not str(user).strip():
-        raise LLMError("Prompt is empty.")
+    model = str(model or default_openrouter_model()).strip()
+    prompt = _require_prompt(user)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost:8080"),
-        "X-OpenRouter-Title": os.environ.get("OPENROUTER_APP_TITLE", "UpcurvEd"),
+        "HTTP-Referer": os.environ.get(
+            "OPENROUTER_HTTP_REFERER",
+            "http://localhost:8080",
+        ),
+        "X-OpenRouter-Title": os.environ.get(
+            "OPENROUTER_APP_TITLE",
+            "UpcurvEd",
+        ),
     }
 
-    messages = []
+    messages: list[dict[str, str]] = []
     if system and str(system).strip():
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": str(user)})
+        messages.append({"role": "system", "content": str(system)})
+    messages.append({"role": "user", "content": prompt})
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
     }
     if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+        payload["max_tokens"] = int(max_tokens)
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers=headers,
         json=payload,
-        timeout=120,
+        timeout=float(os.environ.get("OPENROUTER_TIMEOUT_SECONDS", "120")),
     )
 
     try:
@@ -81,34 +98,141 @@ def _call_openrouter(
         data = None
 
     if response.status_code >= 400:
-        detail = _openrouter_error_message(data, response.text[:800])
+        detail = _json_error_message(
+            data,
+            fallback=response.text[:800] or "OpenRouter request failed.",
+        )
         raise RuntimeError(f"OpenRouter API error {response.status_code}: {detail}")
 
     if not isinstance(data, dict):
-        raise RuntimeError(f"OpenRouter returned non-JSON response: {response.text[:300]}")
+        raise RuntimeError(
+            f"OpenRouter returned non-JSON response: {response.text[:300]}"
+        )
 
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
-        detail = _openrouter_error_message(data)
-        raise RuntimeError(f"OpenRouter response missing choices. Model: {model}. Reason: {detail}")
+        detail = _json_error_message(
+            data,
+            fallback="OpenRouter returned an unexpected response.",
+        )
+        raise RuntimeError(
+            f"OpenRouter response missing choices. Model: {model}. Reason: {detail}"
+        )
 
     first = choices[0] if isinstance(choices[0], dict) else {}
     message = first.get("message") if isinstance(first, dict) else {}
     content = ""
     if isinstance(message, dict):
-        content = message.get("content") or ""
+        content = str(message.get("content") or "")
     elif isinstance(first, dict):
-        content = first.get("text") or ""
+        content = str(first.get("text") or "")
 
-    if not str(content).strip():
+    if not content.strip():
         finish = first.get("finish_reason") if isinstance(first, dict) else None
-        raise RuntimeError(f"OpenRouter returned empty content. Model: {model}. finish_reason={finish}")
+        raise RuntimeError(
+            f"OpenRouter returned empty content. Model: {model}. finish_reason={finish}"
+        )
 
-    return str(content)
+    return content
 
 
-class LLMError(RuntimeError):
-    pass
+# ---------- OpenAI ----------
+def _extract_openai_response_text(data: object) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    direct = data.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    parts: list[str] = []
+    output = data.get("output")
+    if not isinstance(output, list):
+        return ""
+
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") not in {"output_text", "text"}:
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _call_openai(
+    api_key: str,
+    model: str | None,
+    system: str | None,
+    user: str,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+) -> str:
+    """Call the direct OpenAI Responses API without adding an SDK dependency."""
+    model = str(model or default_openai_model()).strip()
+    prompt = _require_prompt(user)
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": prompt,
+    }
+    if system and str(system).strip():
+        payload["instructions"] = str(system)
+    if max_tokens is not None:
+        payload["max_output_tokens"] = int(max_tokens)
+
+    # Current GPT-5-family models expose an explicit no-reasoning mode. Keeping
+    # reasoning off is appropriate for UpcurvEd's format-sensitive generation
+    # calls and avoids spending output budget on hidden reasoning.
+    if model.startswith("gpt-5"):
+        payload["reasoning"] = {
+            "effort": os.environ.get("OPENAI_REASONING_EFFORT", "none")
+        }
+    else:
+        payload["temperature"] = float(temperature)
+
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "180")),
+    )
+
+    try:
+        data = response.json()
+    except Exception:
+        data = None
+
+    if response.status_code >= 400:
+        detail = _json_error_message(
+            data,
+            fallback=response.text[:800] or "OpenAI request failed.",
+        )
+        raise RuntimeError(f"OpenAI API error {response.status_code}: {detail}")
+
+    if not isinstance(data, dict):
+        raise RuntimeError(f"OpenAI returned non-JSON response: {response.text[:300]}")
+
+    text = _extract_openai_response_text(data)
+    if not text:
+        status = data.get("status")
+        incomplete = data.get("incomplete_details")
+        refusal = data.get("refusal")
+        detail = refusal or incomplete or status or "No output_text content was returned."
+        raise RuntimeError(
+            f"OpenAI returned empty content. Model: {model}. Reason: {detail}"
+        )
+    return text
 
 
 # ---------- Anthropic (Claude) ----------
@@ -120,57 +244,48 @@ def call_claude(
     max_tokens: int = 2048,
     temperature: float = 0.2,
 ) -> str:
-    """
-    Uses Anthropic's official SDK to call the Messages API.
-    Returns the concatenated text from response.content blocks.
-    """
+    """Use Anthropic's official SDK and return concatenated text blocks."""
     try:
         try:
             import anthropic
-        except Exception as e:
+        except Exception as exc:
             raise LLMError(
                 "Claude SDK is not installed. Install 'anthropic' to use Claude."
-            ) from e
+            ) from exc
 
+        prompt = _require_prompt(user)
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        message = client.messages.create(
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
             system=system or "",
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": prompt}],
         )
-        # msg.content is a list of content blocks, e.g. [{"type": "text", "text": "..."}]
-        out_parts = []
-        for block in msg.content or []:
+        out_parts: list[str] = []
+        for block in message.content or []:
             if getattr(block, "type", None) == "text":
                 out_parts.append(getattr(block, "text", "") or "")
-            else:
-                # some SDK versions wrap as dicts
-                if isinstance(block, dict) and block.get("type") == "text":
-                    out_parts.append(block.get("text", "") or "")
+            elif isinstance(block, dict) and block.get("type") == "text":
+                out_parts.append(str(block.get("text") or ""))
         text = "".join(out_parts).strip()
         if not text:
             raise LLMError("Claude returned empty text.")
         return text
-    except Exception as e:
-        raise LLMError(f"Claude SDK error: {e}") from e
+    except Exception as exc:
+        if isinstance(exc, LLMError):
+            raise
+        raise LLMError(f"Claude SDK error: {exc}") from exc
 
 
 # ---------- Google (Gemini) ----------
-def _with_genai_key(api_key: str):
-    """
-    Configure the google-generativeai SDK with a specific API key.
-    Note: genai.configure is global. For simple dev use (single-user),
-    this is fine. If you add multi-user concurrency later, consider
-    a per-request client (available in newer SDKs) or a key manager.
-    """
+def _with_genai_key(api_key: str) -> None:
     try:
         import google.generativeai as genai
-    except Exception as e:
+    except Exception as exc:
         raise LLMError(
             "Gemini SDK is not installed. Install 'google-generativeai' to use Gemini."
-        ) from e
+        ) from exc
     genai.configure(api_key=api_key)
 
 
@@ -182,30 +297,24 @@ def call_gemini(
     max_output_tokens: int = 8192,
     temperature: float = 0.2,
 ) -> str:
-    """
-    Uses Google's official google-generativeai SDK to call Gemini.
-    We attach system instruction to the GenerativeModel.
-    """
+    """Use Google's official google-generativeai SDK."""
     try:
         try:
             import google.generativeai as genai
-        except Exception as e:
+        except Exception as exc:
             raise LLMError(
                 "Gemini SDK is not installed. Install 'google-generativeai' to use Gemini."
-            ) from e
+            ) from exc
 
-        if not user or not str(user).strip():
-            raise LLMError("Prompt is empty.")
-
+        prompt = _require_prompt(user)
         _with_genai_key(api_key)
-        # Configure safety settings to be permissive for educational content.
         safety_settings = {
             "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
             "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
             "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
             "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
         }
-        gm = genai.GenerativeModel(
+        model_client = genai.GenerativeModel(
             model,
             system_instruction=(system or None),
             generation_config={
@@ -214,57 +323,58 @@ def call_gemini(
             },
             safety_settings=safety_settings,
         )
-        resp = gm.generate_content(str(user))
+        response = model_client.generate_content(prompt)
 
-        # Preferred accessor (guard against SDK raising when finish_reason!=OK)
         try:
-            text = (resp.text or "").strip()  # property may raise
+            text = (response.text or "").strip()
         except Exception:
             text = ""
+
         if not text:
-            # Fallback: manually gather text parts from candidates.
             try:
-                candidates = getattr(resp, "candidates", []) or []
-                parts = []
-                for c in candidates:
-                    content = getattr(c, "content", None)
-                    if not content:
-                        content = c.get("content") if isinstance(c, dict) else None
+                candidates = getattr(response, "candidates", []) or []
+                parts: list[str] = []
+                for candidate in candidates:
+                    content = getattr(candidate, "content", None)
+                    if not content and isinstance(candidate, dict):
+                        content = candidate.get("content")
                     if content is None:
                         continue
-                    cparts = getattr(content, "parts", None)
-                    if cparts is None and isinstance(content, dict):
-                        cparts = content.get("parts")
-                    for p in cparts or []:
-                        val = getattr(p, "text", None)
-                        if val is None and isinstance(p, dict):
-                            val = p.get("text")
-                        if val:
-                            parts.append(str(val))
-                text = ("\n".join(parts)).strip()
+                    content_parts = getattr(content, "parts", None)
+                    if content_parts is None and isinstance(content, dict):
+                        content_parts = content.get("parts")
+                    for part in content_parts or []:
+                        value = getattr(part, "text", None)
+                        if value is None and isinstance(part, dict):
+                            value = part.get("text")
+                        if value:
+                            parts.append(str(value))
+                text = "\n".join(parts).strip()
             except Exception:
                 text = ""
 
         if not text:
             finish = None
             try:
-                if getattr(resp, "candidates", None):
-                    finish = getattr(resp.candidates[0], "finish_reason", None)
+                if getattr(response, "candidates", None):
+                    finish = getattr(response.candidates[0], "finish_reason", None)
             except Exception:
                 pass
-            pf = getattr(resp, "prompt_feedback", None)
-            error_msg = f"Gemini returned empty text. finish_reason={finish}"
+            prompt_feedback = getattr(response, "prompt_feedback", None)
+            error_message = f"Gemini returned empty text. finish_reason={finish}"
             if finish == 2:
-                error_msg = (
+                error_message = (
                     "Gemini blocked the content due to safety filters. "
-                    "Try rephrasing your prompt or use Claude instead."
+                    "Try rephrasing your prompt or switch models."
                 )
-            elif pf:
-                error_msg += f", prompt_feedback={pf}"
-            raise LLMError(error_msg)
+            elif prompt_feedback:
+                error_message += f", prompt_feedback={prompt_feedback}"
+            raise LLMError(error_message)
         return text
-    except Exception as e:
-        raise LLMError(f"Gemini SDK error: {e}") from e
+    except Exception as exc:
+        if isinstance(exc, LLMError):
+            raise
+        raise LLMError(f"Gemini SDK error: {exc}") from exc
 
 
 # ---------- Unified entrypoint ----------
@@ -278,43 +388,44 @@ def call_llm(
     max_tokens: int | None = None,
     max_output_tokens: int | None = None,
 ) -> str:
-    """
-    Dispatch to the chosen provider using sensible defaults.
-    Temperature controls randomness: 0.0=deterministic, 1.0=creative.
-    Recommended: 0.2 for code, 0.4-0.5 for quizzes, 0.5-0.7 for creative content.
-    """
+    """Dispatch to the selected provider using centralized model defaults."""
+    resolved_model = str(model or get_default_model(provider) or "").strip()
+    output_limit = max_tokens or max_output_tokens
+
     if provider == "claude":
-        model = model or "claude-haiku-4-5"
         return call_claude(
             api_key=api_key,
-            model=model,
+            model=resolved_model,
             system=system,
             user=user,
             temperature=temperature,
-            max_tokens=max_tokens or 2048,
+            max_tokens=output_limit or 2048,
         )
-    elif provider == "gemini":
-        model = model or "gemini-3-flash-preview"
+    if provider == "gemini":
         return call_gemini(
             api_key=api_key,
-            model=model,
+            model=resolved_model,
             system=system,
             user=user,
             temperature=temperature,
-            max_output_tokens=max_output_tokens or 8192,
+            max_output_tokens=output_limit or 8192,
         )
-    elif provider == "openrouter":
-        # OpenRouter supports exact model IDs like:
-        # - nvidia/nemotron-3-ultra-550b-a55b:free
-        # - openai/gpt-oss-20b:free
-        # - openrouter/free
+    if provider == "openai":
+        return _call_openai(
+            api_key=api_key,
+            model=resolved_model,
+            system=system,
+            user=user,
+            temperature=temperature,
+            max_tokens=output_limit,
+        )
+    if provider == "openrouter":
         return _call_openrouter(
             api_key=api_key,
-            model=model,
+            model=resolved_model,
             system=system,
             user=user,
             temperature=temperature,
-            max_tokens=max_tokens or max_output_tokens,
+            max_tokens=output_limit,
         )
-    else:
-        raise LLMError(f"Unknown provider: {provider}")
+    raise LLMError(f"Unknown provider: {provider}")

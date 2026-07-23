@@ -69,6 +69,15 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { isDesktopLocalMode } from "@/lib/runtime";
 import { clearApiKeysForUser, persistApiKeysForUser } from "@/lib/secureKeys";
+import {
+  apiKeysChanged,
+  apiKeysFingerprint,
+  buildLlmRequestConfig,
+  hasSelectedProviderKey,
+  normalizeApiKeys,
+  providerDisplayName,
+  selectedProvider,
+} from "@/lib/providerConfig";
 import { prepareWidgetHtmlForIframe } from "@/lib/widgetRuntime";
 
 interface ChatInterfaceProps {
@@ -424,39 +433,24 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return base.endsWith(".html") ? base : `${base}.html`;
   };
 
-  const ensureLlmKey = (action: "video" | "quiz"): boolean => {
-    const safe: ApiKeys = {
-      claude: apiKeys?.claude || "",
-      gemini: apiKeys?.gemini || "",
-      openrouter: apiKeys?.openrouter || "",
-      provider: apiKeys?.provider || "",
-      model: apiKeys?.model || "",
-    };
+  type GenerationAction = "video" | "story" | "podcast" | "widget" | "quiz" | "edit";
 
-    const provider = (
-      safe.provider ||
-      (safe.openrouter ? "openrouter" : safe.gemini ? "gemini" : safe.claude ? "claude" : "")
-    ) as "openrouter" | "gemini" | "claude" | "";
+  const ensureLlmKey = (action: GenerationAction): boolean => {
+    const normalized = normalizeApiKeys(apiKeys);
+    const provider = selectedProvider(normalized);
 
-    const missing =
-      !provider ||
-      (provider === "gemini" && !safe.gemini) ||
-      (provider === "claude" && !safe.claude) ||
-      (provider === "openrouter" && !safe.openrouter);
-
-    if (missing) {
-      const which = provider || "an LLM";
+    if (!provider || !hasSelectedProviderKey(normalized)) {
+      const actionText: Record<GenerationAction, string> = {
+        video: "generate a video",
+        story: "generate a story",
+        podcast: "generate a podcast",
+        widget: "generate a widget",
+        quiz: "generate a quiz",
+        edit: "edit this artifact",
+      };
       toast({
         title: "Missing API key",
-        description: `Add your ${
-          which === "gemini"
-            ? "Gemini"
-            : which === "claude"
-            ? "Claude"
-            : which === "openrouter"
-            ? "OpenRouter"
-            : "Gemini/Claude/OpenRouter"
-        } API key in Settings to ${action}.`,
+        description: `Add your ${providerDisplayName(provider)} API key in Settings to ${actionText[action]}.`,
         duration: 6000,
       });
       return false;
@@ -626,28 +620,29 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }, [settingsOpen]);
 
-  // Wrap setApiKeys so saving changed provider/model/keys cancels in-flight generations
+  // Saving any provider/model/key change cancels all in-flight generation types.
   const applyApiKeys = (next: ApiKeys) => {
-    const changed = (next.provider !== apiKeys.provider) || (next.model !== apiKeys.model) || (next.claude !== apiKeys.claude) || (next.gemini !== apiKeys.gemini);
-    if (changed) {
-      try {
-        if (busy && videoAbortRef.current) videoAbortRef.current.abort();
-      } catch {}
-      try {
-        if (podcastLoading && podcastAbortRef.current) podcastAbortRef.current.abort();
-      } catch {}
-      try {
-        if (quizLoading && quizAbortRef.current) quizAbortRef.current.abort();
-      } catch {}
+    const normalizedNext = normalizeApiKeys(next);
+    if (apiKeysChanged(apiKeys, normalizedNext)) {
+      try { videoAbortRef.current?.abort(); } catch {}
+      try { podcastAbortRef.current?.abort(); } catch {}
+      try { quizAbortRef.current?.abort(); } catch {}
+      try { widgetAbortRef.current?.abort(); } catch {}
     }
-    setApiKeys(next);
+    setApiKeys(normalizedNext);
   };
 
-  // Persist API keys whenever they change so restarts keep them.
+  const normalizedApiKeys = useMemo(() => normalizeApiKeys(apiKeys), [apiKeys]);
+  const apiKeysPersistenceKey = useMemo(
+    () => apiKeysFingerprint(normalizedApiKeys),
+    [normalizedApiKeys]
+  );
+
+  // Persist every registered provider key, including OpenAI and OpenRouter.
   useEffect(() => {
     if (!user?.email) return;
-    void persistApiKeysForUser(user.email, apiKeys);
-  }, [user?.email, apiKeys.claude, apiKeys.gemini, apiKeys.provider, apiKeys.model]);
+    void persistApiKeysForUser(user.email, normalizedApiKeys);
+  }, [user?.email, apiKeysPersistenceKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reusable caption utilities
   const srtToVtt = (srt: string) => {
@@ -2144,7 +2139,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
     // Gate before posting user prompt into chat.
-    if (!ensureLlmKey("video")) return; // reuse existing gating label
+    if (!ensureLlmKey("podcast")) return;
 
     // Persist (may migrate draft) BEFORE adding message so user prompt always visible
     let persistedId = await ensurePersistedActiveChat(prompt);
@@ -2192,20 +2187,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }, 700);
     let aborted = false;
     try {
-      const safe: ApiKeys = {
-        claude: apiKeys?.claude || "",
-        gemini: apiKeys?.gemini || "",
-        openrouter: apiKeys?.openrouter || "",
-        provider: apiKeys?.provider || "",
-        model: apiKeys?.model || "",
-      };
+      const llmConfig = buildLlmRequestConfig(apiKeys);
 
       const sessionId = ensureChatSessionId();
       const body = {
         prompt,
-        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
-        provider: safe.provider || undefined,
-        model: safe.model || undefined,
+        keys: llmConfig.keys,
+        provider: llmConfig.provider,
+        model: llmConfig.model,
         mode: podcastMode,
         sessionId,
       };
@@ -2385,11 +2374,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(pendingPrompt, true, undefined, persistedId);
       // Now clear the query input AFTER message is added
       setQuery("");
-      const safe: ApiKeys = { claude: apiKeys?.claude || '', gemini: apiKeys?.gemini || '', 
-        openrouter: apiKeys?.openrouter || "", provider: apiKeys?.provider || '', model: apiKeys?.model || '' };
+      const llmConfig = buildLlmRequestConfig(apiKeys);
       const sessionId = ensureChatSessionId();
   const jobId = makeJobId();
-  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter }, provider: safe.provider || undefined, model: safe.model || undefined, sessionId, jobId, chatId: String(finalChatId) };
+  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: llmConfig.keys, provider: llmConfig.provider, model: llmConfig.model, sessionId, jobId, chatId: String(finalChatId) };
       console.debug('POST /quiz/embedded', body);
       const controller = new AbortController();
       quizAbortRef.current = controller;
@@ -2455,7 +2443,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
       return;
     }
-    if (!ensureLlmKey("quiz")) return; // reuse key check
+    if (!ensureLlmKey("widget")) return;
 
     setWidgetLoading(true);
     setWidgetProgress(5);
@@ -2479,22 +2467,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(prompt, true, undefined, persistedId);
       setQuery("");
 
-      const safe: ApiKeys = {
-        claude: apiKeys?.claude || "",
-        gemini: apiKeys?.gemini || "",
-        openrouter: apiKeys?.openrouter || "",
-        provider: apiKeys?.provider || "",
-        model: apiKeys?.model || "",
-      };
+      const llmConfig = buildLlmRequestConfig(apiKeys);
 
       const controller = new AbortController();
       widgetAbortRef.current = controller;
 
       const data = await apiWidget({
         prompt,
-        provider: safe.provider || undefined,
-        model: safe.model || undefined,
-        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
+        provider: llmConfig.provider,
+        model: llmConfig.model,
+        keys: llmConfig.keys,
         chatId: String(finalChatId),
       }, controller.signal);
 
@@ -3268,13 +3250,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   let aborted = false;
   try {
       // Defensive defaults: ensure keys object always exists
-      const safe: ApiKeys = {
-        claude: apiKeys?.claude || "",
-        gemini: apiKeys?.gemini || "",
-        openrouter: apiKeys?.openrouter || "",
-        provider: apiKeys?.provider || "",
-        model: apiKeys?.model || "",
-      };
+      const llmConfig = buildLlmRequestConfig(apiKeys);
 
       // assign a client job id so backend can cancel the right process
       const jobId = makeJobId();
@@ -3282,9 +3258,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const sessionId = ensureChatSessionId();
       const body = {
         prompt,
-        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
-        provider: safe.provider || undefined, // "" -> undefined
-        model: safe.model || undefined,
+        keys: llmConfig.keys,
+        provider: llmConfig.provider, // "" -> undefined
+        model: llmConfig.model,
         mode: videoMode,
         storyOptions: videoMode === "story" ? (storyOptions || {}) : undefined,
         jobId,
@@ -3493,13 +3469,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setQuizLoading(true);
     setApiError(null);
 
-    const safe: ApiKeys = {
-      claude: apiKeys?.claude || "",
-      gemini: apiKeys?.gemini || "",
-      openrouter: apiKeys?.openrouter || "",
-      provider: apiKeys?.provider || "",
-      model: apiKeys?.model || "",
-    };
+    const llmConfig = buildLlmRequestConfig(apiKeys);
 
     let persistedId: string | undefined;
 
@@ -3589,9 +3559,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const response = await apiQuiz({
         transcript,
         sceneCode: msg.media.sceneCode || "",
-        provider: safe.provider || undefined,
-        model: safe.model || undefined,
-        provider_keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
+        provider: llmConfig.provider,
+        model: llmConfig.model,
+        provider_keys: llmConfig.keys,
         chatId: String(finalChatId),
         jobId: makeJobId(),
       } as any, videoAbort.signal);
@@ -3661,13 +3631,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     setQuizLoading(true);
     setApiError(null);
 
-    const safe: ApiKeys = {
-      claude: apiKeys?.claude || "",
-      gemini: apiKeys?.gemini || "",
-      openrouter: apiKeys?.openrouter || "",
-      provider: apiKeys?.provider || "",
-      model: apiKeys?.model || "",
-    };
+    const llmConfig = buildLlmRequestConfig(apiKeys);
 
     let persistedId: string | undefined;
 
@@ -3690,9 +3654,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const response = await apiQuiz({
         transcript,
         sceneCode: "",
-        provider: safe.provider || undefined,
-        model: safe.model || undefined,
-        provider_keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
+        provider: llmConfig.provider,
+        model: llmConfig.model,
+        provider_keys: llmConfig.keys,
         chatId: String(finalChatId),
         jobId: makeJobId(),
       } as any, controller.signal);
@@ -3751,15 +3715,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
 
-    if (!ensureLlmKey("quiz")) return;
+    if (!ensureLlmKey("edit")) return;
 
-    const safe: ApiKeys = {
-      claude: apiKeys?.claude || "",
-      gemini: apiKeys?.gemini || "",
-      openrouter: apiKeys?.openrouter || "",
-      provider: apiKeys?.provider || "",
-      model: apiKeys?.model || "",
-    };
+    const llmConfig = buildLlmRequestConfig(apiKeys);
 
     const chatIdForGeneration = typeof activeChatId === 'string' ? activeChatId : String(activeChatId);
     if (!chatIdForGeneration || chatIdForGeneration === "null") {
@@ -3792,9 +3750,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             original_html: originalHtml,
             edit_instructions: editInstructions,
             original_title: sourceTitle,
-            keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
-            provider: safe.provider || undefined,
-            model: safe.model || undefined,
+            keys: llmConfig.keys,
+            provider: llmConfig.provider,
+            model: llmConfig.model,
             sessionId: ensureChatSessionId(),
             jobId: makeJobId(),
             chatId: String(chatIdForGeneration),
@@ -3844,9 +3802,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             edit_instructions: editInstructions,
             num_questions: originalQuiz.questions?.length || 5,
             difficulty: 'medium',
-            keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
-            provider: safe.provider || undefined,
-            model: safe.model || undefined,
+            keys: llmConfig.keys,
+            provider: llmConfig.provider,
+            model: llmConfig.model,
             sessionId: ensureChatSessionId(),
             jobId: makeJobId(),
             chatId: String(chatIdForGeneration),
@@ -3926,7 +3884,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
 
-    if (!ensureLlmKey("video")) return;
+    if (!ensureLlmKey("edit")) return;
 
     // Cancel toggle if already busy
     if (busy && videoAbortRef.current) {
@@ -3959,13 +3917,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(`✏️ Edit: ${editInstructions}`, true, undefined, chatIdForGeneration);
       setQuery("");
 
-      const safe: ApiKeys = {
-        claude: apiKeys?.claude || "",
-        gemini: apiKeys?.gemini || "",
-        openrouter: apiKeys?.openrouter || "",
-        provider: apiKeys?.provider || "",
-        model: apiKeys?.model || "",
-      };
+      const llmConfig = buildLlmRequestConfig(apiKeys);
 
       const jobId = makeJobId();
       currentVideoJobId.current = jobId;
@@ -3974,9 +3926,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const body = {
         original_code: quotedMessage.media.sceneCode,
         edit_instructions: editInstructions,
-        keys: { claude: safe.claude, gemini: safe.gemini, openrouter: safe.openrouter },
-        provider: safe.provider || undefined,
-        model: safe.model || undefined,
+        keys: llmConfig.keys,
+        provider: llmConfig.provider,
+        model: llmConfig.model,
         jobId,
         sessionId,
         chatId: chatIdForGeneration,

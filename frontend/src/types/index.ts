@@ -4,16 +4,16 @@ export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 
 
 export interface MediaAttachment {
   type: 'video' | 'audio' | 'widget';
-  artifactKind?: ArtifactKind;     // distinguishes story/widget/video/audio for UI follow-up actions
-  url?: string;                    // media URL, or downloadable HTML URL for widgets/stories
+  artifactKind?: ArtifactKind;
+  url?: string;
   subtitleUrl?: string;
   title?: string;
   artifactId?: string;
   gcsPath?: string;
   sceneCode?: string;
   scriptGcsPath?: string;
-  widgetCode?: string;             // full HTML document for sandboxed iframe
-  downloadFilename?: string;       // suggested filename for downloadable HTML exports
+  widgetCode?: string;
+  downloadFilename?: string;
 }
 
 export interface QuizData {
@@ -26,7 +26,7 @@ export interface Message {
   role: 'user' | 'bot';
   content: string;
   media?: MediaAttachment;
-  quizData?: QuizData;             // quiz JSON/result payload used for rendering + edit/download follow-ups
+  quizData?: QuizData;
   createdAt?: number;
   messageId?: string;
 }
@@ -51,15 +51,11 @@ export interface User {
   chats: Chat[];
 }
 
-export type Provider = 'claude' | 'gemini' | 'openrouter' | '';
-
-export interface ApiKeys {
-  gemini: string;
-  claude: string;
-  openrouter: string;
-  provider?: Provider;
-  model?: string;
-}
+export type {
+  ApiKeys,
+  Provider,
+  ProviderId,
+} from "../lib/providerConfig";
 
 export type ColorTheme = 'blue' | 'rose' | 'green' | 'orange';
 export type Theme = 'light' | 'dark';

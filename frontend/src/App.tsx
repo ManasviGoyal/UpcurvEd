@@ -45,14 +45,10 @@ const AppContent = () => {
   });
   const [themeHydratedForEmail, setThemeHydratedForEmail] = useState<string | null>(null);
 
-  // Include provider/model so Settings can optionally set them; "" means "auto"
-  const [apiKeys, setApiKeys] = useState<ApiKeys>({
-    gemini: "",
-    claude: "",
-    openrouter: "",
-    provider: "",
-    model: "",
-  });
+  // Include provider/model so Settings can optionally set them; "" means "auto".
+  // EMPTY_KEYS is generated from the shared provider registry, so future providers
+  // do not require another manual initializer here.
+  const [apiKeys, setApiKeys] = useState<ApiKeys>(() => ({ ...EMPTY_KEYS }));
 
   useEffect(() => {
     const root = window.document.documentElement;

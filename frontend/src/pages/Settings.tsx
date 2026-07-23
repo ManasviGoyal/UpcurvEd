@@ -5,6 +5,13 @@ import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import type { ApiKeys, Provider, User } from "@/types";
 import {
+  AUTO_PROVIDER_LABEL,
+  NO_PROVIDER_MODEL_HELP,
+  PROVIDER_CONFIG,
+  PROVIDER_IDS,
+  normalizeApiKeys,
+} from "@/lib/providerConfig";
+import {
   clearSecurelyStoredApiKeysForUser,
   isSecureStorageEnabledForUser,
   loadApiKeysForUser,
@@ -23,40 +30,6 @@ interface SettingsPageProps {
   onResetLocalData?: () => void;
 }
 
-const PROVIDER_LABELS: Record<Provider, string> = {
-  "": "Auto (by available key)",
-  claude: "Claude (Anthropic)",
-  gemini: "Gemini (Google)",
-  openrouter: "OpenRouter",
-};
-
-const PROVIDER_MODELS: Record<Provider, string[]> = {
-  "": [],
-  claude: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
-  gemini: ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
-  openrouter: [
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openai/gpt-oss-20b:free",
-    "openrouter/free",
-  ],
-};
-
-const MODEL_HELP: Record<Provider, string> = {
-  "": "Select a provider first.",
-  claude: "Choose a Claude model, or type another exact Anthropic model ID.",
-  gemini: "Choose a Gemini model, or type another exact Google model ID.",
-  openrouter:
-    "Choose a specific free OpenRouter model such as nvidia/nemotron-3-ultra-550b-a55b:free, or type any exact OpenRouter model ID.",
-};
-
-const normalizeApiKeys = (keys?: Partial<ApiKeys>): ApiKeys => ({
-  claude: keys?.claude || "",
-  gemini: keys?.gemini || "",
-  openrouter: keys?.openrouter || "",
-  provider: keys?.provider || "",
-  model: keys?.model || "",
-});
-
 export const SettingsPage = ({
   setView,
   user,
@@ -68,7 +41,7 @@ export const SettingsPage = ({
   onResetLocalData,
 }: SettingsPageProps) => {
   const [displayName, setDisplayName] = useState<string>(user.name || "");
-  const [localKeys, setLocalKeys] = useState<ApiKeys>(normalizeApiKeys(apiKeys));
+  const [localKeys, setLocalKeys] = useState<ApiKeys>(() => normalizeApiKeys(apiKeys));
   const [secureStorageEnabled, setSecureStorageEnabled] = useState<boolean>(false);
   const [useSecureStorage, setUseSecureStorage] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
@@ -80,7 +53,9 @@ export const SettingsPage = ({
     async function hydrate() {
       const loaded = await loadApiKeysForUser(user.email);
       if (!cancelled) {
-        const secureEnabled = desktopLocal ? isSecureStorageEnabledForUser(user.email) : false;
+        const secureEnabled = desktopLocal
+          ? isSecureStorageEnabledForUser(user.email)
+          : false;
         setLocalKeys(normalizeApiKeys(loaded));
         setSecureStorageEnabled(secureEnabled);
         setUseSecureStorage(secureEnabled);
@@ -88,7 +63,6 @@ export const SettingsPage = ({
     }
 
     void hydrate();
-
     return () => {
       cancelled = true;
     };
@@ -138,22 +112,25 @@ export const SettingsPage = ({
   };
 
   const handleProviderChange = (provider: Provider) => {
-    const models = PROVIDER_MODELS[provider] || [];
+    const models = provider ? PROVIDER_CONFIG[provider].models : [];
     const defaultModel = models[0] || "";
 
-    setLocalKeys((prev) => ({
-      ...prev,
+    setLocalKeys((previous) => ({
+      ...previous,
       provider,
       model: provider
-        ? models.includes(prev.model || "")
-          ? prev.model
+        ? models.includes(previous.model || "")
+          ? previous.model
           : defaultModel
         : "",
     }));
   };
 
   const selectedProvider = localKeys.provider || "";
-  const selectedProviderModels = PROVIDER_MODELS[selectedProvider] || [];
+  const selectedProviderConfig = selectedProvider
+    ? PROVIDER_CONFIG[selectedProvider]
+    : null;
+  const selectedProviderModels = selectedProviderConfig?.models || [];
   const modelListId = `provider-models-${selectedProvider || "none"}`;
 
   return (
@@ -171,51 +148,42 @@ export const SettingsPage = ({
             <Input
               type="text"
               value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              onChange={(event) => setDisplayName(event.target.value)}
               placeholder="Enter your display name"
             />
           </div>
 
-          <div>
-            <label className="text-sm font-medium">Gemini API Key</label>
-            <Input
-              type="password"
-              value={localKeys.gemini}
-              onChange={(e) => setLocalKeys({ ...localKeys, gemini: e.target.value })}
-              placeholder="Enter your Gemini API key"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Claude API Key</label>
-            <Input
-              type="password"
-              value={localKeys.claude}
-              onChange={(e) => setLocalKeys({ ...localKeys, claude: e.target.value })}
-              placeholder="Enter your Claude API key"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">OpenRouter API Key</label>
-            <Input
-              type="password"
-              value={localKeys.openrouter}
-              onChange={(e) => setLocalKeys({ ...localKeys, openrouter: e.target.value })}
-              placeholder="Enter your OpenRouter API key"
-            />
-          </div>
+          {PROVIDER_IDS.map((provider) => {
+            const config = PROVIDER_CONFIG[provider];
+            return (
+              <div key={provider}>
+                <label className="text-sm font-medium">{config.keyLabel}</label>
+                <Input
+                  type="password"
+                  value={localKeys[provider]}
+                  onChange={(event) =>
+                    setLocalKeys((previous) => ({
+                      ...previous,
+                      [provider]: event.target.value,
+                    }))
+                  }
+                  placeholder={config.keyPlaceholder}
+                />
+              </div>
+            );
+          })}
 
           <div className="grid grid-cols-1 gap-2">
             <label className="text-sm font-medium">Provider</label>
             <select
               className="border rounded px-3 py-2 bg-background"
               value={selectedProvider}
-              onChange={(e) => handleProviderChange(e.target.value as Provider)}
+              onChange={(event) => handleProviderChange(event.target.value as Provider)}
             >
-              {Object.entries(PROVIDER_LABELS).map(([val, label]) => (
-                <option key={val} value={val}>
-                  {label}
+              <option value="">{AUTO_PROVIDER_LABEL}</option>
+              {PROVIDER_IDS.map((provider) => (
+                <option key={provider} value={provider}>
+                  {PROVIDER_CONFIG[provider].label}
                 </option>
               ))}
             </select>
@@ -226,17 +194,26 @@ export const SettingsPage = ({
             <Input
               list={modelListId}
               value={localKeys.model || ""}
-              onChange={(e) => setLocalKeys({ ...localKeys, model: e.target.value })}
+              onChange={(event) =>
+                setLocalKeys((previous) => ({
+                  ...previous,
+                  model: event.target.value,
+                }))
+              }
               disabled={!selectedProvider}
-              placeholder={selectedProvider ? "Choose or type exact model ID" : "Select provider first"}
+              placeholder={
+                selectedProvider
+                  ? "Choose or type exact model ID"
+                  : "Select provider first"
+              }
             />
             <datalist id={modelListId}>
-              {selectedProviderModels.map((m) => (
-                <option key={m} value={m} />
+              {selectedProviderModels.map((model) => (
+                <option key={model} value={model} />
               ))}
             </datalist>
             <p className="text-xs text-muted-foreground">
-              {MODEL_HELP[selectedProvider]}
+              {selectedProviderConfig?.help || NO_PROVIDER_MODEL_HELP}
             </p>
           </div>
 
@@ -262,7 +239,9 @@ export const SettingsPage = ({
             </div>
           )}
 
-          {statusMessage && <p className="text-sm text-muted-foreground">{statusMessage}</p>}
+          {statusMessage && (
+            <p className="text-sm text-muted-foreground">{statusMessage}</p>
+          )}
         </div>
 
         <div className="mt-6 flex flex-col gap-4">

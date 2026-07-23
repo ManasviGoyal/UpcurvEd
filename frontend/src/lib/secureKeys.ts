@@ -1,13 +1,12 @@
 import type { ApiKeys } from "@/types";
+import {
+  EMPTY_API_KEYS,
+  PROVIDER_IDS,
+  normalizeApiKeys,
+} from "@/lib/providerConfig";
 import { isDesktopLocalMode } from "@/lib/runtime";
 
-export const EMPTY_KEYS: ApiKeys = {
-  claude: "",
-  gemini: "",
-  openrouter: "",
-  provider: "",
-  model: "",
-};
+export const EMPTY_KEYS: ApiKeys = { ...EMPTY_API_KEYS };
 
 function settingsKey(email: string): string {
   return `app.settings.${email}`;
@@ -18,23 +17,15 @@ function secureOptInKey(email: string): string {
 }
 
 function normalizeKeys(raw: any, fallback: ApiKeys = EMPTY_KEYS): ApiKeys {
-  return {
-    claude: String(raw?.claude ?? fallback.claude ?? ""),
-    gemini: String(raw?.gemini ?? fallback.gemini ?? ""),
-    openrouter: String(raw?.openrouter ?? fallback.openrouter ?? ""),
-    provider: (String(raw?.provider ?? fallback.provider ?? "") as ApiKeys["provider"]) || "",
-    model: String(raw?.model ?? fallback.model ?? ""),
-  };
+  return normalizeApiKeys(raw, fallback);
 }
 
 function localMetadataOnly(keys: ApiKeys): ApiKeys {
   const normalized = normalizeKeys(keys);
-  return {
-    ...normalized,
-    claude: "",
-    gemini: "",
-    openrouter: "",
-  };
+  for (const provider of PROVIDER_IDS) {
+    normalized[provider] = "";
+  }
+  return normalized;
 }
 
 function readLocalSettings(email: string, fallback: ApiKeys = EMPTY_KEYS): ApiKeys {
@@ -81,8 +72,11 @@ export async function loadApiKeysForUser(
 ): Promise<ApiKeys> {
   const local = readLocalSettings(email, fallback);
 
-  // Never touch secure storage unless the user explicitly opted in.
-  if (!isDesktopLocalMode() || !hasDesktopSecureStore() || !isSecureStorageEnabledForUser(email)) {
+  if (
+    !isDesktopLocalMode() ||
+    !hasDesktopSecureStore() ||
+    !isSecureStorageEnabledForUser(email)
+  ) {
     return local;
   }
 
@@ -91,20 +85,20 @@ export async function loadApiKeysForUser(
     if (!secure) return local;
 
     const normalizedSecure = normalizeKeys(secure, local);
-    return {
-      ...local,
-      ...normalizedSecure,
-      claude: normalizedSecure.claude || "",
-      gemini: normalizedSecure.gemini || "",
-      openrouter: normalizedSecure.openrouter || "",
-    };
+    const merged = { ...local, ...normalizedSecure } as ApiKeys;
+    for (const provider of PROVIDER_IDS) {
+      merged[provider] = normalizedSecure[provider] || "";
+    }
+    return merged;
   } catch {
     return local;
   }
 }
 
-// Local-only save. If secure storage had previously been enabled, disable it.
-export async function persistApiKeysForUser(email: string, keys: ApiKeys): Promise<void> {
+export async function persistApiKeysForUser(
+  email: string,
+  keys: ApiKeys
+): Promise<void> {
   writeLocalSettings(email, normalizeKeys(keys));
 
   if (!isDesktopLocalMode() || !hasDesktopSecureStore()) {
@@ -119,14 +113,11 @@ export async function persistApiKeysForUser(email: string, keys: ApiKeys): Promi
 
   try {
     await window.desktop!.secureStore!.clearApiKeys(email);
-  } catch {
-    // Keep local save even if secure clear fails.
-  }
+  } catch {}
 
   setSecureStorageEnabledForUser(email, false);
 }
 
-// Explicit opt-in secure save.
 export async function persistApiKeysSecurelyForUser(
   email: string,
   keys: ApiKeys
@@ -134,7 +125,6 @@ export async function persistApiKeysSecurelyForUser(
   const normalized = normalizeKeys(keys);
 
   if (!isDesktopLocalMode() || !hasDesktopSecureStore()) {
-    // Fall back to local save only.
     writeLocalSettings(email, normalized);
     setSecureStorageEnabledForUser(email, false);
     return { ok: false, reason: "secure_store_unavailable" };
@@ -146,23 +136,18 @@ export async function persistApiKeysSecurelyForUser(
       throw new Error(result?.reason || "secure_store_unavailable");
     }
 
-    // Keep only non-secret metadata locally. Actual keys live in secure storage.
     writeLocalSettings(email, localMetadataOnly(normalized));
     setSecureStorageEnabledForUser(email, true);
     return { ok: true };
   } catch {
-    // If secure save fails, keep the user from losing data by saving locally instead.
     writeLocalSettings(email, normalized);
     setSecureStorageEnabledForUser(email, false);
     return { ok: false, reason: "secure_store_unavailable" };
   }
 }
 
-// Clears only the secure-store copy and disables secure loading.
-// It does not remove the local settings entry.
 export async function clearSecurelyStoredApiKeysForUser(email: string): Promise<void> {
   setSecureStorageEnabledForUser(email, false);
-
   if (!isDesktopLocalMode() || !hasDesktopSecureStore()) return;
 
   try {
@@ -174,6 +159,5 @@ export async function clearApiKeysForUser(email: string): Promise<void> {
   try {
     localStorage.removeItem(settingsKey(email));
   } catch {}
-
   await clearSecurelyStoredApiKeysForUser(email);
 }

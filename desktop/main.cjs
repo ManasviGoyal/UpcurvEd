@@ -46,6 +46,7 @@ let frontendDevProcess = null;
 let staticServer = null;
 let isShuttingDown = false;
 const KEYCHAIN_SERVICE = "UpcurvEd";
+const SECURE_PROVIDER_KEY_FIELDS = ["claude", "gemini", "openai", "openrouter"];
 let keytarErrorLogged = false;
 let backendLogTail = "";
 const BACKEND_LOG_TAIL_MAX = 12000;
@@ -84,13 +85,11 @@ async function setSecureApiKeys(account, payload) {
   if (!keytar) return { ok: false, reason: "keytar_unavailable" };
   const normalized = normalizeAccount(account);
   const source = payload || {};
-  const safePayload = {
-    claude: String(source.claude || ""),
-    gemini: String(source.gemini || ""),
-    openrouter: String(source.openrouter || ""),
-    provider: String(source.provider || ""),
-    model: String(source.model || ""),
-  };
+  const safePayload = Object.fromEntries(
+    SECURE_PROVIDER_KEY_FIELDS.map((provider) => [provider, String(source[provider] || "")])
+  );
+  safePayload.provider = String(source.provider || "");
+  safePayload.model = String(source.model || "");
   try {
     await keytar.setPassword(KEYCHAIN_SERVICE, normalized, JSON.stringify(safePayload));
     return { ok: true };
