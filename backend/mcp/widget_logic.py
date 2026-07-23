@@ -96,6 +96,90 @@ def _count_control_elements(html: str) -> int:
     return len(matches)
 
 
+def _extract_script_blocks(html: str) -> list[str]:
+    return re.findall(r"<script\b[^>]*>(.*?)</script>", html, flags=re.IGNORECASE | re.DOTALL)
+
+
+def _find_matching_brace(text: str, open_pos: int) -> int:
+    """Best-effort brace matching for generated vanilla JS validation."""
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for i in range(open_pos, len(text)):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"', '`'):
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _function_body(script: str, name: str) -> str | None:
+    m = re.search(rf"\bfunction\s+{re.escape(name)}\s*\([^)]*\)\s*\{{", script)
+    if not m:
+        return None
+    open_pos = script.find("{", m.start())
+    close_pos = _find_matching_brace(script, open_pos)
+    if close_pos < 0:
+        return None
+    return script[open_pos + 1 : close_pos]
+
+
+def _detect_unsafe_initial_draw_order(html: str) -> str | None:
+    """Catch a common generated-widget runtime bug.
+
+    Several free models produce code like:
+      function resizeCanvas(){ ... draw(); }
+      resizeCanvas();
+      const penguin = {...};
+
+    The initial resize call triggers draw before state variables exist, causing
+    errors like: Cannot access 'penguin' before initialization. We reject that
+    during backend validation so the normal repair/fallback path can fix it
+    before a teacher sees a broken widget.
+    """
+    for script in _extract_script_blocks(html):
+        # Look for immediate calls at script initialization time. This is a
+        # simple static check, not a full JS parser, but it catches the failure
+        # pattern without requiring Node/browser execution in the backend.
+        for call in re.finditer(r"(?:^|[;\n])\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*;", script):
+            name = call.group(1)
+            if name in {"update", "draw", "render", "redraw", "animate"}:
+                # Calling a drawing/update loop before later state declarations is unsafe.
+                if re.search(r"\b(?:const|let)\s+[A-Za-z_$][\w$]*", script[call.end() :]):
+                    return f"initial {name}() call occurs before later state declarations"
+                continue
+            if name.lower() not in {"fit", "resize", "resizecanvas", "sizecanvas", "initcanvas"}:
+                continue
+            body = _function_body(script, name)
+            if not body:
+                continue
+            if not re.search(r"\b(draw|render|redraw|update|animate)\s*\(", body):
+                continue
+            if re.search(r"\b(?:const|let)\s+[A-Za-z_$][\w$]*", script[call.end() :]):
+                return (
+                    f"{name}() calls draw/render/update before later state variables are initialized; "
+                    "move the initial call after all state declarations or make resize only size the canvas"
+                )
+
+        # Also catch the literal error pattern if the model embeds a known broken message.
+        if "cannot access" in script.lower() and "before initialization" in script.lower():
+            return "script contains a known before-initialization runtime error"
+    return None
+
+
 def _validate_widget_html(html: str) -> tuple[bool, str]:
     low = html.lower()
     if "<!doctype html" not in low and "<html" not in low:
@@ -110,6 +194,10 @@ def _validate_widget_html(html: str) -> tuple[bool, str]:
         return False, "contains forbidden stylesheet link tag"
     if "@import" in low:
         return False, "contains forbidden CSS @import"
+
+    init_order_reason = _detect_unsafe_initial_draw_order(html)
+    if init_order_reason:
+        return False, init_order_reason
 
     # Reject the old generic safety fallback. It is technically interactive but
     # not topic-specific enough for teacher/student use.

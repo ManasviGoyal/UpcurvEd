@@ -454,6 +454,9 @@ WIDGET_SYSTEM = dedent("""\
        - If using canvas interactions, attach click/pointer/mouse events to the canvas and use getBoundingClientRect() for coordinates.
        - Use requestAnimationFrame for animation/redrawing when using canvas.
        - The simulation must start with visible non-zero state, not an empty static canvas.
+       - Declare all const/let state variables before calling any function that draws, renders, updates, or animates.
+       - resizeCanvas()/fit() may size the canvas early only if it does NOT call draw/render/update before state initialization.
+       - Avoid temporal-dead-zone bugs such as calling drawPenguin() before const penguin/let penguin exists.
 
     5) Puzzle/direct-manipulation examples:
        - Towers of Hanoi: learner must click/drag a top disk, then click a target peg; reject illegal moves; count moves; compare to 2^n - 1.
@@ -532,6 +535,7 @@ def build_widget_user_prompt(topic: str) -> str:
         - Include feedback after learner actions, especially mistakes or illegal moves.
         - Use a left visualization panel and right control panel.
         - Canvas must be sized in DOMContentLoaded and redraw/update after interaction.
+        - Declare state first, then call initial draw/render/update. Do not call resizeCanvas() early if it triggers draw before state exists.
         - The result must run on first load in a sandboxed iframe.
 
         If the topic is Towers of Hanoi:
@@ -619,6 +623,8 @@ def build_widget_repair_user_prompt(*, original_title: str | None, edit_instruct
         - Step/Hint/Auto buttons are allowed only as helpers.
         - Add clear feedback for illegal or incorrect actions.
         - Include a short Try this / What to notice teaching prompt.
+        - Fix JavaScript initialization order: declare all const/let state objects before any initial draw/render/update call.
+        - resizeCanvas()/fit() must not trigger draw before state variables exist.
 
         HTML to repair:
         {prior_html}
