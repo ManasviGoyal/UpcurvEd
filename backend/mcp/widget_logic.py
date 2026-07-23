@@ -5,6 +5,7 @@ Standalone module, no LangGraph.
 """
 import json
 import logging
+import os
 import re
 from html import escape
 
@@ -101,16 +102,49 @@ def _validate_widget_html(html: str) -> tuple[bool, str]:
         return False, "missing script block"
     if not ("<canvas" in low or "<svg" in low):
         return False, "missing visualization surface (canvas or svg)"
-    if _count_control_elements(html) < 3:
-        return False, "missing required interactive controls (need >=3)"
-    if "requestanimationframe" not in low:
-        return False, "missing requestAnimationFrame loop"
     if "domcontentloaded" not in low:
         return False, "missing DOMContentLoaded initialization"
-    if re.search(r"<link\b[^>]*\brel\s*=\s*['\"]stylesheet['\"]", low):
+    if "<link" in low and "stylesheet" in low:
         return False, "contains forbidden stylesheet link tag"
     if "@import" in low:
         return False, "contains forbidden CSS @import"
+
+    # Reject the old generic safety fallback. It is technically interactive but
+    # not topic-specific enough for teacher/student use.
+    generic_markers = (
+        "interactive concept lab",
+        "primary factor",
+        "secondary factor",
+        "response</span>",
+        "stability</span>",
+        "show motion trail",
+    )
+    if sum(1 for marker in generic_markers if marker in low) >= 3:
+        return False, "generic fallback widget is not topic-specific"
+
+    control_count = _count_control_elements(html)
+    has_event_listener = "addeventlistener" in low and any(
+        event in low
+        for event in (
+            "click",
+            "pointerdown",
+            "pointermove",
+            "mousedown",
+            "mousemove",
+            "drag",
+            "input",
+            "change",
+        )
+    )
+    has_animation_or_redraw = "requestanimationframe" in low or re.search(r"\b(draw|render|redraw|update)\s*\(", low)
+
+    if control_count < 1 and not has_event_listener:
+        return False, "missing learner interaction"
+    if not has_event_listener:
+        return False, "missing JavaScript event listeners for learner actions"
+    if not has_animation_or_redraw:
+        return False, "missing redraw/update path after interaction"
+
     return True, ""
 
 
@@ -562,20 +596,27 @@ def generate_widget(
                 )
         except Exception as e2:
             logger.warning(
-                "widget: compact retry failed (%s), using prompt-conditioned fallback",
+                "widget: compact retry failed (%s); not using generic fallback",
                 e2,
             )
-            html = _topic_fallback_widget_html(
-                prompt,
-                provider=prov,
-                api_key=api_key,
-                model=model,
-            )
-            ok4, reason4 = _validate_widget_html(html)
-            if not ok4:
-                if first_error:
-                    raise RuntimeError(f"Widget fallback invalid after generation error: {first_error}") from e2
-                raise RuntimeError(f"Widget fallback invalid: {reason4}") from e2
+            if os.environ.get("UPCURVED_WIDGET_ALLOW_GENERIC_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}:
+                html = _topic_fallback_widget_html(
+                    prompt,
+                    provider=prov,
+                    api_key=api_key,
+                    model=model,
+                )
+                ok4, reason4 = _validate_widget_html(html)
+                if not ok4:
+                    if first_error:
+                        raise RuntimeError(f"Widget fallback invalid after generation error: {first_error}") from e2
+                    raise RuntimeError(f"Widget fallback invalid: {reason4}") from e2
+            else:
+                raise RuntimeError(
+                    "Widget generation failed after retry. The model returned incomplete, invalid, "
+                    "or non-topic-specific HTML. Try again or switch models."
+                ) from e2
+
 
     assert html is not None
     logger.info("widget: generated %d chars of HTML", len(html))

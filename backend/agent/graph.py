@@ -131,8 +131,16 @@ def run_to_code(
                 None if render_ok else "Structured video generation failed.",
             )
         except Exception as structured_error:
+            if os.getenv("UPCURVED_ALLOW_LEGACY_VIDEO_FALLBACK", "0") != "1":
+                logger.exception(
+                    "structured_manim_generation failed; legacy fallback disabled: %s",
+                    structured_error,
+                )
+                raise RuntimeError(f"Structured video generation failed: {structured_error}") from structured_error
+
             logger.exception(
-                "structured_manim_generation failed; falling back to legacy graph: %s",
+                "structured_manim_generation failed; falling back to legacy graph because "
+                "UPCURVED_ALLOW_LEGACY_VIDEO_FALLBACK=1: %s",
                 structured_error,
             )
 

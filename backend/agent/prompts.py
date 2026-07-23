@@ -196,74 +196,40 @@ def build_code_user_prompt(
 # -------- STRUCTURED VIDEO PROMPTS (Plan-only, backend-rendered templates) --------
 
 STRUCTURED_VIDEO_SYSTEM = dedent("""\
-    You create a compact scene plan for a short educational Manim video.
+    You create a compact JSON scene plan for a short educational Manim video.
+    Return ONLY valid JSON. No markdown, no Python code.
 
-    Return ONLY valid JSON. No markdown. No Python code. No explanations.
-
-    Required JSON shape:
+    Shape:
     {
       "title": "short lesson title",
       "audience": "general",
       "scenes": [
         {
           "id": 1,
-          "kind": "title",
+          "kind": "title | key_points | diagram | flow_diagram | cycle_diagram | timeline | comparison | chart | system_map | pseudo_3d | creative | recap",
           "heading": "short heading",
-          "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase"],
-          "duration_sec": 6
-        },
-        {
-          "id": 2,
-          "kind": "key_points",
-          "heading": "short heading",
-          "narration": "one clear sentence",
+          "narration": "scene summary sentence",
           "bullets": ["short phrase", "short phrase", "short phrase"],
-          "duration_sec": 8
-        },
-        {
-          "id": 3,
-          "kind": "diagram",
-          "heading": "short heading",
-          "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase", "short phrase"],
-          "visual_goal": "describe the process or relationship as simple shapes, arrows, labels, or a timeline",
-          "duration_sec": 9
-        },
-        {
-          "id": 4,
-          "kind": "creative",
-          "heading": "short heading",
-          "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase", "short phrase"],
-          "visual_goal": "describe a memorable visual metaphor using simple drawable objects",
-          "duration_sec": 9
-        },
-        {
-          "id": 5,
-          "kind": "recap",
-          "heading": "short heading",
-          "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase", "short phrase"],
-          "duration_sec": 7
+          "visual_goal": "specific drawable visual action",
+          "beats": [
+            {"say": "short spoken beat", "visual": "what changes on screen"},
+            {"say": "short spoken beat", "visual": "what changes on screen"},
+            {"say": "short spoken beat", "visual": "what changes on screen"}
+          ],
+          "duration_sec": 15
         }
       ]
     }
 
     Rules:
-    - Exactly 5 scenes.
-    - Use this scene order: title, key_points, diagram, creative, recap.
-    - Do NOT write Manim code. The backend will render templates from your plan.
-    - Keep the plan compact.
-    - Narration: one sentence per scene, max 22 words.
-    - Heading: max 8 words.
-    - Bullets: 2 to 4 bullets per scene, max 7 words each.
-    - visual_goal: max 25 words, concrete and drawable.
-    - Make the lesson specific, factual, and educational, not generic or motivational.
-    - Include concrete mechanisms, causes/effects, vocabulary, or examples appropriate to the topic.
-    - For science, health, biology, history, or technical topics, use precise facts and explain how/why.
-    - Avoid generic filler such as "helps you grow", "is important", or "makes life better" unless paired with a concrete mechanism.
-    - Avoid quotes inside strings unless necessary.
+    - Exactly 5 scenes in this order: title, key_points, diagram, creative, recap.
+    - Scene durations: title 11-13s, middle scenes 14-20s, recap 12-15s; total about 70-90s.
+    - Each scene needs exactly 3 beats. Each beat say = 8-16 words; each visual = concrete screen action.
+    - The beats should teach in sequence: introduce, change/show mechanism, takeaway/check.
+    - Scene 3 and 4 must be visual mechanisms, not generic bullet slides.
+    - Use concrete facts, cause/effect, examples, vocabulary, or common misconceptions.
+    - Avoid generic filler such as "is important" unless paired with a mechanism.
+    - Keep text short. Avoid quotes inside strings.
 """)
 
 
@@ -273,62 +239,86 @@ def build_structured_video_user_prompt(goal: str) -> str:
         {goal}
 
         Return only the compact JSON scene plan.
-        Do not include Python code.
-        Make it specific, factual, and educational. Avoid generic filler.
+        Make it factual and classroom-ready.
+        Use 3 synchronized narration/visual beats per scene.
+        Make scene 3 and 4 drawable, moving, and topic-specific.
     """).strip()
 
 
 STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
     You edit a compact JSON scene plan for a short educational Manim video.
-
-    Return ONLY valid JSON. No markdown. No Python code. No explanations.
-
-    Required behavior:
-    - Keep exactly 5 scenes.
-    - Keep the same scene order: title, key_points, diagram, creative, recap.
-    - Apply the user's edit request to the most relevant scene or scenes.
-    - If the user asks to remove a scene or topic, do NOT reduce the number of scenes.
-      Replace that scene with a better on-topic educational scene instead.
-    - Preserve useful unchanged scenes when possible.
-    - Make the lesson specific, factual, and educational, not generic or motivational.
-    - Include concrete mechanisms, causes/effects, vocabulary, or examples appropriate to the topic.
-    - Avoid generic filler such as "helps you grow", "is important", or "makes life better" unless paired with a concrete mechanism.
-
-    Output shape:
-    {
-      "title": "short lesson title",
-      "audience": "general",
-      "scenes": [
-        {
-          "id": 1,
-          "kind": "title",
-          "heading": "short heading",
-          "narration": "one clear sentence",
-          "bullets": ["short phrase", "short phrase"],
-          "duration_sec": 6
-        }
-      ]
-    }
+    Return ONLY valid JSON. No markdown, no Python code.
 
     Rules:
-    - Exactly 5 scenes.
-    - Narration: one sentence per scene, max 24 words.
-    - Heading: max 8 words.
-    - Bullets: 2 to 4 bullets per scene, max 7 words each.
-    - visual_goal for diagram/creative scenes: max 25 words, concrete and drawable.
+    - Keep exactly 5 scenes: title, key_points, diagram, creative, recap.
+    - Apply the user's requested change while preserving useful unchanged scenes.
+    - If removing a scene/topic, replace it with a better on-topic teaching scene.
+    - Keep 3 beats per scene. Each beat must pair narration with a visual change.
+    - For better-visual requests, revise visual_goal and beats to avoid generic character/table scenes.
+    - Scene durations: title 11-13s, middle scenes 14-20s, recap 12-15s.
+    - Keep headings and bullets short. Keep the lesson factual and specific.
+
+    Output the same JSON shape used for generation.
 """)
 
 
 def build_structured_video_edit_user_prompt(original_plan: dict, edit_instructions: str) -> str:
     return dedent(f"""\
-        Original compact scene plan JSON:
+        Original scene plan JSON:
         {__import__('json').dumps(original_plan, ensure_ascii=True, indent=2)}
 
         User edit request:
         {edit_instructions}
 
         Return the complete edited compact JSON scene plan only.
-        Keep exactly 5 scenes. Do not include Python code.
+        Keep exactly 5 scenes and 3 beats per scene.
+    """).strip()
+
+
+# -------- STRUCTURED VIDEO CREATIVE SCENE PROMPTS --------
+
+STRUCTURED_VIDEO_CREATIVE_SCENE_SYSTEM = dedent("""\
+    You write ONE complete, runnable Manim Python file for ONE scene.
+    Return ONLY Python source. No markdown, no backticks, no explanations.
+
+    Hard requirements:
+    - Define exactly one class named GeneratedScene(VoiceoverScene).
+    - Imports exactly:
+      from manim import *
+      from manim_voiceover import VoiceoverScene
+      from manim_voiceover.services.gtts import GTTSService
+    - In construct(), call self.set_speech_service(GTTSService(lang="en")).
+    - Use 2 or 3 separate with self.voiceover(text="...") blocks so narration is spaced through the scene.
+    - Use at least 4 self.play calls.
+    - Include real movement/change: animate.move_to/shift/scale, Transform, ReplacementTransform, MoveAlongPath, GrowArrow, Rotate, or changing arrows/bars.
+    - Do not create a static poster that only fades in and out.
+    - Use safe primitives only: Text, shapes, Dot, Line, Arrow, Axes, NumberLine, VGroup.
+    - No external assets, files, network, ImageMobject, SVGMobject, Tex, or MathTex.
+    - Max 6 visible labels. Keep all text short.
+    - End by fading out remaining mobjects and self.wait(0.1).
+
+    Reliability matters more than visual complexity.
+""")
+
+
+def build_structured_video_creative_scene_prompt(
+    *,
+    plan: dict,
+    scene: dict,
+    scene_index: int,
+    original_goal: str,
+) -> str:
+    return dedent(f"""\
+        Teaching goal: {original_goal}
+
+        Write scene {scene_index} only. Use this scene JSON:
+        {json.dumps(scene, ensure_ascii=True, indent=2)}
+
+        Use the scene beats as the narration blocks. Each block should animate the matching visual action.
+        Make the visual explain the mechanism or example; do not use decorative or unrelated objects.
+        Keep the scene duration close to duration_sec with short waits after animations if needed.
+
+        Return ONLY Python code.
     """).strip()
 
 
@@ -419,10 +409,18 @@ def build_edit_user_prompt(
 # -------- WIDGET PROMPTS --------
 
 WIDGET_SYSTEM = dedent("""\
-    You generate self-contained interactive educational HTML simulations.
+    You generate self-contained interactive educational HTML widgets.
     Output ONLY a complete HTML document. No markdown, no backticks, no explanation.
 
     This widget runs in a sandboxed iframe inside a desktop app. It must be robust.
+
+    Primary teaching goal:
+    - Make the learner DO the concept, not just watch an animation.
+    - The widget must be visibly about the exact requested topic. Do not return a generic "concept lab" or abstract motion demo.
+    - Every widget must have ONE obvious primary student action.
+    - If the concept involves moving, sorting, stacking, comparing, choosing, balancing, graphing, testing, or solving a puzzle,
+      the learner must directly manipulate the main visual objects by clicking, dragging, selecting, or changing a meaningful input.
+    - Step, Hint, Auto, Play, Animate, and Solve buttons are allowed only as helpers. They must not be the only interaction.
 
     Hard requirements:
     1) Return a complete HTML document:
@@ -437,40 +435,50 @@ WIDGET_SYSTEM = dedent("""\
        - No localStorage/sessionStorage/cookies/indexedDB.
        - No window.top/window.parent assumptions.
 
-    3) Simulation-first UI structure:
+    3) Teaching-first UI structure:
        - Two-column layout: left = main visualization area (canvas or SVG), right = control panel.
        - Control panel sections:
-         a) "Live Data" section with at least 3 numeric readouts with units.
-         b) "Controls" section with at least 3 interactive controls.
-       - Controls must be visible in initial viewport.
-       - Include one short concept explanation line.
-       - Include one status/insight line that changes as controls change.
+         a) "Goal" or one short concept explanation line.
+         b) "Live Data" section with 2-3 relevant readouts.
+         c) "Controls" section with 2-4 visible controls.
+         d) "Try this" or "What to notice" prompt.
+         e) One status/insight line that changes after learner actions.
+       - Keep the layout simple. Fewer controls are better when the primary interaction is clear.
+       - Controls must be visible in the initial viewport.
 
-    4) Interactivity:
+    4) Functional interactivity:
        - Use addEventListener.
-       - Use requestAnimationFrame for animated simulations.
+       - The primary learner action must update the model state AND redraw the visualization.
+       - The learner must be able to make a choice, test a move, or manipulate the concept manually.
+       - Provide feedback after actions, especially illegal/wrong moves.
+       - If using canvas interactions, attach click/pointer/mouse events to the canvas and use getBoundingClientRect() for coordinates.
+       - Use requestAnimationFrame for animation/redrawing when using canvas.
        - The simulation must start with visible non-zero state, not an empty static canvas.
-       - Keep simulation deterministic and smooth on modest hardware.
-       - If using canvas interactions, use getBoundingClientRect() for coordinates.
 
-    5) Styling:
+    5) Puzzle/direct-manipulation examples:
+       - Towers of Hanoi: learner must click/drag a top disk, then click a target peg; reject illegal moves; count moves; compare to 2^n - 1.
+       - Sorting: learner must drag/swap items or step through comparisons, not only watch an animation.
+       - Physics/biology systems: learner must change meaningful variables and see cause/effect.
+       - Math/concepts: learner must test examples and receive feedback, not just read text.
+
+    6) Styling:
        - Use one <style> block in <head>.
        - Use one <script> block near end of <body>.
-       - Make it visually polished and educational, not plain boilerplate.
-       - Ensure good contrast and readable labels.
+       - Make it polished but calm: readable labels, good contrast, clear affordances.
        - Do not place invisible overlays that block pointer events.
 
-    6) Complexity limits:
+    7) Complexity limits:
        - Max 1 canvas.
        - Keep code compact and maintainable.
        - Avoid giant datasets and long hardcoded tables.
+       - Prefer one strong interaction over many weak controls.
 
     Completeness rules:
     - Do not truncate output.
     - Close all tags.
     - Close all functions/objects/arrays/conditionals.
     - End cleanly with </script>, </body>, </html>.
-    - If the concept is too complex, deliver a simplified but fully working simulation.
+    - If the concept is too complex, deliver a simplified but fully working manipulable version.
 
     Required HTML skeleton:
     <body>
@@ -494,6 +502,10 @@ WIDGET_SYSTEM = dedent("""\
           const canvas = document.getElementById('sim-canvas');
           canvas.width = vizCol.clientWidth;
           canvas.height = vizCol.clientHeight;
+          canvas.addEventListener('click', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            // map pointer to concept action; update state; redraw
+          });
           // initialize non-zero simulation state
           // start requestAnimationFrame loop here
         });
@@ -504,18 +516,34 @@ WIDGET_SYSTEM = dedent("""\
 
 def build_widget_user_prompt(topic: str) -> str:
     return dedent(f"""\
-        Create an interactive educational simulation for: {topic}
+        Create an interactive educational widget for: {topic}
 
-        Design target: app-like simulation quality, similar to science learning tools.
-        Use a left visualization panel and right control panel.
-        Include meaningful live metrics and controls that clearly change system behavior.
-        Controls must always be visible, not hidden/collapsed.
-        Canvas must be sized in DOMContentLoaded and animation must start there.
+        Design target: simple, teacher-ready, hands-on learning widget.
         Audience: middle/high school learners.
-        The result must run on first load in a sandboxed iframe.
+
+        Requirements:
+        - Make the topic visible in the title, visual labels, live data, and feedback.
+        - Never use generic labels like Primary factor, Secondary factor, Response, Stability, or Concept Lab unless the topic explicitly asks for generic systems.
+        - Identify the ONE main thing the learner should understand.
+        - Build ONE primary student action that directly manipulates the visual concept.
+        - Do not rely only on Auto, Step, Play, Animate, or Solve buttons.
+        - Include a short "Try this" task and a "What to notice" explanation.
+        - Include live data/readouts that are directly meaningful.
+        - Include feedback after learner actions, especially mistakes or illegal moves.
+        - Use a left visualization panel and right control panel.
+        - Canvas must be sized in DOMContentLoaded and redraw/update after interaction.
+        - The result must run on first load in a sandboxed iframe.
+
+        If the topic is Towers of Hanoi:
+        - The learner must manually move disks by clicking a source peg/disk and then a target peg.
+        - Only top disks may move.
+        - Illegal larger-on-smaller moves must be rejected with feedback.
+        - Show moves made, optimal minimum moves = 2^n - 1, and selected disk/peg.
+        - Hint/Step/Auto Solve may be included, but manual play must be the primary interaction.
 
         Output ONLY the HTML document.
     """).strip()
+
 
 
 WIDGET_EDIT_SYSTEM = dedent("""\
@@ -526,6 +554,13 @@ WIDGET_EDIT_SYSTEM = dedent("""\
     - Revise the existing widget; do NOT create a different widget from scratch.
     - Preserve the original topic, layout, visual metaphor, control names, live data, CSS style, and JavaScript behavior unless the edit instructions explicitly ask to change them.
     - Make the smallest useful change that satisfies the edit instructions.
+
+    Functional preservation rules:
+    - The main student action must still work after editing.
+    - If the widget is a puzzle/game/manipulation, preserve or add direct object manipulation with click/pointer/drag events on the canvas/SVG.
+    - Do not replace direct interaction with only Auto, Step, Play, Animate, or Solve buttons.
+    - Keep feedback after learner actions, including invalid choices.
+    - Keep or improve the "Try this" / "What to notice" teaching guidance.
 
     Hard requirements:
     1) Return a complete HTML document with <!DOCTYPE html>, <html>, <head>, <body>, and closing </html>.
@@ -547,6 +582,11 @@ def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str,
         Edit instructions:
         {edit_instructions.strip()}
 
+        Revise the existing widget source below.
+        Keep the same widget unless the instructions explicitly ask for a different concept.
+        Preserve the working interaction model.
+        If the widget involves moving, stacking, sorting, choosing, graphing, testing, or solving, the learner must still be able to manipulate the main visual objects manually.
+
         Original complete widget HTML to revise:
         {original_html}
 
@@ -555,27 +595,37 @@ def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str,
 
 
 WIDGET_REPAIR_SYSTEM = dedent("""\
-    You repair an edited interactive widget HTML document.
+    You repair an interactive educational widget HTML document.
     Return ONLY fixed complete HTML. No markdown, no backticks, no explanation.
-    Preserve the edited intent and original widget behavior.
+    Preserve the original topic, edited intent, visual metaphor, and behavior.
+    Do not replace it with a different widget.
+    Ensure the primary learner action is functional, not just an Auto/Step animation.
 """)
 
 
 def build_widget_repair_user_prompt(*, original_title: str | None, edit_instructions: str, prior_html: str, reason: str) -> str:
     return dedent(f"""\
-        Edited widget failed validation: {reason}
+        Widget failed validation: {reason}
 
         Original title: {original_title or 'Existing widget'}
-        Edit instructions: {edit_instructions}
+        Instructions/context: {edit_instructions}
 
-        Fix the edited HTML so it is complete, self-contained, interactive, and still reflects the requested edit.
+        Fix the HTML so it is complete, self-contained, interactive, and teacher-ready.
         Do not replace it with a different widget.
 
-        Edited HTML to repair:
+        Functional requirements:
+        - Preserve or add the main manual student interaction.
+        - If this is a puzzle/game/direct manipulation widget, learner must click/pointer/drag the visual objects themselves.
+        - Step/Hint/Auto buttons are allowed only as helpers.
+        - Add clear feedback for illegal or incorrect actions.
+        - Include a short Try this / What to notice teaching prompt.
+
+        HTML to repair:
         {prior_html}
 
         Return ONLY corrected full HTML.
     """).strip()
+
 
 
 # -------- QUIZ PROMPTS --------
