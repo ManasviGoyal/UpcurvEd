@@ -579,12 +579,21 @@ STORY_EDIT_PATCH_SYSTEM = _with_artifact_safety("""\
     Story draw_js rules:
     - draw_js must be executable JavaScript statements only, not prose or planning notes.
     - The runtime provides x, w, h, dt and these helper functions:
-      drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar, drawCharacterTemplate.
+      drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar, drawCharacterTemplate,
+      drawLabel, drawEquation, drawArrow, drawPanel, drawRoute, drawFractionCircle,
+      drawBarChart, and drawMeasurement.
     - Use x as the CanvasRenderingContext2D. Use relative positions based on w and h.
-    - Prefer diagrams, arrows, flows, labeled-looking shapes, cycles, timelines, graphs, particles, before/after panels, or cause/effect visuals.
-    - Do not rely on external images, fonts, libraries, fetch, DOM access, window, document, localStorage, or network calls.
+    - A guide character and speech bubble are optional. Let the topic visual dominate.
+    - Prefer distinct diagrams, maps, object simulations, equation transformations, charts,
+      cycles, timelines, probability trees, measurements, and before/after compositions.
+    - Use drawLabel and drawEquation for essential text. Do not call fillText or strokeText directly.
+    - Return body statements only. Do not wrap draw_js in function(...) or an arrow function,
+      and do not define nested functions.
+    - Do not rely on external images, fonts, libraries, fetch, DOM access, window, document,
+      localStorage, requestAnimationFrame, timers, or network calls.
     - Do not use markdown, comments-only output, or natural language explanation inside draw_js.
-    - If a scene currently falls back to the generic character/table animation, replace its draw_js with a concrete topic-related visualization.
+    - If a scene currently falls back to a generic visual, replace its draw_js with a concrete
+      topic-related visualization and choose a visual_strategy distinct from neighboring scenes.
     - Keep each draw_js concise enough to fit in JSON, but complete enough to run.
 
     Editing behavior:

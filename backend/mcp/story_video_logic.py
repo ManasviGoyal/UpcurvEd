@@ -108,70 +108,70 @@ HOST_PRESETS: dict[str, dict[str, str]] = {
     },
 }
 
-DRAW_JS_SYSTEM = """Return ONLY a JavaScript function body. No HTML, no markdown, no explanation.
-Function signature: (x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar, drawCharacterTemplate)
-where x=CanvasRenderingContext2D, w=width, h=height, dt=elapsed seconds.
-
-You have these helper functions available. Call them directly, do not redefine them:
-
-drawCharacter(x, cx, cy, scale, headColor, bodyColor, eyeColor, mouthUp, bobAmt)
-    Draws a rounded character: head, eyes, mouth, rounded torso, curved arms, hands, legs, shoes.
-    cx,cy = center bottom of character. scale = 1.0 normal. bobAmt = Math.sin(dt*2)*6 for walking.
-
-drawCloud(x, cx, cy, w)
-    Draws a fluffy white cloud at cx,cy with approximate width w.
-
-drawGround(x, w, h, groundY, grassColor, dirtColor)
-    Draws a ground strip at groundY with grass on top.
-
-drawSpeechBubble(x, cx, cy, text, fontSize)
-    Draws a white rounded speech bubble with dark text and a pointer triangle below.
-    This is the ONLY way to display text in the scene. Do NOT use fillText or strokeText directly.
-
-drawStar(x, cx, cy, r, color)
-    Draws a 5-point star at cx,cy with radius r.
-
-drawCharacterTemplate(x, cx, cy, scale, variant, bobAmt)
-    Draws a prebuilt character variant using fixed templates.
-
-Scene structure to follow:
-1. Background: theme gradient, ground/lab floor/water/space field as appropriate.
-2. 1-2 guide characters placed at different x positions. Use drawCharacterTemplate.
-3. At least 2 science props relevant to the scene:
-   examples: brain, lungs, cells, molecules, arrows, clock, cycle ring, chart bars,
-   microscope, plant leaf, planet, thermometer, water droplets, timeline.
-4. Exactly 1 drawSpeechBubble call with the provided short speech bubble phrase
-   (max 8 words) placed above the main character.
-5. Animate cause/effect:
-   - particles flow along arrows
-   - object grows/shrinks/pulses
-   - cycle rotates
-   - clock hand moves
-   - molecule dots move
-   - character gestures toward the model
-6. Use drawCharacterTemplate for people/animals/robots. Do not draw custom bodies.
-
-Scientific visual style:
-- Show the mechanism, not just decoration.
-- Prefer simple models: arrows, cycles, before/after panels, timelines, bar charts,
-  colored dots/particles, organs, cells, waves, or labeled-by-position diagrams.
-- Do NOT add scientific text labels with fillText/strokeText. The panel/caption handles text.
-- Use colors and spatial arrangement to communicate categories.
-
-Constraints:
-- All x/y coordinates relative to w and h.
-- No hardcoded pixel values above 50.
-- Do not clear canvas, do not call requestAnimationFrame.
-- Keep under 70 lines.
-- ALL scene text must go through drawSpeechBubble ONLY — never call fillText or strokeText directly.
-- Do NOT draw heading bars, caption bars, or any text overlay rectangles.
-- Speech bubble text must be short (max 8 words) and placed above the main character.
-"""
-
-
-STORY_DRAW_JS_SYSTEM = (
-    f"{ARTIFACT_SAFETY_INSTRUCTION}\n\n{DRAW_JS_SYSTEM}"
+_VISUAL_STRATEGIES = (
+    "environment_scene",
+    "object_simulation",
+    "diagram",
+    "map_path",
+    "timeline",
+    "before_after",
+    "split_screen",
+    "chart",
+    "equation_transform",
+    "balance_model",
+    "probability_tree",
+    "cycle",
 )
+_DEFAULT_VISUAL_SEQUENCE = (
+    "environment_scene",
+    "object_simulation",
+    "map_path",
+    "chart",
+    "equation_transform",
+    "probability_tree",
+)
+_HOST_ROLES = {"lead", "small_guide", "observer", "absent"}
+
+DRAW_JS_BUNDLE_SYSTEM = f"""{ARTIFACT_SAFETY_INSTRUCTION}
+
+Create concise Canvas drawing bodies for all six scenes of one educational story.
+Return no JSON, markdown, explanation, or code fences.
+
+Output exactly one tagged block per scene:
+<SCENE_DRAW id="1">
+JavaScript body statements only
+</SCENE_DRAW>
+...
+<SCENE_DRAW id="6">
+JavaScript body statements only
+</SCENE_DRAW>
+
+The runtime already creates a function with these arguments:
+x, w, h, dt,
+drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar, drawCharacterTemplate,
+drawLabel, drawEquation, drawArrow, drawPanel, drawRoute, drawFractionCircle,
+drawBarChart, drawMeasurement.
+
+Reliability rules:
+- Return body statements only. Do not return function(...), an arrow function, imports, HTML, or JSON.
+- Do not define nested functions or arrow functions. Use the supplied helpers instead.
+- Do not use fetch, network, DOM access, window, document, storage, eval, Function,
+  requestAnimationFrame, setTimeout, setInterval, clearRect, fillText, or strokeText.
+- Use quoted strings, not template literals. Close every quote, bracket, brace, and parenthesis.
+- Keep each scene about 18-55 lines and under 5,500 characters.
+- Use relative positions based on w and h. Small pixel constants for line widths and padding are fine.
+- The runtime paints the background. Do not cover the entire canvas with another full-screen rectangle.
+
+Creative rules:
+- Follow each scene's visual_strategy and animation_goal.
+- Make the topic visualization occupy most of the canvas.
+- A guide character is optional. Follow host_role: lead, small_guide, observer, or absent.
+- A speech bubble is optional. Use zero or one, only when it improves the story.
+- Use drawLabel and drawEquation for essential educational text.
+- Use dt for one to three meaningful movements, such as travel, rotation, pouring, growth,
+  changing quantities, transforming an equation, or revealing an outcome.
+- Make consecutive scenes visibly different in composition and visual strategy.
+"""
 
 
 def _story_prompt(topic: str, host_character: str | None = None, theme: str | None = None) -> str:
@@ -179,60 +179,141 @@ def _story_prompt(topic: str, host_character: str | None = None, theme: str | No
     theme_options = ", ".join(sorted(THEME_PRESETS.keys()))
     host_line = f"Main character preference: {host_character}\n" if host_character else ""
     theme_line = f"Visual theme preference: {theme}\n" if theme else ""
+    strategies = ", ".join(_VISUAL_STRATEGIES)
     return (
-        f"Educational science story for children about: {topic}\n"
+        f"Educational story for children about: {topic}\n"
         f"Available main characters: {host_options}\n"
         f"Available visual themes: {theme_options}\n"
+        f"Available visual strategies: {strategies}\n"
         f"{host_line}"
         f"{theme_line}"
-        "Return ONLY valid JSON, no markdown.\n"
+        "Return ONLY one strict JSON object, no markdown or comments. "
+        "Use double quotes and include every required comma.\n"
         "{"
         "\"title\":\"...\","
         "\"audience\":\"children ages 8-12\","
         "\"characters\":[\"...\"],"
-        "\"science_big_idea\":\"one accurate core mechanism\","
+        "\"science_big_idea\":\"one accurate core learning idea\","
         "\"key_vocabulary\":[\"term\",\"term\",\"term\"],"
         "\"misconception_to_fix\":\"common misconception, if relevant\","
-        "\"moral\":\"scientific takeaway, not a vague life moral\","
+        "\"moral\":\"specific learning takeaway\","
         "\"conclusion\":\"curiosity question or practical takeaway\","
         "\"scenes\":[{"
         "\"heading\":\"...\","
-        "\"lesson\":\"1-2 accurate sentences explaining a mechanism\","
-        "\"science_fact\":\"specific accurate fact or mechanism\","
+        "\"lesson\":\"1-2 accurate sentences explaining the idea\","
+        "\"science_fact\":\"specific accurate fact, rule, or mechanism\","
         "\"vocabulary\":[\"term\",\"term\"],"
-        "\"cause_effect\":\"cause -> effect relationship\","
+        "\"cause_effect\":\"cause -> effect or input -> result\","
         "\"misconception_fix\":\"optional correction\","
-        "\"caption\":\"short narrator line with concrete science\","
-        "\"speech_bubble\":\"max 8 words\","
-        "\"visual\":\"specific drawable science scene description\","
+        "\"caption\":\"short narrator line with concrete learning\","
+        "\"speech_bubble\":\"optional, max 8 words\","
+        "\"visual\":\"specific drawable visual description\","
+        "\"visual_strategy\":\"one available strategy\","
+        "\"host_role\":\"lead | small_guide | observer | absent\","
+        "\"essential_labels\":[\"short label\",\"short equation or value\"],"
+        "\"animation_goal\":\"one visible change over time\","
         "\"duration_sec\":10"
         "}]}\n"
-        "Rules: exactly 6 scenes, each exactly 10 seconds, total = 60 seconds. "
-        "Make it story-like, but the learning must be scientific and mechanism-based. "
-        "Do NOT write generic lessons such as 'it helps you grow' unless you explain the real mechanism. "
-        "Each scene must teach one concrete concept: structure, process, cause/effect, cycle, sequence, "
-        "comparison, measurement, misconception correction, or real-world application. "
-        "Use age-appropriate vocabulary, but include real terms such as neuron, hormone, oxygen, REM, "
-        "evaporation, chlorophyll, gravity, friction, bacteria, ecosystem, etc. when relevant. "
-        "Every scene needs a visual model that is drawable with canvas shapes: arrows, particles, clocks, "
-        "cycles, organs, cells, charts, timelines, molecules, or before/after panels. "
-        "Avoid unsupported or overly precise claims. If exact numbers vary, say 'about' or describe the range. "
-        "If the topic includes a named character, use that name in the title, characters list, and scene visuals."
+        "Rules: exactly 6 scenes, each exactly 10 seconds. "
+        "Use at least four different visual strategies and never repeat one in consecutive scenes. "
+        "Let the learning visual dominate; do not place the same character beside the same table in every scene. "
+        "Use characters in some scenes but allow diagrams, maps, charts, object transformations, and equations to stand alone. "
+        "Each scene must teach one concrete idea through a specific real-world situation, mechanism, comparison, measurement, or worked example. "
+        "Choose essential_labels that can be displayed directly, including useful numbers, units, fractions, equations, or short names. "
+        "Avoid unsupported precision. If exact numbers vary, say about or give a range. "
+        "If the topic includes a named character, keep that name consistent."
     )
 
 
+def _story_json_candidate(raw: str) -> str:
+    text = str(raw or "").strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise RuntimeError("Story model returned no complete JSON object.")
+    return text[start : end + 1]
+
+
+def _remove_story_trailing_commas(text: str) -> str:
+    output: list[str] = []
+    quote = False
+    escaped = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            output.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                quote = False
+            i += 1
+            continue
+        if ch == '"':
+            quote = True
+            output.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+            if j < len(text) and text[j] in "}]":
+                i += 1
+                continue
+        output.append(ch)
+        i += 1
+    return "".join(output)
+
+
+def _repair_story_json_punctuation(candidate: str, max_edits: int = 10) -> str:
+    repaired = _remove_story_trailing_commas(candidate)
+    for _ in range(max_edits):
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError as exc:
+            if exc.msg != "Expecting ',' delimiter":
+                break
+            current = exc.pos
+            while current < len(repaired) and repaired[current].isspace():
+                current += 1
+            previous = current - 1
+            while previous >= 0 and repaired[previous].isspace():
+                previous -= 1
+            if current >= len(repaired) or previous < 0:
+                break
+            current_char = repaired[current]
+            previous_char = repaired[previous]
+            starts_value = current_char in '"{[-' or current_char.isdigit() or current_char in "tfn"
+            ends_value = previous_char in '"}]' or previous_char.isdigit()
+            if not starts_value or not ends_value:
+                break
+            repaired = repaired[:current] + "," + repaired[current:]
+    return repaired
+
+
 def _extract_json(raw: str) -> dict[str, Any]:
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"\s*```$", "", text).strip()
+    candidate = _story_json_candidate(raw)
     try:
-        return json.loads(text)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", text)
-        if not m:
-            raise RuntimeError("Story model returned non-JSON output.")
-        return json.loads(m.group(0))
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError as original_error:
+        repaired = _repair_story_json_punctuation(candidate)
+        if repaired != candidate:
+            try:
+                parsed = json.loads(repaired)
+                logger.warning("story_plan_json_repaired_locally original_error=%s", original_error)
+            except json.JSONDecodeError:
+                raise RuntimeError(f"Story model returned malformed JSON: {original_error}") from original_error
+        else:
+            raise RuntimeError(f"Story model returned malformed JSON: {original_error}") from original_error
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Story model must return one JSON object.")
+    return parsed
 
 
 def _compact_text(value: Any, limit: int = 220) -> str:
@@ -360,7 +441,7 @@ def _default_science_scenes(topic: str) -> list[dict[str, Any]]:
 
 
 def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
-    title = _compact_text(plan.get("title") or f"{topic} Science Story", 80)
+    title = _compact_text(plan.get("title") or f"{topic} Story", 80)
     characters_in = plan.get("characters")
     characters: list[str] = []
     if isinstance(characters_in, list):
@@ -390,19 +471,30 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
         misconception_fix = _compact_text(s.get("misconception_fix"), 180)
         visual = _compact_text(s.get("visual"), 420)
         vocabulary = _normalize_terms(s.get("vocabulary"), limit=4)
+        visual_strategy = str(s.get("visual_strategy") or "").strip().lower()
+        if visual_strategy not in _VISUAL_STRATEGIES:
+            visual_strategy = _DEFAULT_VISUAL_SEQUENCE[(i - 1) % len(_DEFAULT_VISUAL_SEQUENCE)]
+        host_role = str(s.get("host_role") or "").strip().lower()
+        if host_role not in _HOST_ROLES:
+            host_role = ("lead", "small_guide", "absent", "observer", "small_guide", "absent")[(i - 1) % 6]
+        essential_labels = _normalize_terms(s.get("essential_labels"), limit=4)
+        animation_goal = _compact_text(s.get("animation_goal"), 180)
 
         if not lesson:
-            lesson = science_fact or f"This scene explains one science idea about {topic}."
+            lesson = science_fact or f"This scene explains one important idea about {topic}."
         if not science_fact:
             science_fact = lesson
         if not visual:
-            visual = "Scientist guide points to a simple science model with arrows and moving particles."
+            visual = "A topic-specific visual model with changing objects, labels, and a clear relationship."
+        if not animation_goal:
+            animation_goal = "Reveal the relationship by changing one meaningful quantity or position."
 
         caption = _science_caption(s, lesson)
-        speech_bubble = _short_bubble(s.get("speech_bubble"), heading)
+        speech_bubble = _short_bubble(s.get("speech_bubble"), heading) if s.get("speech_bubble") else ""
 
         scenes.append(
             {
+                "id": i,
                 "heading": heading,
                 "lesson": lesson,
                 "science_fact": science_fact,
@@ -412,6 +504,10 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
                 "caption": caption,
                 "speech_bubble": speech_bubble,
                 "visual": visual,
+                "visual_strategy": visual_strategy,
+                "host_role": host_role,
+                "essential_labels": essential_labels,
+                "animation_goal": animation_goal,
                 "duration_sec": 10,
             }
         )
@@ -421,14 +517,41 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
         for fallback in defaults:
             if len(scenes) >= 6:
                 break
+            idx = len(scenes) + 1
+            fallback = dict(fallback)
+            fallback.update(
+                {
+                    "id": idx,
+                    "visual_strategy": _DEFAULT_VISUAL_SEQUENCE[(idx - 1) % len(_DEFAULT_VISUAL_SEQUENCE)],
+                    "host_role": ("lead", "small_guide", "absent", "observer", "small_guide", "absent")[(idx - 1) % 6],
+                    "essential_labels": list(fallback.get("vocabulary") or [])[:3],
+                    "animation_goal": "Reveal the relationship through one visible change.",
+                }
+            )
             scenes.append(fallback)
 
+    # Preserve valid model choices but deterministically prevent repetitive layouts.
+    used: set[str] = set()
+    for idx, scene in enumerate(scenes[:6]):
+        strategy = str(scene.get("visual_strategy") or "")
+        previous = str(scenes[idx - 1].get("visual_strategy") or "") if idx else ""
+        if strategy == previous:
+            strategy = next(
+                candidate
+                for candidate in _DEFAULT_VISUAL_SEQUENCE
+                if candidate != previous and candidate not in used
+            )
+            scene["visual_strategy"] = strategy
+        used.add(strategy)
+    if len(used) < 4:
+        for idx, strategy in enumerate(_DEFAULT_VISUAL_SEQUENCE[:4]):
+            scenes[idx]["visual_strategy"] = strategy
+
     if not characters:
-        characters = ["Scientist Guide", "Curious Learner"]
+        characters = ["Guide", "Curious Learner"]
     if not science_big_idea:
-        science_big_idea = f"Understanding {topic} means looking for mechanisms, evidence, and cause/effect."
+        science_big_idea = f"Understanding {topic} means connecting real situations to patterns, quantities, and cause/effect."
     if not key_vocabulary:
-        # Pull terms from scenes before falling back.
         for scene in scenes:
             for term in scene.get("vocabulary", []):
                 if term and term.lower() not in {t.lower() for t in key_vocabulary}:
@@ -438,11 +561,11 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
             if len(key_vocabulary) >= 6:
                 break
     if not key_vocabulary:
-        key_vocabulary = ["system", "mechanism", "evidence"]
+        key_vocabulary = ["pattern", "quantity", "relationship"]
     if not moral:
-        moral = f"Scientific takeaway: {science_big_idea}"
+        moral = f"Learning takeaway: {science_big_idea}"
     if not conclusion:
-        conclusion = f"Curious question: what evidence would help you explain {topic} better?"
+        conclusion = f"What example of {topic} can you notice or test today?"
 
     return {
         "title": title,
@@ -489,76 +612,372 @@ def _resolve_host_payload(host_character: str | None) -> dict[str, str]:
     return HOST_PRESETS["friendly_robot"]
 
 
-def _extract_js_block(raw: str) -> str:
-    text = (raw or "").strip()
-    if not text:
-        return ""
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2:
-            # Remove first fence and optional closing fence.
-            body = lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:]
-            text = "\n".join(body).strip()
+def _matching_outer_brace(text: str, open_index: int) -> int:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    i = open_index
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+            i += 1
+            continue
+        if block_comment:
+            if ch == "*" and nxt == "/":
+                block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            block_comment = True
+            i += 2
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _clean_draw_js(raw: str) -> str:
+    text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"^```(?:javascript|js)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text).strip()
+    wrapper = re.match(r"^(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\([^)]*\)\s*\{", text)
+    if not wrapper:
+        wrapper = re.match(r"^\([^)]*\)\s*=>\s*\{", text)
+    if wrapper:
+        open_index = text.find("{", wrapper.start())
+        close_index = _matching_outer_brace(text, open_index)
+        if close_index > open_index and not text[close_index + 1 :].strip().strip(";"):
+            text = text[open_index + 1 : close_index].strip()
     return text
 
 
-def _generate_scene_draw_js(
+def _extract_scene_draw_sections(raw: str) -> dict[int, str]:
+    pattern = re.compile(
+        r"<SCENE_DRAW\b(?P<attrs>[^>]*)>(?P<body>.*?)</SCENE_DRAW\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    output: dict[int, str] = {}
+    for match in pattern.finditer(str(raw or "")):
+        attrs = match.group("attrs")
+        id_match = re.search(r"\bid\s*=\s*(?:\"(\d+)\"|'(\d+)'|(\d+))", attrs, flags=re.IGNORECASE)
+        if not id_match:
+            continue
+        scene_id = int(next(group for group in id_match.groups() if group))
+        body = _clean_draw_js(match.group("body"))
+        if body:
+            output[scene_id] = body
+    return output
+
+
+def _validate_draw_js(body: str) -> tuple[bool, str]:
+    text = str(body or "").strip()
+    if not text:
+        return False, "empty drawing body"
+    if len(text) > 5500 or len(text.splitlines()) > 90:
+        return False, "drawing body is too long"
+    lowered = text.lower()
+    forbidden = (
+        "fetch(", "xmlhttprequest", "websocket", "localstorage", "sessionstorage",
+        "document.", "window.", "eval(", "new function", "requestanimationframe",
+        "settimeout", "setinterval", "clearrect", ".filltext(", ".stroketext(",
+        "import ", "require(", "process.", "function(", "function ", "=>", "`",
+    )
+    if any(token in lowered for token in forbidden):
+        return False, "drawing body uses a forbidden or unreliable construct"
+    if not re.search(
+        r"\b(?:drawCharacterTemplate|drawLabel|drawEquation|drawArrow|drawPanel|drawRoute|"
+        r"drawFractionCircle|drawBarChart|drawMeasurement|drawCloud|drawGround|drawStar)\s*\(|"
+        r"\bx\.(?:beginPath|fillRect|strokeRect|arc|ellipse|lineTo|moveTo|bezierCurveTo|quadraticCurveTo)\s*\(",
+        text,
+    ):
+        return False, "drawing body contains no visible drawing action"
+
+    stack: list[str] = []
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    pairs = {')': '(', ']': '[', '}': '{'}
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+            i += 1
+            continue
+        if block_comment:
+            if ch == "*" and nxt == "/":
+                block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            block_comment = True
+            i += 2
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+        elif ch in "([{":
+            stack.append(ch)
+        elif ch in ")]}":
+            if not stack or stack.pop() != pairs[ch]:
+                return False, "unbalanced JavaScript delimiters"
+        i += 1
+    if quote or block_comment or stack:
+        return False, "unclosed JavaScript quote, comment, or delimiter"
+    return True, ""
+
+
+def _story_draw_bundle_prompt(
+    plan: dict[str, Any],
+    *,
+    host_character: str | None,
+    theme: str | None,
+) -> str:
+    scenes = []
+    for idx, scene in enumerate(plan.get("scenes") or [], start=1):
+        scenes.append(
+            {
+                "id": idx,
+                "heading": scene.get("heading"),
+                "lesson": scene.get("lesson"),
+                "visual": scene.get("visual"),
+                "visual_strategy": scene.get("visual_strategy"),
+                "host_role": scene.get("host_role"),
+                "essential_labels": scene.get("essential_labels"),
+                "animation_goal": scene.get("animation_goal"),
+                "speech_bubble": scene.get("speech_bubble"),
+            }
+        )
+    payload = {
+        "story_title": plan.get("title"),
+        "host_character": host_character or "friendly_robot",
+        "theme": theme or "city_lab",
+        "scenes": scenes,
+    }
+    return (
+        "Create all six distinct scene drawing bodies from this compact story plan. "
+        "Return exactly six SCENE_DRAW blocks in scene order.\n"
+        + json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    )
+
+
+def _js_text(value: Any, fallback: str = "") -> str:
+    return json.dumps(_compact_text(value, 70) or fallback, ensure_ascii=True)
+
+
+def _deterministic_scene_js(
     scene: dict[str, Any],
+    *,
+    index: int,
+    host_character: str | None,
+) -> str:
+    strategy = str(scene.get("visual_strategy") or _DEFAULT_VISUAL_SEQUENCE[(index - 1) % 6])
+    labels = list(scene.get("essential_labels") or scene.get("vocabulary") or [])
+    while len(labels) < 3:
+        labels.append(("Input", "Change", "Result")[len(labels)])
+    label0, label1, label2 = (_js_text(labels[0]), _js_text(labels[1]), _js_text(labels[2]))
+    bubble = _js_text(scene.get("speech_bubble"), "Notice the pattern")
+    host = _js_text(host_character or "friendly_robot")
+    role = str(scene.get("host_role") or "small_guide")
+    guide = ""
+    if role != "absent":
+        guide_x = "w*0.18" if role in {"lead", "observer"} else "w*0.1"
+        guide_scale = "0.95" if role == "lead" else "0.72"
+        guide = f"drawCharacterTemplate(x,{guide_x},h*0.82,{guide_scale},{host},Math.sin(dt*2)*4);\n"
+        if scene.get("speech_bubble") and role == "lead":
+            guide += f"drawSpeechBubble(x,{guide_x},h*0.55,{bubble},15);\n"
+
+    common = "const pulse=0.5+0.5*Math.sin(dt*2);\n"
+    if strategy == "map_path":
+        body = f"""{common}{guide}drawPanel(x,w*0.22,h*0.16,w*0.68,h*0.58,'rgba(255,255,255,0.08)','#93c5fd');
+const pts=[[w*0.28,h*0.68],[w*0.43,h*0.48],[w*0.58,h*0.62],[w*0.78,h*0.34]];
+drawRoute(x,pts,'#fbbf24',4);
+const t=(Math.sin(dt*0.8)+1)/2;
+const px=pts[0][0]+(pts[3][0]-pts[0][0])*t;
+const py=pts[0][1]+(pts[3][1]-pts[0][1])*t;
+x.fillStyle='#fb7185'; x.beginPath(); x.arc(px,py,8,0,Math.PI*2); x.fill();
+drawLabel(x,w*0.3,h*0.72,{label0},15,'#e2e8f0');
+drawLabel(x,w*0.72,h*0.28,{label1},15,'#e2e8f0');
+drawArrow(x,w*0.42,h*0.72,w*0.63,h*0.72,'#67e8f9',3);
+drawMeasurement(x,w*0.42,h*0.76,w*0.63,h*0.76,{label2},'#67e8f9');"""
+    elif strategy in {"equation_transform", "balance_model"}:
+        body = f"""{common}{guide}drawPanel(x,w*0.26,h*0.18,w*0.62,h*0.58,'rgba(15,23,42,0.72)','#a78bfa');
+const shift=Math.min(1,dt/4);
+drawEquation(x,w*0.57,h*0.34,{label0},30,'#f8fafc');
+drawArrow(x,w*0.48,h*0.46,w*0.66,h*0.46,'#fbbf24',4);
+drawEquation(x,w*0.57,h*0.58,{label1},32,'#86efac');
+x.strokeStyle='#c4b5fd'; x.lineWidth=5; x.beginPath(); x.moveTo(w*0.42,h*0.68); x.lineTo(w*0.72,h*0.68); x.stroke();
+x.fillStyle='#60a5fa'; x.fillRect(w*(0.43+0.05*shift),h*0.62,42,42);
+x.fillStyle='#fb7185'; x.beginPath(); x.arc(w*(0.7-0.05*shift),h*0.64,21,0,Math.PI*2); x.fill();
+drawLabel(x,w*0.57,h*0.75,{label2},16,'#ddd6fe');"""
+    elif strategy == "probability_tree":
+        body = f"""{common}{guide}drawPanel(x,w*0.25,h*0.14,w*0.66,h*0.62,'rgba(255,255,255,0.06)','#f9a8d4');
+const sx=w*0.38, sy=h*0.4;
+x.fillStyle='#f8fafc'; x.beginPath(); x.arc(sx,sy,10,0,Math.PI*2); x.fill();
+drawArrow(x,sx+10,sy,w*0.58,h*0.3,'#67e8f9',3);
+drawArrow(x,sx+10,sy,w*0.58,h*0.5,'#67e8f9',3);
+drawArrow(x,w*0.59,h*0.3,w*0.76,h*(0.24+0.03*pulse),'#fbbf24',3);
+drawArrow(x,w*0.59,h*0.5,w*0.76,h*(0.56-0.03*pulse),'#fbbf24',3);
+drawLabel(x,w*0.36,h*0.34,{label0},15,'#e2e8f0');
+drawLabel(x,w*0.62,h*0.25,{label1},15,'#e2e8f0');
+drawLabel(x,w*0.62,h*0.55,{label2},15,'#e2e8f0');
+drawFractionCircle(x,w*0.8,h*0.4,44,2,Math.floor(dt)%2,'#f472b6','#334155');"""
+    elif strategy in {"chart", "timeline"}:
+        body = f"""{common}{guide}drawPanel(x,w*0.24,h*0.14,w*0.68,h*0.64,'rgba(255,255,255,0.06)','#86efac');
+const values=[0.32+0.18*pulse,0.52,0.72-0.12*pulse,0.88];
+drawBarChart(x,w*0.32,h*0.68,w*0.48,h*0.38,values,['A','B','C','D'],'#60a5fa');
+drawArrow(x,w*0.32,h*0.74,w*0.82,h*0.74,'#fbbf24',3);
+drawLabel(x,w*0.34,h*0.8,{label0},14,'#e2e8f0');
+drawLabel(x,w*0.57,h*0.8,{label1},14,'#e2e8f0');
+drawLabel(x,w*0.78,h*0.8,{label2},14,'#e2e8f0');"""
+    elif strategy in {"before_after", "split_screen"}:
+        body = f"""{common}{guide}drawPanel(x,w*0.24,h*0.18,w*0.28,h*0.5,'rgba(96,165,250,0.14)','#60a5fa');
+drawPanel(x,w*0.62,h*0.18,w*0.28,h*0.5,'rgba(134,239,172,0.14)','#86efac');
+drawLabel(x,w*0.38,h*0.25,{label0},17,'#dbeafe');
+drawLabel(x,w*0.76,h*0.25,{label1},17,'#dcfce7');
+const r1=28+8*pulse, r2=54+10*pulse;
+x.fillStyle='#60a5fa'; x.beginPath(); x.arc(w*0.38,h*0.48,r1,0,Math.PI*2); x.fill();
+x.fillStyle='#86efac'; x.beginPath(); x.arc(w*0.76,h*0.48,r2,0,Math.PI*2); x.fill();
+drawArrow(x,w*0.52,h*0.46,w*0.61,h*0.46,'#fbbf24',4);
+drawMeasurement(x,w*0.66,h*0.64,w*0.86,h*0.64,{label2},'#86efac');"""
+    elif strategy == "cycle":
+        body = f"""{common}{guide}const cx=w*0.58, cy=h*0.46, radius=Math.min(w,h)*0.22;
+for(let i=0;i<3;i++){{
+  const a=dt*0.25+i*Math.PI*2/3;
+  const px=cx+Math.cos(a)*radius, py=cy+Math.sin(a)*radius;
+  x.fillStyle=['#60a5fa','#fbbf24','#86efac'][i]; x.beginPath(); x.arc(px,py,28,0,Math.PI*2); x.fill();
+}}
+drawArrow(x,cx-radius*0.45,cy-radius*0.85,cx+radius*0.45,cy-radius*0.85,'#f8fafc',3);
+drawArrow(x,cx+radius*0.85,cy-radius*0.15,cx+radius*0.45,cy+radius*0.75,'#f8fafc',3);
+drawArrow(x,cx-radius*0.45,cy+radius*0.75,cx-radius*0.85,cy-radius*0.15,'#f8fafc',3);
+drawLabel(x,cx,cy-radius-36,{label0},15,'#e2e8f0');
+drawLabel(x,cx+radius+40,cy+20,{label1},15,'#e2e8f0');
+drawLabel(x,cx-radius-40,cy+20,{label2},15,'#e2e8f0');"""
+    else:
+        body = f"""{common}{guide}drawPanel(x,w*0.24,h*0.16,w*0.68,h*0.6,'rgba(255,255,255,0.06)','#7dd3fc');
+const cx=w*0.58, cy=h*0.47;
+x.fillStyle='#60a5fa'; x.beginPath(); x.arc(cx-w*0.18,cy,34+8*pulse,0,Math.PI*2); x.fill();
+x.fillStyle='#fbbf24'; x.beginPath(); x.arc(cx,cy,42-6*pulse,0,Math.PI*2); x.fill();
+x.fillStyle='#86efac'; x.beginPath(); x.arc(cx+w*0.18,cy,30+10*pulse,0,Math.PI*2); x.fill();
+drawArrow(x,cx-w*0.13,cy,cx-w*0.05,cy,'#f8fafc',4);
+drawArrow(x,cx+w*0.05,cy,cx+w*0.13,cy,'#f8fafc',4);
+drawLabel(x,cx-w*0.18,cy+70,{label0},15,'#dbeafe');
+drawLabel(x,cx,cy+82,{label1},15,'#fef3c7');
+drawLabel(x,cx+w*0.18,cy+70,{label2},15,'#dcfce7');"""
+    return body.strip()
+
+
+def _prepare_story_drawings(
+    plan: dict[str, Any],
     *,
     provider: str,
     api_key: str,
     model: str | None,
-    host_character: str | None = None,
-    theme: str | None = None,
-) -> str:
-    host_options = ", ".join(sorted(HOST_PRESETS.keys()))
-    theme_options = ", ".join(sorted(THEME_PRESETS.keys()))
-    bubble = _short_bubble(scene.get("speech_bubble"), str(scene.get("heading") or "Science idea"))
-    vocab = ", ".join(scene.get("vocabulary") or [])
-    user = (
-        f"Scene heading: {scene.get('heading', '')}\n"
-        f"Visual description: {scene.get('visual', '')}\n"
-        f"Lesson text: {scene.get('lesson', '')}\n"
-        f"Science fact: {scene.get('science_fact', '')}\n"
-        f"Cause/effect: {scene.get('cause_effect', '')}\n"
-        f"Vocabulary to represent visually, not as text: {vocab}\n"
-        f"Misconception correction, if any: {scene.get('misconception_fix', '')}\n"
-        f"Speech bubble phrase to use exactly: {bubble}\n"
-        f"Available main characters: {host_options}\n"
-        f"Available visual themes: {theme_options}\n"
-        f"Main character preference: {host_character or 'auto'}\n"
-        f"Selected theme: {theme or 'auto'}\n"
-        "Render concrete scientific objects from the visual description.\n"
-        "Show the mechanism with visible cause/effect, not just a cute scene.\n"
-        "Good visual patterns: arrows, moving dots/particles, simple organ/cell shapes, "
-        "cycle rings, before/after panels, timelines, clocks, waves, charts, or comparisons.\n"
-        "Include at least one animated main character (person/animal/robot) with visible motion.\n"
-        "Use any named characters from the scene/title (keep names consistent).\n"
-        "Match a simple storyboard style: characters + scientific model + props.\n"
-        "Use the theme colors for backgrounds and props.\n"
-        "Animate characters and science objects with moving parts (arms, particles, arrows, waves, clocks, or gestures).\n"
-        "Use drawCharacterTemplate for people/animals/robots (do not draw custom bodies).\n"
-        "IMPORTANT: Use exactly ONE drawSpeechBubble call with the provided speech bubble phrase, placed above the main character.\n"
-        "NEVER use fillText or strokeText directly — ALL text must go through drawSpeechBubble.\n"
-        "Do NOT draw heading bars, caption rectangles, or any text overlay at top or bottom.\n"
-        "Return only the JavaScript function body."
-    )
-    raw = call_llm(
-        provider=provider,  # type: ignore[arg-type]
-        api_key=api_key,
-        model=model,
-        system=STORY_DRAW_JS_SYSTEM,
-        user=user,
-        temperature=0.25,
-        max_tokens=2200,
-    )
-    return _extract_js_block(raw)
+    host_character: str | None,
+    theme: str | None,
+) -> tuple[list[str], list[str]]:
+    parsed_bodies: dict[int, str] = {}
+    bundle_error = ""
+    try:
+        raw = call_llm(
+            provider=provider,  # type: ignore[arg-type]
+            api_key=api_key,
+            model=model,
+            system=DRAW_JS_BUNDLE_SYSTEM,
+            user=_story_draw_bundle_prompt(
+                plan,
+                host_character=host_character,
+                theme=theme,
+            ),
+            temperature=0.35,
+            max_tokens=7000,
+            max_output_tokens=7000,
+        )
+        parsed_bodies = _extract_scene_draw_sections(raw)
+        if not parsed_bodies:
+            bundle_error = "visual bundle returned no tagged scene bodies"
+    except Exception as exc:
+        bundle_error = str(exc) or type(exc).__name__
+        logger.exception("story: visual bundle generation failed; using deterministic scene fallbacks")
+
+    primary: list[str] = []
+    fallbacks: list[str] = []
+    for idx, scene in enumerate(plan.get("scenes") or [], start=1):
+        fallback = _deterministic_scene_js(
+            scene,
+            index=idx,
+            host_character=host_character,
+        )
+        fallbacks.append(fallback)
+        candidate = _clean_draw_js(parsed_bodies.get(idx, ""))
+        valid, reason = _validate_draw_js(candidate)
+        if valid:
+            primary.append(candidate)
+            scene["draw_status"] = "custom"
+            scene["draw_error"] = ""
+            logger.info("story: scene %d custom drawing accepted strategy=%s", idx, scene.get("visual_strategy"))
+        else:
+            primary.append(fallback)
+            scene["draw_status"] = "deterministic_fallback"
+            scene["draw_error"] = reason or bundle_error or "missing drawing body"
+            logger.warning(
+                "story: scene %d using deterministic fallback strategy=%s reason=%s",
+                idx,
+                scene.get("visual_strategy"),
+                scene["draw_error"],
+            )
+    return primary, fallbacks
 
 
 def _build_scene_template_html(
     scene: dict[str, Any],
     host_payload: dict[str, str],
     scene_js: str,
+    fallback_js: str,
     theme: str | None = None,
 ) -> str:
     theme_key = _pick_theme(theme, str(scene.get("visual") or ""))
@@ -572,12 +991,18 @@ def _build_scene_template_html(
         "misconception_fix": str(scene.get("misconception_fix") or ""),
         "speech_bubble": str(scene.get("speech_bubble") or ""),
         "visual": str(scene.get("visual") or ""),
+        "visual_strategy": str(scene.get("visual_strategy") or "diagram"),
+        "host_role": str(scene.get("host_role") or "small_guide"),
+        "essential_labels": list(scene.get("essential_labels") or []),
+        "animation_goal": str(scene.get("animation_goal") or ""),
+        "draw_status": str(scene.get("draw_status") or "custom"),
         "duration_sec": int(scene.get("duration_sec") or 10),
         "theme": THEME_PRESETS[theme_key],
         "host": host_payload,
     }
     payload_json = json.dumps(payload, ensure_ascii=True)
     scene_js_json = json.dumps(scene_js or "", ensure_ascii=True)
+    fallback_js_json = json.dumps(fallback_js or "", ensure_ascii=True)
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -593,20 +1018,30 @@ def _build_scene_template_html(
   <script>
     const S = {payload_json};
     const SCENE_DRAW_JS = {scene_js_json};
+    const FALLBACK_DRAW_JS = {fallback_js_json};
     const c = document.getElementById('c');
     const x = c.getContext('2d');
         let drawSceneFn = null;
+        let fallbackDrawFn = null;
+        const DRAW_ARGS = [
+            'x', 'w', 'h', 'dt',
+            'drawCharacter', 'drawCloud', 'drawGround', 'drawSpeechBubble', 'drawStar',
+            'drawCharacterTemplate', 'drawLabel', 'drawEquation', 'drawArrow', 'drawPanel',
+            'drawRoute', 'drawFractionCircle', 'drawBarChart', 'drawMeasurement'
+        ];
     try {{
       if (SCENE_DRAW_JS && SCENE_DRAW_JS.trim()) {{
-                drawSceneFn = new Function(
-                    'x', 'w', 'h', 'dt',
-                    'drawCharacter', 'drawCloud', 'drawGround', 'drawSpeechBubble', 'drawStar',
-                    'drawCharacterTemplate',
-                    SCENE_DRAW_JS
-                );
+                drawSceneFn = new Function(...DRAW_ARGS, SCENE_DRAW_JS);
       }}
     }} catch (e) {{
       drawSceneFn = null;
+    }}
+    try {{
+      if (FALLBACK_DRAW_JS && FALLBACK_DRAW_JS.trim()) {{
+                fallbackDrawFn = new Function(...DRAW_ARGS, FALLBACK_DRAW_JS);
+      }}
+    }} catch (e) {{
+      fallbackDrawFn = null;
     }}
         let w = 0, h = 0;
     function rs() {{
@@ -748,6 +1183,87 @@ def _build_scene_template_html(
             }}
             ctx.closePath(); ctx.fill();
         }}
+        function drawLabel(ctx, cx, cy, text, fontSize, color) {{
+            ctx.save();
+            ctx.fillStyle = color || '#f8fafc';
+            ctx.font = '600 ' + (fontSize || 16) + 'px Arial';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(String(text || '').slice(0, 40), cx, cy);
+            ctx.restore();
+        }}
+        function drawEquation(ctx, cx, cy, text, fontSize, color) {{
+            ctx.save();
+            ctx.fillStyle = 'rgba(15,23,42,0.82)';
+            const fs = fontSize || 26;
+            ctx.font = '700 ' + fs + 'px Arial';
+            const label = String(text || '').slice(0, 55);
+            const width = Math.min(w * 0.72, ctx.measureText(label).width + 28);
+            const height = fs + 24;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(cx - width/2, cy - height/2, width, height, 10);
+            else ctx.rect(cx - width/2, cy - height/2, width, height);
+            ctx.fill();
+            ctx.fillStyle = color || '#f8fafc';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(label, cx, cy);
+            ctx.restore();
+        }}
+        function drawArrow(ctx, x1, y1, x2, y2, color, lineWidth) {{
+            const angle = Math.atan2(y2-y1, x2-x1);
+            const head = 10 + (lineWidth || 3);
+            ctx.save(); ctx.strokeStyle = color || '#f8fafc'; ctx.fillStyle = color || '#f8fafc';
+            ctx.lineWidth = lineWidth || 3; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x2,y2);
+            ctx.lineTo(x2-head*Math.cos(angle-Math.PI/6), y2-head*Math.sin(angle-Math.PI/6));
+            ctx.lineTo(x2-head*Math.cos(angle+Math.PI/6), y2-head*Math.sin(angle+Math.PI/6));
+            ctx.closePath(); ctx.fill(); ctx.restore();
+        }}
+        function drawPanel(ctx, px, py, pw, ph, fill, stroke) {{
+            ctx.save(); ctx.fillStyle = fill || 'rgba(255,255,255,0.08)';
+            ctx.strokeStyle = stroke || 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 16); else ctx.rect(px, py, pw, ph);
+            ctx.fill(); ctx.stroke(); ctx.restore();
+        }}
+        function drawRoute(ctx, points, color, lineWidth) {{
+            if (!Array.isArray(points) || points.length < 2) return;
+            ctx.save(); ctx.strokeStyle = color || '#fbbf24'; ctx.lineWidth = lineWidth || 4;
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.beginPath();
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i=1;i<points.length;i++) ctx.lineTo(points[i][0], points[i][1]);
+            ctx.stroke(); ctx.restore();
+        }}
+        function drawFractionCircle(ctx, cx, cy, radius, parts, active, activeColor, baseColor) {{
+            const count = Math.max(2, Math.min(12, Number(parts || 4)));
+            for (let i=0;i<count;i++) {{
+                const a0 = -Math.PI/2 + i*Math.PI*2/count;
+                const a1 = -Math.PI/2 + (i+1)*Math.PI*2/count;
+                ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,radius,a0,a1); ctx.closePath();
+                ctx.fillStyle = i === active ? (activeColor || '#fbbf24') : (baseColor || '#334155');
+                ctx.fill(); ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 2; ctx.stroke();
+            }}
+        }}
+        function drawBarChart(ctx, px, baseline, pw, ph, values, labels, color) {{
+            const vals = Array.isArray(values) ? values : [];
+            const gap = pw / Math.max(1, vals.length);
+            vals.forEach((value, i) => {{
+                const v = Math.max(0, Math.min(1, Number(value || 0)));
+                const bh = ph * v;
+                ctx.fillStyle = color || '#60a5fa';
+                ctx.fillRect(px + i*gap + gap*0.18, baseline-bh, gap*0.64, bh);
+                if (labels && labels[i]) drawLabel(ctx, px+i*gap+gap*0.5, baseline+18, labels[i], 12, '#e2e8f0');
+            }});
+            ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(px,baseline); ctx.lineTo(px+pw,baseline); ctx.stroke();
+        }}
+        function drawMeasurement(ctx, x1, y1, x2, y2, label, color) {{
+            const c = color || '#67e8f9';
+            ctx.save(); ctx.strokeStyle = c; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x1,y1-7); ctx.lineTo(x1,y1+7); ctx.moveTo(x2,y2-7); ctx.lineTo(x2,y2+7); ctx.stroke();
+            drawLabel(ctx,(x1+x2)/2,(y1+y2)/2-14,label,13,c); ctx.restore();
+        }}
         function drawCharacterTemplate(ctx, cx, cy, scale, variant, bobAmt) {{
             const v = String(variant || 'friendly_robot');
             const templates = {{
@@ -848,10 +1364,19 @@ def _build_scene_template_html(
       x.fillStyle = g; x.fillRect(0,0,w,h);
             if (drawSceneFn) {{
                 try {{
-                    drawSceneFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar, drawCharacterTemplate);
+                    drawSceneFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                        drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
+                        drawFractionCircle, drawBarChart, drawMeasurement);
                 }} catch (e) {{
-                    drawFallbackAnimated(dt);
+                    if (fallbackDrawFn) fallbackDrawFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                        drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
+                        drawFractionCircle, drawBarChart, drawMeasurement);
+                    else drawFallbackAnimated(dt);
                 }}
+            }} else if (fallbackDrawFn) {{
+                fallbackDrawFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                    drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
+                    drawFractionCircle, drawBarChart, drawMeasurement);
             }} else {{
                 drawFallbackAnimated(dt);
             }}
@@ -1065,6 +1590,14 @@ def generate_story_video(
     )
     plan = _normalize_story_plan(_extract_json(raw), prompt)
     host_payload = _resolve_host_payload(host_character)
+    draw_js_by_scene, fallback_js_by_scene = _prepare_story_drawings(
+        plan,
+        provider=prov,
+        api_key=key,
+        model=model,
+        host_character=host_character,
+        theme=theme,
+    )
 
     ffmpeg_bin = _find_ffmpeg()
     jid = job_id or str(uuid4())[:8]
@@ -1084,18 +1617,13 @@ def generate_story_video(
                 len(plan["scenes"]),
                 scene["heading"],
             )
-            scene_js = _generate_scene_draw_js(
-                scene,
-                provider=prov,
-                api_key=key,
-                model=model,
-                host_character=host_character,
-                theme=theme,
-            )
+            scene_js = draw_js_by_scene[idx - 1]
+            fallback_js = fallback_js_by_scene[idx - 1]
             scene_html = _build_scene_template_html(
                 scene,
                 host_payload=host_payload,
                 scene_js=scene_js,
+                fallback_js=fallback_js,
                 theme=theme,
             )
         except Exception:
@@ -1166,6 +1694,7 @@ def _build_story_slider_html(
     *,
     host_payload: dict[str, str],
     draw_js_by_scene: list[str],
+    fallback_js_by_scene: list[str],
     theme: str | None = None,
 ) -> str:
     scenes_payload: list[dict[str, Any]] = []
@@ -1182,9 +1711,15 @@ def _build_story_slider_html(
                 "misconception_fix": str(scene.get("misconception_fix") or ""),
                 "speech_bubble": str(scene.get("speech_bubble") or ""),
                 "visual": str(scene.get("visual") or ""),
+                "visual_strategy": str(scene.get("visual_strategy") or "diagram"),
+                "host_role": str(scene.get("host_role") or "small_guide"),
+                "essential_labels": list(scene.get("essential_labels") or []),
+                "animation_goal": str(scene.get("animation_goal") or ""),
+                "draw_status": str(scene.get("draw_status") or "custom"),
                 "duration_sec": int(scene.get("duration_sec") or 10),
                 "theme": scene_theme,
                 "draw_js": draw_js_by_scene[idx] if idx < len(draw_js_by_scene) else "",
+                "fallback_js": fallback_js_by_scene[idx] if idx < len(fallback_js_by_scene) else "",
             }
         )
     payload = {
@@ -1396,6 +1931,87 @@ def _build_story_slider_html(
             }}
             ctx.closePath(); ctx.fill();
         }}
+        function drawLabel(ctx, cx, cy, text, fontSize, color) {{
+            ctx.save();
+            ctx.fillStyle = color || '#f8fafc';
+            ctx.font = '600 ' + (fontSize || 16) + 'px Arial';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(String(text || '').slice(0, 40), cx, cy);
+            ctx.restore();
+        }}
+        function drawEquation(ctx, cx, cy, text, fontSize, color) {{
+            ctx.save();
+            ctx.fillStyle = 'rgba(15,23,42,0.82)';
+            const fs = fontSize || 26;
+            ctx.font = '700 ' + fs + 'px Arial';
+            const label = String(text || '').slice(0, 55);
+            const width = Math.min(w * 0.72, ctx.measureText(label).width + 28);
+            const height = fs + 24;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(cx - width/2, cy - height/2, width, height, 10);
+            else ctx.rect(cx - width/2, cy - height/2, width, height);
+            ctx.fill();
+            ctx.fillStyle = color || '#f8fafc';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(label, cx, cy);
+            ctx.restore();
+        }}
+        function drawArrow(ctx, x1, y1, x2, y2, color, lineWidth) {{
+            const angle = Math.atan2(y2-y1, x2-x1);
+            const head = 10 + (lineWidth || 3);
+            ctx.save(); ctx.strokeStyle = color || '#f8fafc'; ctx.fillStyle = color || '#f8fafc';
+            ctx.lineWidth = lineWidth || 3; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x2,y2);
+            ctx.lineTo(x2-head*Math.cos(angle-Math.PI/6), y2-head*Math.sin(angle-Math.PI/6));
+            ctx.lineTo(x2-head*Math.cos(angle+Math.PI/6), y2-head*Math.sin(angle+Math.PI/6));
+            ctx.closePath(); ctx.fill(); ctx.restore();
+        }}
+        function drawPanel(ctx, px, py, pw, ph, fill, stroke) {{
+            ctx.save(); ctx.fillStyle = fill || 'rgba(255,255,255,0.08)';
+            ctx.strokeStyle = stroke || 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 16); else ctx.rect(px, py, pw, ph);
+            ctx.fill(); ctx.stroke(); ctx.restore();
+        }}
+        function drawRoute(ctx, points, color, lineWidth) {{
+            if (!Array.isArray(points) || points.length < 2) return;
+            ctx.save(); ctx.strokeStyle = color || '#fbbf24'; ctx.lineWidth = lineWidth || 4;
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.beginPath();
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i=1;i<points.length;i++) ctx.lineTo(points[i][0], points[i][1]);
+            ctx.stroke(); ctx.restore();
+        }}
+        function drawFractionCircle(ctx, cx, cy, radius, parts, active, activeColor, baseColor) {{
+            const count = Math.max(2, Math.min(12, Number(parts || 4)));
+            for (let i=0;i<count;i++) {{
+                const a0 = -Math.PI/2 + i*Math.PI*2/count;
+                const a1 = -Math.PI/2 + (i+1)*Math.PI*2/count;
+                ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,radius,a0,a1); ctx.closePath();
+                ctx.fillStyle = i === active ? (activeColor || '#fbbf24') : (baseColor || '#334155');
+                ctx.fill(); ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 2; ctx.stroke();
+            }}
+        }}
+        function drawBarChart(ctx, px, baseline, pw, ph, values, labels, color) {{
+            const vals = Array.isArray(values) ? values : [];
+            const gap = pw / Math.max(1, vals.length);
+            vals.forEach((value, i) => {{
+                const v = Math.max(0, Math.min(1, Number(value || 0)));
+                const bh = ph * v;
+                ctx.fillStyle = color || '#60a5fa';
+                ctx.fillRect(px + i*gap + gap*0.18, baseline-bh, gap*0.64, bh);
+                if (labels && labels[i]) drawLabel(ctx, px+i*gap+gap*0.5, baseline+18, labels[i], 12, '#e2e8f0');
+            }});
+            ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(px,baseline); ctx.lineTo(px+pw,baseline); ctx.stroke();
+        }}
+        function drawMeasurement(ctx, x1, y1, x2, y2, label, color) {{
+            const c = color || '#67e8f9';
+            ctx.save(); ctx.strokeStyle = c; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x1,y1-7); ctx.lineTo(x1,y1+7); ctx.moveTo(x2,y2-7); ctx.lineTo(x2,y2+7); ctx.stroke();
+            drawLabel(ctx,(x1+x2)/2,(y1+y2)/2-14,label,13,c); ctx.restore();
+        }}
         function drawCharacterTemplate(ctx, cx, cy, scale, variant, bobAmt) {{
             const v = String(variant || 'friendly_robot');
             const templates = {{
@@ -1443,16 +2059,21 @@ def _build_story_slider_html(
                 ctx.beginPath(); ctx.ellipse(cx, cy - 128*s, 26*s, 4*s, 0, 0, Math.PI*2); ctx.fill();
             }}
         }}
+        const DRAW_ARGS = [
+            'x', 'w', 'h', 'dt',
+            'drawCharacter', 'drawCloud', 'drawGround', 'drawSpeechBubble', 'drawStar',
+            'drawCharacterTemplate', 'drawLabel', 'drawEquation', 'drawArrow', 'drawPanel',
+            'drawRoute', 'drawFractionCircle', 'drawBarChart', 'drawMeasurement'
+        ];
         const drawFns = scenes.map((s) => {{
             try {{
-                if (s.draw_js && String(s.draw_js).trim()) {{
-                    return new Function(
-                        'x', 'w', 'h', 'dt',
-                        'drawCharacter', 'drawCloud', 'drawGround', 'drawSpeechBubble', 'drawStar',
-                        'drawCharacterTemplate',
-                        s.draw_js
-                    );
-                }}
+                if (s.draw_js && String(s.draw_js).trim()) return new Function(...DRAW_ARGS, s.draw_js);
+            }} catch (e) {{}}
+            return null;
+        }});
+        const fallbackFns = scenes.map((s) => {{
+            try {{
+                if (s.fallback_js && String(s.fallback_js).trim()) return new Function(...DRAW_ARGS, s.fallback_js);
             }} catch (e) {{}}
             return null;
         }});
@@ -1573,8 +2194,22 @@ def _build_story_slider_html(
       ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
             ctx.globalAlpha = 1;
       const fn = drawFns[current];
+    const fallbackFn = fallbackFns[current];
     if (fn) {{
-            try {{ fn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar, drawCharacterTemplate); }} catch (e) {{ drawFallbackAnimated(elapsed, theme); }}
+            try {{
+                fn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                    drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
+                    drawFractionCircle, drawBarChart, drawMeasurement);
+            }} catch (e) {{
+                if (fallbackFn) fallbackFn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                    drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
+                    drawFractionCircle, drawBarChart, drawMeasurement);
+                else drawFallbackAnimated(elapsed, theme);
+            }}
+    }} else if (fallbackFn) {{
+            fallbackFn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
+                drawFractionCircle, drawBarChart, drawMeasurement);
     }} else {{
             drawFallbackAnimated(elapsed, theme);
     }}
@@ -1635,32 +2270,20 @@ def generate_story_slider(
     )
     plan = _normalize_story_plan(_extract_json(raw), prompt)
     host_payload = _resolve_host_payload(host_character)
-
-    draw_js_by_scene: list[str] = []
-    for idx, scene in enumerate(plan["scenes"], start=1):
-        try:
-            logger.info("story: generating slider scene overlay %d/%d — %s", idx, len(plan["scenes"]), scene["heading"])
-            draw_js = _generate_scene_draw_js(
-                scene,
-                provider=prov,
-                api_key=key,
-                model=model,
-                host_character=host_character,
-                theme=theme,
-            )
-            draw_js_by_scene.append(draw_js or "")
-        except Exception:
-            logger.exception(
-                "story: scene overlay generation failed at index=%d heading=%s, using template-only scene",
-                idx,
-                scene.get("heading"),
-            )
-            draw_js_by_scene.append("")
+    draw_js_by_scene, fallback_js_by_scene = _prepare_story_drawings(
+        plan,
+        provider=prov,
+        api_key=key,
+        model=model,
+        host_character=host_character,
+        theme=theme,
+    )
 
     html = _build_story_slider_html(
         plan,
         host_payload=host_payload,
         draw_js_by_scene=draw_js_by_scene,
+        fallback_js_by_scene=fallback_js_by_scene,
         theme=theme,
     )
     return {
