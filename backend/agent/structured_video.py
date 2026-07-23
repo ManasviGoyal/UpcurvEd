@@ -16,6 +16,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import textwrap
 import uuid
 from typing import Any
 
@@ -156,36 +157,141 @@ def _normalize_labels(value: Any) -> list[str]:
     ]
 
 
-def _extract_json_object(raw: str) -> dict[str, Any]:
+def _json_object_candidate(raw: str) -> str:
     text = str(raw or "").strip()
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text)
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
-
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
         raise RuntimeError("The model did not return a complete JSON video plan.")
-    candidate = text[start : end + 1]
+    return text[start : end + 1]
+
+
+def _remove_trailing_json_commas(text: str) -> str:
+    """Remove commas immediately before } or ] while respecting JSON strings."""
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < len(text) and text[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(text) and text[lookahead] in "}]":
+                index += 1
+                continue
+
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
+def _previous_nonspace_index(text: str, start: int) -> int:
+    index = min(start, len(text) - 1)
+    while index >= 0 and text[index].isspace():
+        index -= 1
+    return index
+
+
+def _next_nonspace_index(text: str, start: int) -> int:
+    index = max(0, start)
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
+
+
+def _is_json_value_end(text: str, index: int) -> bool:
+    if index < 0:
+        return False
+    char = text[index]
+    if char in '"}]' or char.isdigit():
+        return True
+    prefix = text[: index + 1].rstrip()
+    return prefix.endswith(("true", "false", "null"))
+
+
+def _is_json_value_start(char: str) -> bool:
+    return bool(char) and (char in '"{[-' or char.isdigit() or char in "tfn")
+
+
+def _repair_json_punctuation(candidate: str, max_edits: int = 12) -> str:
+    """Repair only conservative punctuation mistakes; never rewrite values or keys."""
+    repaired = _remove_trailing_json_commas(candidate)
+    for _ in range(max_edits):
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError as exc:
+            if exc.msg != "Expecting ',' delimiter":
+                break
+
+            current = _next_nonspace_index(repaired, exc.pos)
+            previous = _previous_nonspace_index(repaired, current - 1)
+            if (
+                current >= len(repaired)
+                or not _is_json_value_start(repaired[current])
+                or not _is_json_value_end(repaired, previous)
+            ):
+                break
+            repaired = repaired[:current] + "," + repaired[current:]
+    return repaired
+
+
+def _extract_json_object_with_local_repair(raw: str) -> tuple[dict[str, Any], str, bool]:
+    candidate = _json_object_candidate(raw)
     try:
         parsed = json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"The model returned malformed JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise RuntimeError("The structured video plan must be a JSON object.")
+        if not isinstance(parsed, dict):
+            raise RuntimeError("The structured video plan must be a JSON object.")
+        return parsed, candidate, False
+    except json.JSONDecodeError as original_error:
+        repaired = _repair_json_punctuation(candidate)
+        if repaired != candidate:
+            try:
+                parsed = json.loads(repaired)
+                if not isinstance(parsed, dict):
+                    raise RuntimeError("The structured video plan must be a JSON object.")
+                logger.warning(
+                    "structured_video_json_repaired_locally original_error=%s",
+                    original_error,
+                )
+                return parsed, repaired, True
+            except json.JSONDecodeError:
+                pass
+        raise RuntimeError(f"The model returned malformed JSON: {original_error}") from original_error
+
+
+def _extract_json_object(raw: str) -> dict[str, Any]:
+    parsed, _json_text, _was_repaired = _extract_json_object_with_local_repair(raw)
     return parsed
 
-
 def _clean_body_block(body: str) -> str:
-    text = str(body or "").strip()
-    text = re.sub(r"^```(?:python)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
+    """Normalize transport indentation without rewriting model-authored Python."""
+    text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
+    text = text.strip("\n")
+    text = re.sub(r"^[ \t]*```(?:python)?[ \t]*(?:\n)?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:\n)?[ \t]*```[ \t]*$", "", text)
+    return textwrap.dedent(text).strip()
 
 
 def _extract_tagged_section(text: str, tag: str) -> str | None:
@@ -250,18 +356,16 @@ def _attach_manim_bodies(
 
 def _parse_structured_response(
     raw: str,
-) -> tuple[dict[str, Any], dict[str, str], str]:
+) -> tuple[dict[str, Any], dict[str, str], str, str | None, bool]:
     text = str(raw or "").strip()
     plan_text = _extract_tagged_section(text, _VIDEO_PLAN_TAG)
     bodies = _extract_manim_body_sections(text)
 
     # Backward compatibility for models or saved data that still return one JSON object.
-    if plan_text is None:
-        parsed = _extract_json_object(text)
-        return parsed, bodies, text
-
-    parsed = _extract_json_object(plan_text)
-    return parsed, bodies, plan_text
+    source_plan_text = text if plan_text is None else plan_text
+    parsed, parsed_plan_text, was_repaired = _extract_json_object_with_local_repair(source_plan_text)
+    repaired_plan_text = parsed_plan_text if was_repaired else None
+    return parsed, bodies, source_plan_text, repaired_plan_text, was_repaired
 
 
 def _split_plan_and_bodies(
@@ -275,7 +379,7 @@ def _split_plan_and_bodies(
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, dict):
             continue
-        body = str(scene.pop("manim_body", "") or "").strip()
+        body = _clean_body_block(scene.pop("manim_body", ""))
         if scene.get("type") == "custom_manim_scene" or body:
             ref = _body_ref_for_scene(scene, index)
             scene["manim_body_ref"] = ref
@@ -291,10 +395,17 @@ def _write_response_debug_artifacts(
     raw_text: str,
     plan_text: str,
     bodies: dict[str, str],
+    repaired_plan_text: str | None = None,
+    plan_was_repaired: bool = False,
 ) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     (logs_dir / f"{prefix}_response_raw.txt").write_text(raw_text, encoding="utf-8")
     (logs_dir / f"{prefix}_plan_raw.json").write_text(plan_text, encoding="utf-8")
+    if plan_was_repaired and repaired_plan_text is not None:
+        (logs_dir / f"{prefix}_plan_repaired.json").write_text(
+            repaired_plan_text,
+            encoding="utf-8",
+        )
     body_parts: list[str] = []
     for ref, body in bodies.items():
         body_parts.extend([f'<MANIM_BODY id="{ref}">', body, "</MANIM_BODY>", ""])
@@ -393,7 +504,7 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         if scene_type == "custom_manim_scene":
             scene["code_goal"] = _short_text(incoming.get("code_goal") or visual, 240, visual)
             scene["manim_body_ref"] = _body_ref_for_scene(incoming, index)
-            scene["manim_body"] = str(incoming.get("manim_body") or "").strip()
+            scene["manim_body"] = _clean_body_block(incoming.get("manim_body") or "")
         scenes.append(scene)
 
     if not scenes:
@@ -511,13 +622,15 @@ def _repair_plan_if_needed(
     )
     raw_text = _coerce_llm_text(raw)
     (logs_dir / "plan_repair_response_raw.txt").write_text(raw_text, encoding="utf-8")
-    parsed, bodies, plan_text = _parse_structured_response(raw_text)
+    parsed, bodies, plan_text, repaired_plan_text, plan_was_repaired = _parse_structured_response(raw_text)
     _write_response_debug_artifacts(
         logs_dir=logs_dir,
         prefix="plan_repair",
         raw_text=raw_text,
         plan_text=plan_text,
         bodies=bodies,
+        repaired_plan_text=repaired_plan_text,
+        plan_was_repaired=plan_was_repaired,
     )
     parsed = _attach_manim_bodies(parsed, bodies)
     parsed = _inherit_missing_scene_fields(parsed, plan)
@@ -532,15 +645,12 @@ def _repair_plan_if_needed(
 
 
 def _extract_body(raw: Any) -> str:
-    text = _coerce_llm_text(raw).strip()
-    text = re.sub(r"^```(?:python)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
+    return _clean_body_block(_coerce_llm_text(raw))
 
 
 def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    cleaned = str(body or "").strip()
+    cleaned = _clean_body_block(body)
     if not cleaned:
         return ["manim_body is empty."]
 
@@ -548,11 +658,11 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
         if re.search(pattern, cleaned, flags=re.IGNORECASE | re.MULTILINE):
             errors.append(f"Forbidden custom-code pattern: {pattern}")
 
-    if cleaned.count("self.voiceover") < 2:
-        errors.append("Custom scene needs at least 2 self.voiceover blocks.")
+    if cleaned.count("self.voiceover") < 1:
+        errors.append("Custom scene needs at least 1 self.voiceover block.")
     animation_actions = cleaned.count("self.play") + cleaned.count("next_calculation_step(")
-    if animation_actions < 4:
-        errors.append("Custom scene needs at least 4 visible animation actions.")
+    if animation_actions < 3:
+        errors.append("Custom scene needs at least 3 visible animation actions.")
 
     motion_markers = (
         ".animate",
@@ -661,7 +771,7 @@ def _render_scene_clip(
             "job_id": result.get("job_id"),
         }, code
 
-    original_body = str(scene.get("manim_body") or "").strip()
+    original_body = _clean_body_block(scene.get("manim_body") or "")
     validation_errors = _validate_custom_body(original_body, scene)
     initial_detail = "; ".join(validation_errors)
     if not validation_errors:
@@ -968,7 +1078,7 @@ def _inherit_missing_scene_fields(
             or bool(scene.get("manim_body_ref"))
         )
         if custom_like and not str(scene.get("manim_body") or "").strip():
-            body = str(original.get("manim_body") or "").strip()
+            body = _clean_body_block(original.get("manim_body") or "")
             if body:
                 scene["manim_body"] = body
     return edited_plan
@@ -1066,13 +1176,15 @@ def generate_structured_manim_video(
     )
     raw_text = _coerce_llm_text(raw)
     (logs_dir / "structured_response_raw.txt").write_text(raw_text, encoding="utf-8")
-    parsed, bodies, plan_text = _parse_structured_response(raw_text)
+    parsed, bodies, plan_text, repaired_plan_text, plan_was_repaired = _parse_structured_response(raw_text)
     _write_response_debug_artifacts(
         logs_dir=logs_dir,
         prefix="structured",
         raw_text=raw_text,
         plan_text=plan_text,
         bodies=bodies,
+        repaired_plan_text=repaired_plan_text,
+        plan_was_repaired=plan_was_repaired,
     )
     parsed = _attach_manim_bodies(parsed, bodies)
     plan = _normalize_plan(parsed, topic=prompt)
@@ -1128,13 +1240,15 @@ def edit_structured_manim_video(
     )
     raw_text = _coerce_llm_text(raw)
     (logs_dir / "structured_edit_response_raw.txt").write_text(raw_text, encoding="utf-8")
-    parsed, bodies, plan_text = _parse_structured_response(raw_text)
+    parsed, bodies, plan_text, repaired_plan_text, plan_was_repaired = _parse_structured_response(raw_text)
     _write_response_debug_artifacts(
         logs_dir=logs_dir,
         prefix="structured_edit",
         raw_text=raw_text,
         plan_text=plan_text,
         bodies=bodies,
+        repaired_plan_text=repaired_plan_text,
+        plan_was_repaired=plan_was_repaired,
     )
     parsed = _attach_manim_bodies(parsed, bodies)
     parsed = _inherit_missing_scene_fields(parsed, original_plan)

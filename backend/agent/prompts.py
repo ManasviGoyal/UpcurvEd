@@ -72,6 +72,12 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     body statements only
     </MANIM_BODY>
 
+    JSON transport rules:
+    - VIDEO_PLAN must be strict RFC 8259 JSON using double quotes.
+    - Put a comma between every property and every array item.
+    - Do not use comments, trailing commas, single quotes, or Python dictionary syntax.
+    - Before responding, verify that the VIDEO_PLAN section parses as one complete JSON object.
+
     Plan shape:
     {
       "title": "short title",
@@ -126,9 +132,11 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     Custom-body rules:
     - Body statements only. No imports, class, def, files, images, SVG, Tex, MathTex,
       network, random, external libraries, eval, exec, or system access. Use mn. prefixes.
+    - Begin every MANIM_BODY at column 1. Do not indent the whole body as though it were
+      already inside construct(). Indent only statements nested inside with, if, for, or while.
     - Allowed primitives include Text, Circle, Rectangle, RoundedRectangle, Dot, Line,
       DashedLine, Arrow, Arc, VGroup, NumberLine, Axes, and NumberPlane.
-    - Include at least 2 voiceover blocks, 4 visible animation actions, and meaningful motion.
+    - Include at least 1 voiceover block, 3 visible animation actions, and meaningful motion.
     - A graph body must create Axes or NumberPlane, draw/plot the relationship, and visibly
       mark the features listed in required_visual_elements.
     - For multiple calculation steps, show one active equation in the calculation area.
@@ -154,6 +162,9 @@ STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one educational-video response. Do not use markdown fences.
     Return one complete <VIDEO_PLAN> JSON section followed by MANIM_BODY blocks only for
     custom scenes that are new or changed. Omitted existing bodies will be preserved.
+    VIDEO_PLAN must be strict RFC 8259 JSON with double quotes, all required commas, no
+    comments, no trailing commas, and no Python dictionary syntax. Begin each MANIM_BODY at
+    column 1 and indent only statements nested inside with, if, for, or while.
 
     Keep good material and make the smallest changes needed. A graph scene must use custom
     Manim with real axes/number plane, a plotted or coordinate-based relationship, and marked
@@ -186,6 +197,9 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety("""\
     Edit one structured educational video. Do not use markdown fences.
     Return one complete <VIDEO_PLAN> JSON section followed by MANIM_BODY blocks only for
     custom scenes that are new or changed. Omitted existing bodies will be preserved.
+    VIDEO_PLAN must be strict RFC 8259 JSON with double quotes, all required commas, no
+    comments, no trailing commas, and no Python dictionary syntax. Begin each MANIM_BODY at
+    column 1 and indent only statements nested inside with, if, for, or while.
 
     You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
     Preserve useful material and improve learning_role, learner_question, visual_mode,
@@ -227,8 +241,9 @@ STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
     and wait_for_voiceover(...).
 
     Use mn. prefixes and simple primitives. No imports, class, def, files, images, SVG, Tex,
-    MathTex, network, random, external libraries, eval, exec, or system access. Include at least
-    2 voiceover blocks, 4 visible animation actions, and meaningful motion. A graph must create
+    MathTex, network, random, external libraries, eval, exec, or system access. Begin the body
+    at column 1 and indent only statements nested inside with, if, for, or while. Include at least
+    1 voiceover block, 3 visible animation actions, and meaningful motion. A graph must create
     Axes or NumberPlane, draw/plot the relationship, and mark the required features.
     For multiple calculation steps, keep one active equation and replace or fade out the prior
     equation. Prefer next_calculation_step(...); never stack equations at the same coordinates.
