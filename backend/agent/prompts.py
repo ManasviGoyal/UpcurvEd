@@ -1,158 +1,155 @@
 # backend/agent/prompts.py
+from __future__ import annotations
+
 import json
 from textwrap import dedent
 
-# -------- STRUCTURED VIDEO SCENE-OBJECT PROMPTS --------
+
+# -------- STRUCTURED VIDEO PROMPTS --------
 
 STRUCTURED_VIDEO_SYSTEM = dedent("""\
-    You create one complete JSON video object for a short educational Manim video.
-    Return ONLY valid JSON. No markdown, no commentary, and no Python outside JSON strings.
+    Create one valid JSON object for a short educational Manim video.
+    Return JSON only. Choose the scene count needed for the topic.
 
-    You decide how many scenes the lesson needs. Do not target a fixed scene count.
-    Use the fewest scenes that explain the topic clearly, with a sensible total duration.
-
-    JSON shape:
+    Shape:
     {
-      "title": "short lesson title",
+      "title": "short title",
       "subtitle": "short subtitle",
-      "audience": "general or a more specific audience",
+      "audience": "general or specific audience",
       "scenes": [
         {
           "id": 1,
           "type": "title_scene | question_scene | concept_scene | process_scene | comparison_scene | custom_manim_scene",
+          "learning_role": "intuition | definition | problem | formula | example | interpretation",
+          "learner_question": "what the learner should understand here",
+          "visual_mode": "diagram | graph | motion | comparison | process | text",
           "title": "short scene title",
-          "subtitle": "optional short subtitle",
-          "narration": "student-facing narration only",
-          "visual": "specific thing that should appear or change on screen",
-          "labels": ["2 to 5 short topic-specific labels"],
+          "subtitle": "optional",
+          "narration": "student-facing explanation",
+          "visual": "specific visible action or relationship",
+          "required_visual_elements": ["optional concrete element"],
+          "labels": ["optional labels for standard components only"],
+          "formula": "optional plain-text formula shown on screen",
+          "calculation_steps": ["optional explicit substitution", "simplification", "final answer"],
           "duration_sec": 12,
-          "formula": "optional plain-text formula or equation that must appear on screen",
-          "code_goal": "custom_manim_scene only: concrete animation goal",
-          "manim_body": "custom_manim_scene only: escaped Python construct-body code"
+          "code_goal": "custom scene only",
+          "manim_body": "custom scene only: escaped Python construct-body code"
         }
       ]
     }
 
-    Planning rules:
-    - Scene 1 must be title_scene.
-    - Choose the number and order of scenes based on the requested topic and scope.
-    - Standard scenes should use question_scene, concept_scene, process_scene, or comparison_scene.
-    - Use custom_manim_scene only when custom movement materially improves understanding.
-    - Normally use no more than two custom_manim_scene entries.
-    - Narration must sound like a teacher explaining the exact topic to students.
-    - Use topic-specific facts, labels, relationships, and examples. Avoid generic filler.
-    - If narration mentions a formula, equation, mathematical law, ratio, proportionality,
-      numerical relationship, or symbolic rule, include it in the scene's formula field.
-    - Never mention a formula only in narration. The formula must be visible on screen.
-    - Write formulas as readable plain Unicode text, for example F = G × (m₁ × m₂) / r².
-      Do not use LaTeX, Tex, or MathTex syntax.
-    - Labels must communicate actual subject content. Do not use generic labels such as
-      Equation, Formula, Concept, Process, Input, Output, Step, Result, or Example.
-    - Keep titles, subtitles, formulas, and labels short enough to fit on screen.
+    Teaching rules:
+    - Scene 1 is title_scene. Use the fewest scenes that teach the topic clearly.
+    - Teach meaning before notation. Define unfamiliar ideas and the problem a formula solves
+      before presenting or deriving it. Do not begin with derivation unless requested.
+    - Graph-related ideas must first show and explain the relevant graph feature, then connect it
+      to algebra. Every visual_mode="graph" scene must be custom_manim_scene.
+    - Example: for "explain quadratic formula," graph a quadratic and define roots as x-intercepts;
+      then introduce the formula, work one example, and mark the answers back on the graph.
+    - A worked math example must visibly show actual substitution, simplification, and final answer
+      in calculation_steps. Never use instructions such as "compute the roots" as a substitute.
+    - If narration uses a formula, include formula and show it. Use portable plain text such as
+      x = (-b +/- sqrt(b^2 - 4ac)) / (2a), not LaTeX or special math glyphs.
+    - labels are optional. Use them only when a standard component needs named parts. Never use
+      generic labels such as Concept, Equation, Step, Input, Output, Result, or Example.
+    - Use custom_manim_scene for graphs, geometric constructions, changing systems, or
+      topic-specific motion. Normally use no more than two custom scenes.
+    - Do not display internal names such as CONCEPT SCENE or PROCESS SCENE.
 
-    For every custom_manim_scene, include manim_body in this same JSON response.
-    manim_body is pasted inside GeneratedScene.construct(). The wrapper already provides:
-        scene, title, narration, labels, visual, formula, bg
-        label(text, size=26, color=mn.WHITE)
-        formula_label(text, size=30, color=mn.YELLOW)
-        wait_for_voiceover(tracker, used_time)
+    Every custom_manim_scene must include manim_body in this response.
+    The wrapper provides: scene, title, narration, labels, visual, formula, calculation_steps,
+    learning_role, learner_question, visual_mode, required_visual_elements, bg, label(...),
+    formula_label(...), calculation_step_label(...), and wait_for_voiceover(...).
 
-    Custom-body reliability rules:
-    - Return body statements only inside the JSON string. No imports, class, or def.
-    - Use mn. prefixes, for example mn.Circle, mn.Text, mn.LEFT.
-    - Use only simple primitives: mn.Text, mn.Circle, mn.Rectangle, mn.RoundedRectangle,
-      mn.Dot, mn.Line, mn.Arrow, mn.Arc, mn.VGroup, mn.NumberLine, and mn.Axes.
-    - No files, images, SVG, Tex, MathTex, network, random, external libraries, or system access.
-    - Include at least 2 with self.voiceover(text="...") blocks.
-    - Include at least 4 self.play calls total.
-    - Include real movement or change such as .animate, mn.Transform,
-      mn.ReplacementTransform, mn.MoveAlongPath, mn.GrowArrow, mn.Rotate, or mn.Create.
-    - If formula is non-empty, display it visibly with formula_label(formula) or mn.Text(formula).
-      Keep it on screen while the narration explains the relationship.
-    - Keep strings on one line and make every parenthesis and quote complete.
-    - Do not fade out every object at the end; the wrapper performs cleanup.
+    Custom-body rules:
+    - Body statements only. No imports, class, def, files, images, SVG, Tex, MathTex, network,
+      random, external libraries, eval, exec, or system access. Use mn. prefixes.
+    - Simple Manim objects are allowed, including Text, Circle, Rectangle, RoundedRectangle,
+      Dot, Line, DashedLine, Arrow, Arc, VGroup, NumberLine, Axes, and NumberPlane.
+    - Include at least 2 voiceover blocks, 4 self.play calls, and meaningful movement.
+    - For visual_mode="graph", create Axes or NumberPlane, draw/plot the relationship, and mark
+      the graph features named in required_visual_elements.
+    - For learning_role="example", visibly animate calculation_steps and emphasize the answer.
+    - If formula is present, display it with formula_label(formula) or mn.Text(formula).
+    - Keep strings on one line and close every quote, bracket, and parenthesis.
 
-    The complete response must be valid JSON and must not be truncated.
+    The JSON must be complete and not truncated.
 """)
 
 
 def build_structured_video_user_prompt(goal: str) -> str:
     return dedent(f"""\
-        Create a short educational video about:
+        Create a concise educational video about:
         {goal}
 
-        Decide the appropriate number of scenes and return the complete JSON video object.
-        Include manim_body inside any custom_manim_scene in this same response.
-        Whenever the explanation uses math or a formula, include a visible formula field.
+        Return the complete JSON object, including manim_body in every custom scene.
+    """).strip()
+
+
+STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = dedent("""\
+    Repair one educational-video JSON plan. Return complete valid JSON only.
+    Keep good material and make the smallest changes needed to satisfy the listed errors.
+    A graph scene must be custom Manim with real axes/number plane, a plotted or coordinate-based
+    relationship, and marked features. A worked math example must contain explicit
+    calculation_steps for substitution, simplification, and final answer. Keep meaning before
+    notation and preserve visible formulas. Include complete manim_body in every custom scene.
+""")
+
+
+def build_structured_video_plan_repair_prompt(*, plan: dict, errors: list[str]) -> str:
+    return dedent(f"""\
+        Plan:
+        {json.dumps(plan, ensure_ascii=True, separators=(",", ":"))}
+
+        Errors:
+        {json.dumps(errors, ensure_ascii=True)}
+
+        Return the complete repaired JSON object only.
     """).strip()
 
 
 STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
-    You edit one complete JSON video object for an educational Manim video.
-    Return ONLY valid JSON. No markdown, no commentary, and no Python outside JSON strings.
+    Edit one structured educational-video JSON object. Return complete valid JSON only.
+    You may add, remove, combine, split, or reorder scenes; do not force a scene count.
 
-    Keep the same schema used by the original object. You may add, remove, combine, split,
-    or reorder scenes when the user's edit requires it. Do not force a fixed scene count.
+    Preserve useful material and unaffected manim_body code. Keep scene 1 as title_scene.
+    Preserve or improve learning_role, learner_question, visual_mode, required_visual_elements,
+    formula, calculation_steps, and optional labels. Teach meaning before notation.
+    Every graph scene must be custom Manim and show the graph feature before algebra.
+    Every worked math example must visibly show substitution, simplification, and final answer.
 
-    Editing rules:
-    - Apply the user's request while preserving useful existing material.
-    - Scene 1 must remain title_scene.
-    - Preserve an existing custom scene's manim_body when that scene is not affected.
-    - When a custom scene changes, return its complete revised manim_body in the same JSON.
-    - Preserve existing formula fields unless the edit changes the underlying math.
-    - Add or correct formula whenever edited narration mentions an equation, mathematical law,
-      ratio, proportionality, numerical relationship, or symbolic rule.
-    - Keep formula, narration, labels, and custom manim_body synchronized.
-    - Never mention a formula only in narration; it must remain visible on screen.
-    - Use custom_manim_scene only where custom motion materially improves the explanation.
-    - Keep narration student-facing, factual, topic-specific, and concise.
-
-    Custom manim_body uses the same provided wrapper and restrictions as generation:
-    body statements only; mn. prefixes; simple primitives; no imports, files, images,
-    SVG, Tex, MathTex, network, random, or system access; at least 2 voiceover blocks;
-    at least 4 self.play calls; meaningful movement; and visible formula text whenever
-    the scene's formula field is non-empty.
+    Revised custom code follows the generation rules: body statements only, mn. prefixes,
+    simple primitives, no external access, at least 2 voiceovers and 4 plays, meaningful motion,
+    visible formulas, visible calculation steps, and a real graph when visual_mode is graph.
 """)
 
 
 def build_structured_video_edit_user_prompt(original_plan: dict, edit_instructions: str) -> str:
     return dedent(f"""\
-        Original JSON video object:
-        {json.dumps(original_plan, ensure_ascii=True, indent=2)}
+        Original video object:
+        {json.dumps(original_plan, ensure_ascii=True, separators=(",", ":"))}
 
-        User edit request:
+        Edit request:
         {edit_instructions}
 
-        Return the complete edited JSON video object only.
-        Preserve unaffected manim_body code and revise affected custom code in this same response.
+        Return the complete edited JSON object only.
     """).strip()
 
 
 STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = dedent("""\
-    You repair one Manim construct-body for an existing educational scene.
-    Return ONLY corrected Python body statements. No markdown, imports, class, def, or explanation.
+    Repair one Manim construct-body. Return corrected Python body statements only.
+    Preserve the teaching goal and make the smallest useful correction.
 
-    The body is pasted inside GeneratedScene.construct(). The wrapper already provides:
-        scene, title, narration, labels, visual, formula, bg
-        label(text, size=26, color=mn.WHITE)
-        formula_label(text, size=30, color=mn.YELLOW)
-        wait_for_voiceover(tracker, used_time)
+    The wrapper provides: scene, title, narration, labels, visual, formula, calculation_steps,
+    learning_role, learner_question, visual_mode, required_visual_elements, bg, label(...),
+    formula_label(...), calculation_step_label(...), and wait_for_voiceover(...).
 
-    Make the smallest useful correction that preserves the scene's educational goal and visual idea.
-
-    Hard rules:
-    - Use mn. prefixes.
-    - Use only mn.Text, mn.Circle, mn.Rectangle, mn.RoundedRectangle, mn.Dot,
-      mn.Line, mn.Arrow, mn.Arc, mn.VGroup, mn.NumberLine, and mn.Axes.
-    - No imports, files, images, SVG, Tex, MathTex, network, random, external libraries,
-      eval, exec, subprocess, os, pathlib, or system access.
-    - Include at least 2 with self.voiceover(text="...") blocks.
-    - Include at least 4 self.play calls total.
-    - Include meaningful movement or transformation.
-    - If formula is non-empty, display it using formula_label(formula) or mn.Text(formula).
-      Do not use Tex or MathTex.
-    - Keep strings on one line. Close every quote, bracket, and parenthesis.
-    - Do not fade out everything at the end; the wrapper performs cleanup.
+    Use mn. prefixes and simple primitives. No imports, class, def, files, images, SVG, Tex,
+    MathTex, network, random, external libraries, eval, exec, or system access. Include at least
+    2 voiceover blocks, 4 self.play calls, and meaningful movement. For a graph scene, create
+    Axes or NumberPlane, draw/plot the relationship, and visibly mark the required features.
+    For a worked example, visibly animate calculation_steps and emphasize the final answer.
+    Display formula when present. Close every quote, bracket, and parenthesis.
 """)
 
 
@@ -164,207 +161,132 @@ def build_structured_video_creative_repair_prompt(
     error_detail: str,
 ) -> str:
     return dedent(f"""\
-        Scene object:
-        {json.dumps(scene, ensure_ascii=True, indent=2)}
-
+        Scene: {json.dumps(scene, ensure_ascii=True, separators=(",", ":"))}
         Failure stage: {failure_stage}
+        Error: {error_detail}
 
-        Validation or Manim error:
-        {error_detail}
-
-        Original construct-body:
+        Original body:
         {original_body}
 
-        Repair this one body so it satisfies all rules and renders in the provided wrapper.
-        Return body statements only.
+        Return the repaired body statements only.
     """).strip()
 
 
 # -------- WIDGET PROMPTS --------
 
 WIDGET_SYSTEM = dedent("""\
-    You generate self-contained interactive educational HTML widgets.
-    Output ONLY a complete HTML document. No markdown, no backticks, no explanation.
+    Create one self-contained interactive educational HTML widget.
+    Return ONLY a complete HTML document. No markdown or explanation.
 
-    This widget runs in a sandboxed iframe inside a desktop app. It must be robust.
+    Core rule: build the smallest working interaction that teaches one important idea.
+    Complexity is a failure unless the concept truly requires it.
 
-    Primary teaching goal:
-    - Make the learner DO the concept, not just watch an animation.
-    - The widget must be visibly about the exact requested topic. Do not return a generic "concept lab" or abstract motion demo.
-    - Every widget must have ONE obvious primary student action.
-    - If the concept involves moving, sorting, stacking, comparing, choosing, balancing, graphing, testing, or solving a puzzle,
-      the learner must directly manipulate the main visual objects by clicking, dragging, selecting, or changing a meaningful input.
-    - Step, Hint, Auto, Play, Animate, and Solve buttons are allowed only as helpers. They must not be the only interaction.
+    Teaching design:
+    - Identify one clear learning objective and one obvious learner action.
+    - Make the widget visibly specific to the requested topic; never make a generic concept lab.
+    - Give a short instruction, immediate meaningful feedback, and one brief "Try this" or
+      "What to notice" prompt.
+    - Silently choose the simplest fitting pattern: manipulate, test, classify, sequence,
+      compare, graph, or puzzle. Use one pattern unless a second is essential.
+    - The learner should do or test the concept, not merely watch an animation.
+    - Helper buttons such as Hint, Step, Play, or Solve may support the main interaction,
+      but must not replace it.
 
-    Hard requirements:
-    1) Return a complete HTML document:
-       - Starts with <!DOCTYPE html>
-       - Contains <html>, <head>, <body>, and closing </html>
+    Simplicity rules:
+    - Do not build a dashboard by default.
+    - Do not add decorative metrics, extra sliders, tabs, legends, or animations.
+    - Prefer ordinary DOM elements for choices, inputs, cards, sequencing, and feedback.
+    - Use a small SVG for diagrams or graphs. Use canvas only when drawing, motion, or
+      direct manipulation truly benefits from it.
+    - Use at most two primary controls unless a rule-based puzzle genuinely needs more.
+    - Use requestAnimationFrame only for continuous animation; ordinary interactions should
+      update only when the learner acts.
 
-    2) Technology constraints:
-       - Vanilla HTML/CSS/JS only (no React, no build tools, no TypeScript).
-       - No external scripts/styles/fonts/images/CDNs.
-       - No external stylesheet links (<link rel="stylesheet" href="...">) and no CSS @import.
-       - No fetch/XMLHttpRequest/WebSocket.
-       - No localStorage/sessionStorage/cookies/indexedDB.
-       - No window.top/window.parent assumptions.
-
-    3) Teaching-first UI structure:
-       - Two-column layout: left = main visualization area (canvas or SVG), right = control panel.
-       - Control panel sections:
-         a) "Goal" or one short concept explanation line.
-         b) "Live Data" section with 2-3 relevant readouts.
-         c) "Controls" section with 2-4 visible controls.
-         d) "Try this" or "What to notice" prompt.
-         e) One status/insight line that changes after learner actions.
-       - Keep the layout simple. Fewer controls are better when the primary interaction is clear.
-       - Controls must be visible in the initial viewport.
-
-    4) Functional interactivity:
-       - Use addEventListener.
-       - The primary learner action must update the model state AND redraw the visualization.
-       - The learner must be able to make a choice, test a move, or manipulate the concept manually.
-       - Provide feedback after actions, especially illegal/wrong moves.
-       - If using canvas interactions, attach click/pointer/mouse events to the canvas and use getBoundingClientRect() for coordinates.
-       - Use requestAnimationFrame for animation/redrawing when using canvas.
-       - The simulation must start with visible non-zero state, not an empty static canvas.
-       - Declare all const/let state variables before calling any function that draws, renders, updates, or animates.
-       - resizeCanvas()/fit() may size the canvas early only if it does NOT call draw/render/update before state initialization.
-       - Avoid temporal-dead-zone bugs such as calling drawPenguin() before const penguin/let penguin exists.
-
-    5) Puzzle/direct-manipulation examples:
-       - Towers of Hanoi: learner must click/drag a top disk, then click a target peg; reject illegal moves; count moves; compare to 2^n - 1.
-       - Sorting: learner must drag/swap items or step through comparisons, not only watch an animation.
-       - Physics/biology systems: learner must change meaningful variables and see cause/effect.
-       - Math/concepts: learner must test examples and receive feedback, not just read text.
-
-    6) Styling:
-       - Use one <style> block in <head>.
-       - Use one <script> block near end of <body>.
-       - Make it polished but calm: readable labels, good contrast, clear affordances.
-       - Do not place invisible overlays that block pointer events.
-
-    7) Complexity limits:
-       - Max 1 canvas.
-       - Keep code compact and maintainable.
-       - Avoid giant datasets and long hardcoded tables.
-       - Prefer one strong interaction over many weak controls.
-
-    Completeness rules:
-    - Do not truncate output.
-    - Close all tags.
-    - Close all functions/objects/arrays/conditionals.
-    - End cleanly with </script>, </body>, </html>.
-    - If the concept is too complex, deliver a simplified but fully working manipulable version.
-
-    Required HTML skeleton:
-    <body>
-      <div class="wrapper">
-        <div class="viz-col" id="viz-col">
-          <canvas id="sim-canvas"></canvas>
-        </div>
-        <div class="panel-col">
-          <h2 class="panel-title">...</h2>
-          <p class="concept-line">...</p>
-          <div class="section-label">LIVE DATA</div>
-          ...
-          <div class="section-label">CONTROLS</div>
-          ...
-          <div class="insight-box" id="insight">...</div>
-        </div>
-      </div>
-      <script>
-        window.addEventListener('DOMContentLoaded', () => {
-          const vizCol = document.getElementById('viz-col');
-          const canvas = document.getElementById('sim-canvas');
-          canvas.width = vizCol.clientWidth;
-          canvas.height = vizCol.clientHeight;
-          canvas.addEventListener('click', (event) => {
-            const rect = canvas.getBoundingClientRect();
-            // map pointer to concept action; update state; redraw
-          });
-          // initialize non-zero simulation state
-          // start requestAnimationFrame loop here
-        });
-      </script>
-    </body>
+    Technical requirements:
+    - Full HTML document beginning with <!DOCTYPE html> and ending with </html>.
+    - Vanilla HTML, CSS, and JavaScript only.
+    - One inline <style> block and one inline <script> block.
+    - No external scripts, styles, fonts, images, CDNs, fetch, storage, cookies, network,
+      window.parent, or window.top.
+    - Use addEventListener for the primary learner action.
+    - The action must visibly update the activity, result, feedback, or visualization.
+    - Start with useful visible content; never show an empty canvas or blank activity.
+    - For canvas pointer coordinates, use getBoundingClientRect().
+    - Declare all const/let state before the first draw, render, update, or animation call.
+    - Keep code compact, close every tag/function/object, and avoid large datasets.
+    - If the requested concept is broad, teach one foundational part well rather than making
+      a large but confusing simulation.
 """)
 
 
 def build_widget_user_prompt(topic: str) -> str:
     return dedent(f"""\
-        Create an interactive educational widget for: {topic}
-
-        Design target: simple, teacher-ready, hands-on learning widget.
+        Topic: {topic}
         Audience: middle/high school learners.
 
-        Requirements:
-        - Make the topic visible in the title, visual labels, live data, and feedback.
-        - Never use generic labels like Primary factor, Secondary factor, Response, Stability, or Concept Lab unless the topic explicitly asks for generic systems.
-        - Identify the ONE main thing the learner should understand.
-        - Build ONE primary student action that directly manipulates the visual concept.
-        - Do not rely only on Auto, Step, Play, Animate, or Solve buttons.
-        - Include a short "Try this" task and a "What to notice" explanation.
-        - Include live data/readouts that are directly meaningful.
-        - Include feedback after learner actions, especially mistakes or illegal moves.
-        - Use a left visualization panel and right control panel.
-        - Canvas must be sized in DOMContentLoaded and redraw/update after interaction.
-        - Declare state first, then call initial draw/render/update. Do not call resizeCanvas() early if it triggers draw before state exists.
-        - The result must run on first load in a sandboxed iframe.
+        Create a simple, teacher-ready widget with one learning objective, one main learner
+        action, immediate topic-specific feedback, and one short thing to try or notice.
+        Choose the least complex interaction that makes the idea clearer than text alone.
 
-        If the topic is Towers of Hanoi:
-        - The learner must manually move disks by clicking a source peg/disk and then a target peg.
-        - Only top disks may move.
-        - Illegal larger-on-smaller moves must be rejected with feedback.
-        - Show moves made, optimal minimum moves = 2^n - 1, and selected disk/peg.
-        - Hint/Step/Auto Solve may be included, but manual play must be the primary interaction.
+        Output ONLY the complete HTML document.
+    """).strip()
 
-        Output ONLY the HTML document.
+
+WIDGET_SIMPLE_FALLBACK_SYSTEM = dedent("""\
+    Create a very small, reliable educational HTML widget from scratch.
+    Return ONLY a complete standalone HTML document. No markdown or explanation.
+
+    This is a fallback after a more ambitious widget failed. Do not repair or imitate the
+    failed implementation. Make a simpler version of the same teaching idea.
+
+    Requirements:
+    - Teach one foundational idea with one obvious learner action.
+    - Use one visual/activity area, one short instruction, and one feedback message.
+    - Use at most two controls.
+    - Prefer buttons, choices, text/number input, movable DOM cards, or a small SVG.
+    - Use canvas only if drawing is essential. Do not use requestAnimationFrame unless
+      continuous motion is essential.
+    - No dashboard, decorative metrics, multiple panels, large datasets, or extra features.
+    - Use vanilla HTML/CSS/JS, inline style/script, addEventListener, and no external assets,
+      network, storage, or parent-window access.
+    - Start in a useful visible state and close all HTML and JavaScript cleanly.
+""")
+
+
+def build_widget_simple_fallback_user_prompt(*, topic: str, reason: str | None = None) -> str:
+    reason_line = f"Earlier attempt failed: {reason[:300]}\n" if reason else ""
+    return dedent(f"""\
+        Topic: {topic}
+        {reason_line}
+        Build the smallest useful interactive explanation of this topic.
+        Return ONLY the complete HTML document.
     """).strip()
 
 
 WIDGET_EDIT_SYSTEM = dedent("""\
-    You revise existing self-contained interactive educational HTML widgets.
-    Output ONLY a complete HTML document. No markdown, no backticks, no explanation.
+    Revise an existing self-contained educational HTML widget.
+    Return ONLY the complete revised HTML document. No markdown or explanation.
 
-    Core editing rule:
-    - Revise the existing widget; do NOT create a different widget from scratch.
-    - Preserve the original topic, layout, visual metaphor, control names, live data, CSS style, and JavaScript behavior unless the edit instructions explicitly ask to change them.
-    - Make the smallest useful change that satisfies the edit instructions.
+    Preserve the topic, useful visual metaphor, main learner action, style, and working code
+    unless the edit request requires a change. Make the smallest useful revision.
+    Keep one clear learning objective and immediate feedback. Do not add a dashboard,
+    decorative metrics, extra controls, or continuous animation unless requested or necessary.
 
-    Functional preservation rules:
-    - The main student action must still work after editing.
-    - If the widget is a puzzle/game/manipulation, preserve or add direct object manipulation with click/pointer/drag events on the canvas/SVG.
-    - Do not replace direct interaction with only Auto, Step, Play, Animate, or Solve buttons.
-    - Keep feedback after learner actions, including invalid choices.
-    - Keep or improve the "Try this" / "What to notice" teaching guidance.
-
-    Hard requirements:
-    1) Return a complete HTML document with <!DOCTYPE html>, <html>, <head>, <body>, and closing </html>.
-    2) Vanilla HTML/CSS/JS only; no React, no TypeScript, no external scripts/styles/fonts/images/CDNs.
-    3) No fetch/XMLHttpRequest/WebSocket and no localStorage/sessionStorage/cookies/indexedDB.
-    4) Keep it runnable inside a sandboxed iframe.
-    5) Keep the existing interactive controls working. Use addEventListener.
-    6) Preserve or improve the existing canvas/SVG visualization. Do not remove the visualization.
-    7) Preserve or improve live metrics/readouts. Do not remove them.
-    8) Close all tags, functions, objects, arrays, and scripts.
+    Keep it self-contained vanilla HTML/CSS/JS with no external assets, network, storage,
+    or parent-window access. Use addEventListener and ensure the primary action still visibly
+    changes the activity or feedback. Close all tags and scripts.
 """)
 
 
 def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str, original_title: str | None) -> str:
-    title = original_title or "Existing widget"
     return dedent(f"""\
-        Original widget title: {title}
+        Existing widget: {original_title or 'Interactive widget'}
+        Edit request: {edit_instructions.strip()}
 
-        Edit instructions:
-        {edit_instructions.strip()}
+        Revise the existing source below. Preserve unaffected behavior and keep the result
+        simple, pedagogically coherent, and fully interactive.
 
-        Revise the existing widget source below.
-        Keep the same widget unless the instructions explicitly ask for a different concept.
-        Preserve the working interaction model.
-        If the widget involves moving, stacking, sorting, choosing, graphing, testing, or solving, the learner must still be able to manipulate the main visual objects manually.
-
-        Original complete widget HTML to revise:
+        Original HTML:
         {original_html}
 
         Return ONLY the revised complete HTML document.
@@ -372,79 +294,71 @@ def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str,
 
 
 WIDGET_REPAIR_SYSTEM = dedent("""\
-    You repair an interactive educational widget HTML document.
-    Return ONLY fixed complete HTML. No markdown, no backticks, no explanation.
-    Preserve the original topic, edited intent, visual metaphor, and behavior.
-    Do not replace it with a different widget.
-    Ensure the primary learner action is functional, not just an Auto/Step animation.
+    Repair one self-contained educational HTML widget.
+    Return ONLY the fixed complete HTML document. No markdown or explanation.
+
+    Fix the reported defect with the smallest useful change. Preserve the topic, learning
+    objective, main interaction, and visual approach when possible. Do not expand the widget
+    into a dashboard or add controls, metrics, canvas, or animation merely to satisfy repair.
+
+    The repaired widget must use vanilla HTML/CSS/JS, addEventListener, visible feedback or
+    state change after the learner acts, no external assets/network/storage, safe initialization
+    order, and complete closing tags.
 """)
 
 
 def build_widget_repair_user_prompt(*, original_title: str | None, edit_instructions: str, prior_html: str, reason: str) -> str:
     return dedent(f"""\
-        Widget failed validation: {reason}
+        Widget/topic: {original_title or 'Interactive widget'}
+        Intended change or context: {edit_instructions}
+        Validation failure: {reason}
 
-        Original title: {original_title or 'Existing widget'}
-        Instructions/context: {edit_instructions}
-
-        Fix the HTML so it is complete, self-contained, interactive, and teacher-ready.
-        Do not replace it with a different widget.
-
-        Functional requirements:
-        - Preserve or add the main manual student interaction.
-        - If this is a puzzle/game/direct manipulation widget, learner must click/pointer/drag the visual objects themselves.
-        - Step/Hint/Auto buttons are allowed only as helpers.
-        - Add clear feedback for illegal or incorrect actions.
-        - Include a short Try this / What to notice teaching prompt.
-        - Fix JavaScript initialization order: declare all const/let state objects before any initial draw/render/update call.
-        - resizeCanvas()/fit() must not trigger draw before state variables exist.
+        Repair the HTML below. Keep the same educational activity and fix only what is needed.
+        If the design is too complex to repair safely, simplify it while preserving the central
+        learner action and topic-specific feedback.
 
         HTML to repair:
         {prior_html}
 
-        Return ONLY corrected full HTML.
+        Return ONLY corrected complete HTML.
     """).strip()
 
 
+# Final emergency fallback spec. The normal fallback is a fresh simple HTML call above.
 WIDGET_FALLBACK_SPEC_SYSTEM = dedent("""\
-    You create compact JSON specs for a simple topic-specific teaching widget.
-    Return ONLY valid JSON. No markdown, no code fences, no comments.
+    Create compact JSON for a last-resort topic-specific teaching widget.
+    Return ONLY valid JSON. No markdown, code fences, or comments.
 
-    The backend will render the HTML. Do not write HTML or JavaScript.
-    Make the fallback visibly about the requested topic, not a generic concept lab.
+    The backend renders the HTML. Use real topic variables and avoid generic concept-lab labels.
 
     JSON schema:
     {
       "title": "short topic-specific title",
       "concept_line": "one sentence explaining what the learner explores",
-      "visual_items": ["3 to 5 short labels for objects shown in the canvas"],
+      "visual_items": ["3 to 5 short topic-specific labels"],
       "controls": [
         {"label": "meaningful variable", "min": 0, "max": 100, "step": 1, "value": 50, "low_label": "low meaning", "high_label": "high meaning"}
       ],
       "metrics": [
         {"label": "topic-specific result", "unit": "short unit or blank"}
       ],
-      "try_this": "one concrete student task",
-      "notice": "one short what-to-notice explanation",
-      "low_insight": "feedback when controls are low",
-      "high_insight": "feedback when controls are high"
+      "try_this": "one concrete learner task",
+      "notice": "one short observation",
+      "low_insight": "feedback when settings are low",
+      "high_insight": "feedback when settings are high"
     }
 
-    Rules:
-    - Exactly 3 controls and exactly 3 metrics.
-    - Labels must name the topic's real variables or features.
-    - Avoid generic labels like Primary factor, Secondary factor, Response, Stability, or Concept Lab.
-    - Keep the JSON small: each sentence under 24 words.
+    Return exactly 3 controls and 3 metrics because the emergency renderer requires them.
+    Keep each sentence under 24 words.
 """)
 
 
 def build_widget_fallback_spec_user_prompt(*, topic: str, reason: str | None = None) -> str:
-    reason_line = f"Previous custom HTML failed: {reason}\n" if reason else ""
+    reason_line = f"Earlier HTML fallbacks failed: {reason}\n" if reason else ""
     return dedent(f"""\
         Topic: {topic}
         {reason_line}
-        Create the compact JSON widget spec only.
-        The fallback should be simpler than a custom widget but still useful for teachers and students.
+        Create the small emergency JSON spec only.
     """).strip()
 
 

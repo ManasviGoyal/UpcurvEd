@@ -7,20 +7,24 @@ const BASE_STYLE = `
   html, body {
     margin: 0;
     padding: 0;
+    min-height: 100%;
     background: #ffffff;
-    color: #e5e7eb;
+    color: #111827;
     font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   body {
     box-sizing: border-box;
+    min-height: 100vh;
   }
   *, *::before, *::after {
     box-sizing: border-box;
   }
-  button, input, select, textarea, canvas, label, a {
+  button, input, select, textarea, canvas, label, a, [role="button"], [draggable="true"] {
     pointer-events: auto;
   }
-  img, svg { max-width: 100%; }
+  img, svg, canvas {
+    max-width: 100%;
+  }
   #upcurved-widget-error {
     display: none;
     position: fixed;
@@ -47,7 +51,7 @@ const ERROR_BRIDGE = `
     if (!el) {
       el = document.createElement('pre');
       el.id = 'upcurved-widget-error';
-      document.body.appendChild(el);
+      (document.body || document.documentElement).appendChild(el);
     }
     return el;
   };
@@ -85,7 +89,9 @@ window.addEventListener('load', () => {
     const parent = c.parentElement;
     if (!parent || parent.clientWidth <= 0) return;
     c.width = parent.clientWidth;
-    c.height = parent.clientHeight > 0 ? parent.clientHeight : Math.round(parent.clientWidth * 0.6);
+    c.height = parent.clientHeight > 0
+      ? parent.clientHeight
+      : Math.round(parent.clientWidth * 0.6);
     window.dispatchEvent(new Event('resize'));
   });
 });

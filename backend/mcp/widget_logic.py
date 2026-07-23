@@ -14,10 +14,12 @@ from backend.agent.prompts import (
     WIDGET_EDIT_SYSTEM,
     WIDGET_FALLBACK_SPEC_SYSTEM,
     WIDGET_REPAIR_SYSTEM,
+    WIDGET_SIMPLE_FALLBACK_SYSTEM,
     WIDGET_SYSTEM,
     build_widget_edit_user_prompt,
     build_widget_fallback_spec_user_prompt,
     build_widget_repair_user_prompt,
+    build_widget_simple_fallback_user_prompt,
     build_widget_user_prompt,
 )
 from backend.utils import app_logging  # noqa: F401
@@ -92,8 +94,19 @@ def _extract_html(raw: str) -> str:
 
 
 def _count_control_elements(html: str) -> int:
-    matches = re.findall(r"<(?:button|input|select)\b", html, flags=re.IGNORECASE)
+    matches = re.findall(
+        r"<(?:button|input|select|textarea)\b|\bcontenteditable\s*=|\bdraggable\s*=",
+        html,
+        flags=re.IGNORECASE,
+    )
     return len(matches)
+
+
+def _visible_text_length(html: str) -> int:
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return len(re.sub(r"\s+", " ", text).strip())
 
 
 def _extract_script_blocks(html: str) -> list[str]:
@@ -137,6 +150,66 @@ def _function_body(script: str, name: str) -> str | None:
     return script[open_pos + 1 : close_pos]
 
 
+def _enclosing_block_end(text: str, pos: int) -> int:
+    """Return the closing brace for the block containing pos, or len(text)."""
+    stack: list[int] = []
+    quote: str | None = None
+    escaped = False
+    i = 0
+    while i < min(pos, len(text)):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"', '`'):
+            quote = ch
+        elif ch == "{":
+            stack.append(i)
+        elif ch == "}" and stack:
+            stack.pop()
+        i += 1
+    if not stack:
+        return len(text)
+    close_pos = _find_matching_brace(text, stack[-1])
+    return close_pos if close_pos >= 0 else len(text)
+
+
+def _same_block_has_state_declaration(text: str) -> bool:
+    """Find const/let declarations while ignoring nested brace blocks."""
+    visible: list[str] = []
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for ch in text:
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            visible.append(" " if depth else ch)
+            continue
+        if ch in ("'", '"', '`'):
+            quote = ch
+            visible.append(ch if depth == 0 else " ")
+        elif ch == "{":
+            depth += 1
+            visible.append(" ")
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            visible.append(" ")
+        else:
+            visible.append(ch if depth == 0 else " ")
+    return bool(re.search(r"\b(?:const|let)\s+[A-Za-z_$][\w$]*", "".join(visible)))
+
+
 def _detect_unsafe_initial_draw_order(html: str) -> str | None:
     """Catch a common generated-widget runtime bug.
 
@@ -158,7 +231,8 @@ def _detect_unsafe_initial_draw_order(html: str) -> str | None:
             name = call.group(1)
             if name in {"update", "draw", "render", "redraw", "animate"}:
                 # Calling a drawing/update loop before later state declarations is unsafe.
-                if re.search(r"\b(?:const|let)\s+[A-Za-z_$][\w$]*", script[call.end() :]):
+                block_end = _enclosing_block_end(script, call.end())
+                if _same_block_has_state_declaration(script[call.end() : block_end]):
                     return f"initial {name}() call occurs before later state declarations"
                 continue
             if name.lower() not in {"fit", "resize", "resizecanvas", "sizecanvas", "initcanvas"}:
@@ -168,7 +242,8 @@ def _detect_unsafe_initial_draw_order(html: str) -> str | None:
                 continue
             if not re.search(r"\b(draw|render|redraw|update|animate)\s*\(", body):
                 continue
-            if re.search(r"\b(?:const|let)\s+[A-Za-z_$][\w$]*", script[call.end() :]):
+            block_end = _enclosing_block_end(script, call.end())
+            if _same_block_has_state_declaration(script[call.end() : block_end]):
                 return (
                     f"{name}() calls draw/render/update before later state variables are initialized; "
                     "move the initial call after all state declarations or make resize only size the canvas"
@@ -186,21 +261,23 @@ def _validate_widget_html(html: str) -> tuple[bool, str]:
         return False, "missing full html document structure"
     if "<script" not in low:
         return False, "missing script block"
-    if not ("<canvas" in low or "<svg" in low):
-        return False, "missing visualization surface (canvas or svg)"
-    if "domcontentloaded" not in low:
-        return False, "missing DOMContentLoaded initialization"
+    if "</body>" not in low or "</html>" not in low:
+        return False, "incomplete html document"
+    if re.search(r"<script\b[^>]*\bsrc\s*=", low):
+        return False, "contains forbidden external script source"
     if "<link" in low and "stylesheet" in low:
         return False, "contains forbidden stylesheet link tag"
     if "@import" in low:
         return False, "contains forbidden CSS @import"
+    if any(token in low for token in ("fetch(", "xmlhttprequest", "websocket(", "localstorage", "sessionstorage")):
+        return False, "contains forbidden network or storage access"
+    if _visible_text_length(html) < 24:
+        return False, "missing meaningful visible teaching content"
 
     init_order_reason = _detect_unsafe_initial_draw_order(html)
     if init_order_reason:
         return False, init_order_reason
 
-    # Reject the old generic safety fallback. It is technically interactive but
-    # not topic-specific enough for teacher/student use.
     generic_markers = (
         "interactive concept lab",
         "primary factor",
@@ -212,28 +289,64 @@ def _validate_widget_html(html: str) -> tuple[bool, str]:
     if sum(1 for marker in generic_markers if marker in low) >= 3:
         return False, "generic fallback widget is not topic-specific"
 
-    control_count = _count_control_elements(html)
+    event_names = (
+        "click",
+        "pointerdown",
+        "pointermove",
+        "pointerup",
+        "mousedown",
+        "mousemove",
+        "mouseup",
+        "dragstart",
+        "dragover",
+        "drop",
+        "input",
+        "change",
+        "submit",
+        "keydown",
+        "touchstart",
+    )
     has_event_listener = "addeventlistener" in low and any(
-        event in low
-        for event in (
-            "click",
-            "pointerdown",
-            "pointermove",
-            "mousedown",
-            "mousemove",
-            "drag",
-            "input",
-            "change",
+        re.search(rf"[\"']{event}[\"']", low) for event in event_names
+    )
+    if not has_event_listener:
+        return False, "missing JavaScript event listener for a learner action"
+
+    control_count = _count_control_elements(html)
+    has_direct_visual_surface = "<canvas" in low or "<svg" in low
+    if control_count < 1 and not has_direct_visual_surface:
+        return False, "missing a visible learner interaction surface"
+
+    has_canvas = "<canvas" in low
+    has_svg = "<svg" in low
+    if has_canvas and "getcontext" not in low:
+        return False, "canvas is present but no drawing context is created"
+
+    has_dom_state_change = bool(
+        re.search(
+            r"\.(?:textcontent|innertext|innerhtml|classlist|style|hidden|value|checked|dataset)\b"
+            r"|\b(?:setattribute|appendchild|replacechildren|removechild|insertadjacenthtml)\s*\(",
+            low,
         )
     )
-    has_animation_or_redraw = "requestanimationframe" in low or re.search(r"\b(draw|render|redraw|update)\s*\(", low)
+    has_draw_or_render = bool(
+        re.search(r"\b(?:draw|render|redraw|update|plot|paint)\s*\(", low)
+        or "requestanimationframe" in low
+        or (has_svg and "setattribute" in low)
+    )
+    has_feedback_target = bool(
+        re.search(
+            r"(?:id|class)\s*=\s*[\"'][^\"']*(?:feedback|status|insight|result|message|notice|explanation)",
+            low,
+        )
+        or "<output" in low
+        or "aria-live" in low
+    )
 
-    if control_count < 1 and not has_event_listener:
-        return False, "missing learner interaction"
-    if not has_event_listener:
-        return False, "missing JavaScript event listeners for learner actions"
-    if not has_animation_or_redraw:
-        return False, "missing redraw/update path after interaction"
+    if not (has_dom_state_change or has_draw_or_render or has_feedback_target):
+        return False, "learner action has no visible feedback or state update"
+    if has_canvas and not has_draw_or_render:
+        return False, "canvas widget has no draw/render update path"
 
     return True, ""
 
@@ -247,75 +360,45 @@ def _repair_widget_html(
     prior_html: str,
     reason: str,
 ) -> str:
-    repair_system = (
-        "You repair interactive HTML simulations. "
-        "Return ONLY fixed full HTML document. No markdown."
-    )
-    repair_user = (
-        f"The previous widget for topic '{topic}' failed validation: {reason}.\n\n"
-        "Fix it so it has:\n"
-        "- visible animated visualization (canvas or svg) on load\n"
-        "- right-side controls panel with >=3 controls\n"
-        "- live metrics that update\n"
-        "- requestAnimationFrame loop\n"
-        "- no external scripts, no <link rel='stylesheet'>, no @import\n\n"
-        "Previous HTML:\n"
-        f"{prior_html}\n\n"
-        "Return ONLY corrected full HTML."
-    )
     fixed_raw = call_llm(
         provider=provider,
         api_key=api_key,
         model=model,
-        system=repair_system,
-        user=repair_user,
-        temperature=0.1,
-        max_tokens=6000,
-        max_output_tokens=6000,
+        system=WIDGET_REPAIR_SYSTEM,
+        user=build_widget_repair_user_prompt(
+            original_title=topic,
+            edit_instructions=f"Create a working educational widget about {topic}",
+            prior_html=prior_html,
+            reason=reason,
+        ),
+        temperature=0.05,
+        max_tokens=5000,
+        max_output_tokens=5000,
     )
     return _extract_html(fixed_raw)
 
 
-def _retry_widget_html(
+def _generate_simple_fallback_html(
     *,
     provider: str,
     api_key: str,
     model: str | None,
     topic: str,
     reason: str,
-    prior_html: str | None = None,
 ) -> str:
-    prior_html_section = (
-        "Previous HTML (possibly truncated):\n" + prior_html if prior_html else ""
-    )
-    retry_system = (
-        "You regenerate compact interactive HTML simulations. "
-        "Output ONLY complete HTML. Keep it shorter and fully closed."
-    )
-    retry_user = (
-        f"Topic: {topic}\n"
-        f"Previous attempt failed due to: {reason}\n\n"
-        "Return a SHORTER but still polished interactive simulation with:\n"
-        "- left canvas + right controls panel\n"
-        "- live metrics\n"
-        "- >=3 visible controls\n"
-        "- DOMContentLoaded init\n"
-        "- requestAnimationFrame loop\n"
-        "- no external assets, no link rel=stylesheet, no @import\n"
-        "- complete closing tags\n\n"
-        f"{prior_html_section}\n"
-        "Output ONLY full HTML."
-    )
+    """Generate a fresh, smaller widget without reusing failed HTML."""
     raw = call_llm(
         provider=provider,
         api_key=api_key,
         model=model,
-        system=retry_system,
-        user=retry_user,
-        temperature=0.1,
-        max_tokens=6000,
-        max_output_tokens=6000,
+        system=WIDGET_SIMPLE_FALLBACK_SYSTEM,
+        user=build_widget_simple_fallback_user_prompt(topic=topic, reason=reason),
+        temperature=0.05,
+        max_tokens=4200,
+        max_output_tokens=4200,
     )
+    if not raw or not raw.strip():
+        raise RuntimeError("LLM returned empty simple fallback widget.")
     return _extract_html(raw)
 
 
@@ -661,9 +744,10 @@ def generate_widget(
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
     logger.info("widget: calling LLM provider=%s model=%s", prov, model)
 
-    html = None
-    first_error = None
-    raw = ""
+    html: str | None = None
+    generation_path = "primary"
+    first_error: Exception | None = None
+
     try:
         raw = call_llm(
             provider=prov,
@@ -671,16 +755,17 @@ def generate_widget(
             model=model,
             system=WIDGET_SYSTEM,
             user=build_widget_user_prompt(prompt),
-            temperature=0.2,
-            max_tokens=6000,
-            max_output_tokens=6000,
+            temperature=0.15,
+            max_tokens=5000,
+            max_output_tokens=5000,
         )
         if not raw or not raw.strip():
             raise RuntimeError("LLM returned empty widget.")
+
         html = _extract_html(raw)
         ok, reason = _validate_widget_html(html)
         if not ok:
-            logger.warning("widget: validation failed (%s), attempting repair pass", reason)
+            logger.warning("widget: primary validation failed (%s); attempting targeted repair", reason)
             html = _repair_widget_html(
                 provider=prov,
                 api_key=api_key,
@@ -691,66 +776,68 @@ def generate_widget(
             )
             ok2, reason2 = _validate_widget_html(html)
             if not ok2:
-                raise RuntimeError(f"Widget failed validation after repair: {reason2}")
-    except Exception as e:
-        first_error = e
+                raise RuntimeError(f"Widget failed validation after targeted repair: {reason2}")
+            generation_path = "repaired_primary"
+
+    except Exception as exc:
+        first_error = exc
         logger.warning(
-            "widget: first generation failed (%s), attempting final compact retry",
-            e,
+            "widget: primary path failed (%s); generating a fresh simple fallback",
+            exc,
         )
         try:
-            retry_reason = str(e)
-            # Truncation failures should avoid sending huge prior HTML back; that often causes repeat truncation.
-            include_prior_html = "truncated" not in retry_reason.lower()
-            retry_errors: list[str] = []
-            for attempt_idx in range(1):
-                html = _retry_widget_html(
-                    provider=prov,
-                    api_key=api_key,
-                    model=model,
-                    topic=prompt,
-                    reason=f"{retry_reason} (retry {attempt_idx + 1}/1)",
-                    prior_html=(raw[:2500] if (raw and include_prior_html) else None),
-                )
-                ok3, reason3 = _validate_widget_html(html)
-                if ok3:
-                    break
-                retry_errors.append(reason3)
-                retry_reason = reason3
-                include_prior_html = False
-            else:
-                raise RuntimeError(
-                    "Final compact retry failed validation: " + "; ".join(retry_errors)
-                )
-        except Exception as e2:
-            logger.warning(
-                "widget: compact retry failed (%s); generating topic-specific JSON fallback",
-                e2,
+            html = _generate_simple_fallback_html(
+                provider=prov,
+                api_key=api_key,
+                model=model,
+                topic=prompt,
+                reason=str(exc),
             )
-            if os.environ.get("UPCURVED_WIDGET_DISABLE_JSON_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}:
+            ok3, reason3 = _validate_widget_html(html)
+            if not ok3:
+                raise RuntimeError(f"Simple fallback failed validation: {reason3}")
+            generation_path = "simple_llm_fallback"
+
+        except Exception as fallback_exc:
+            logger.warning(
+                "widget: simple fallback failed (%s); using emergency topic fallback",
+                fallback_exc,
+            )
+            if os.environ.get("UPCURVED_WIDGET_DISABLE_JSON_FALLBACK", "0").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }:
                 raise RuntimeError(
-                    "Widget generation failed after retry. The model returned incomplete, invalid, "
-                    "or non-topic-specific HTML. Try again or switch models."
-                ) from e2
+                    "Widget generation failed after the primary and simple fallback attempts. "
+                    "Try again or switch models."
+                ) from fallback_exc
 
             html = _topic_fallback_widget_html(
                 prompt,
                 provider=prov,
                 api_key=api_key,
                 model=model,
-                reason=str(e2),
+                reason=str(fallback_exc),
             )
             ok4, reason4 = _validate_widget_html(html)
             if not ok4:
-                if first_error:
-                    raise RuntimeError(f"Widget fallback invalid after generation error: {first_error}") from e2
-                raise RuntimeError(f"Widget fallback invalid: {reason4}") from e2
-
+                detail = str(first_error) if first_error else reason4
+                raise RuntimeError(
+                    f"Emergency widget fallback invalid after generation error: {detail}"
+                ) from fallback_exc
+            generation_path = "emergency_spec_fallback"
 
     assert html is not None
-    logger.info("widget: generated %d chars of HTML", len(html))
+    logger.info(
+        "widget: generated %d chars of HTML path=%s",
+        len(html),
+        generation_path,
+    )
 
     return {
         "status": "ok",
         "widget_html": html,
+        "generation_path": generation_path,
     }
+
