@@ -21,6 +21,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.provider_config import (
+    ProviderName,
+    get_provider_key as _get_provider_key,
+    merge_provider_keys as _provider_keys_with_env,
+    resolve_provider_model as _resolve_provider_model,
+)
 from backend.agent.minigraph import echo_manim_code
 from backend.agent.prompts import (
     STORY_EDIT_FULL_HTML_SYSTEM,
@@ -265,81 +271,6 @@ app.add_middleware(
 
 if not _get_bucket_name():
     app.mount("/static", StaticFiles(directory=str(STORAGE)), name="static")
-
-
-ProviderName = Literal["claude", "gemini", "openrouter"]
-
-_PROVIDER_ENV_KEYS = {
-    "claude": "ANTHROPIC_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
-
-
-def _default_openrouter_model() -> str:
-    """
-    Default to a specific free OpenRouter model for repeatable results.
-
-    Env precedence:
-    1. OPENROUTER_MODEL       -> any exact OpenRouter model ID
-    2. OPENROUTER_FREE_MODEL  -> backward-compatible old setting
-    3. nvidia/nemotron-3-ultra-550b-a55b:free
-    """
-    return (
-        os.environ.get("OPENROUTER_MODEL")
-        or os.environ.get("OPENROUTER_FREE_MODEL")
-        or "nvidia/nemotron-3-ultra-550b-a55b:free"
-    ).strip() or "nvidia/nemotron-3-ultra-550b-a55b:free"
-
-
-_DEFAULT_MODELS = {
-    "claude": "claude-haiku-4-5",
-    "gemini": "gemini-3-flash-preview",
-    "openrouter": _default_openrouter_model(),
-}
-
-
-def _provider_keys_with_env(keys: dict[str, str] | None) -> dict[str, str]:
-    merged = dict(keys or {})
-    for provider, env_name in _PROVIDER_ENV_KEYS.items():
-        if not merged.get(provider):
-            env_value = os.environ.get(env_name, "").strip()
-            if env_value:
-                merged[provider] = env_value
-    return merged
-
-
-def _get_provider_key(
-    provider: str | None,
-    keys: dict[str, str] | None,
-) -> str | None:
-    if not provider:
-        return None
-    return _provider_keys_with_env(keys).get(provider)
-
-
-def _resolve_provider_model(
-    keys: dict[str, str] | None,
-    provider: str | None,
-    model: str | None,
-    *,
-    default_provider: str | None = None,
-) -> tuple[str | None, str | None]:
-    provider_keys = _provider_keys_with_env(keys)
-    if not provider:
-        if provider_keys.get("gemini"):
-            provider = "gemini"
-        elif provider_keys.get("claude"):
-            provider = "claude"
-        elif provider_keys.get("openrouter"):
-            provider = "openrouter"
-        else:
-            provider = default_provider
-
-    if not model and provider in _DEFAULT_MODELS:
-        model = _DEFAULT_MODELS[provider]
-
-    return provider, model
 
 
 class GenerateIn(BaseModel):

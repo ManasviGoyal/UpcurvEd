@@ -10,6 +10,9 @@ import sys
 from typing import Any
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.provider_config import (
+    resolve_provider_and_key as _pick_provider_and_key,
+)
 from backend.agent.prompts import ARTIFACT_SAFETY_INSTRUCTION
 from backend.runner.job_runner import STORAGE, to_static_url
 
@@ -169,25 +172,6 @@ Constraints:
 STORY_DRAW_JS_SYSTEM = (
     f"{ARTIFACT_SAFETY_INSTRUCTION}\n\n{DRAW_JS_SYSTEM}"
 )
-
-
-def _pick_provider_and_key(
-    provider: str | None, provider_keys: dict[str, str] | None
-) -> tuple[str, str]:
-    keys = provider_keys or {}
-    prov = (provider or "").lower()
-    if prov in ("claude", "gemini", "openrouter"):
-        key = keys.get(prov) or ""
-        if not key:
-            raise RuntimeError(f"Missing API key for provider '{prov}'.")
-        return prov, key
-    if keys.get("claude"):
-        return "claude", keys["claude"]
-    if keys.get("gemini"):
-        return "gemini", keys["gemini"]
-    if keys.get("openrouter"):
-        return "openrouter", keys["openrouter"]
-    raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' or 'openrouter' key.")
 
 
 def _story_prompt(topic: str, host_character: str | None = None, theme: str | None = None) -> str:
@@ -527,9 +511,6 @@ def _generate_scene_draw_js(
     host_character: str | None = None,
     theme: str | None = None,
 ) -> str:
-    use_model = model
-    if not use_model and provider == "claude":
-        use_model = "claude-haiku-4-5"
     host_options = ", ".join(sorted(HOST_PRESETS.keys()))
     theme_options = ", ".join(sorted(THEME_PRESETS.keys()))
     bubble = _short_bubble(scene.get("speech_bubble"), str(scene.get("heading") or "Science idea"))
@@ -565,7 +546,7 @@ def _generate_scene_draw_js(
     raw = call_llm(
         provider=provider,  # type: ignore[arg-type]
         api_key=api_key,
-        model=use_model,
+        model=model,
         system=STORY_DRAW_JS_SYSTEM,
         user=user,
         temperature=0.25,
@@ -702,7 +683,7 @@ def _build_scene_template_html(
             const fs = fontSize || 16;
             const maxW = Math.min(w * 0.5, 280);
             ctx.font = '600 ' + fs + 'px Arial';
-            const words = String(text || '').split(/\s+/).filter(Boolean);
+            const words = String(text || '').split(/\\s+/).filter(Boolean);
             const lines = [];
             let line = '';
             for (const wd of words) {{
@@ -1350,7 +1331,7 @@ def _build_story_slider_html(
             const fs = fontSize || 16;
             const maxW = Math.min(w * 0.5, 280);
             ctx.font = '600 ' + fs + 'px Arial';
-            const words = String(text || '').split(/\s+/).filter(Boolean);
+            const words = String(text || '').split(/\\s+/).filter(Boolean);
             const lines = [];
             let line = '';
             for (const wd of words) {{

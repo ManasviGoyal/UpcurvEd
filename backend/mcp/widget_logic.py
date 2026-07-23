@@ -10,6 +10,9 @@ import re
 from html import escape
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.provider_config import (
+    resolve_provider_and_key as _pick_provider_and_key,
+)
 from backend.agent.prompts import (
     WIDGET_EDIT_SYSTEM,
     WIDGET_FALLBACK_SPEC_SYSTEM,
@@ -25,26 +28,6 @@ from backend.agent.prompts import (
 from backend.utils import app_logging  # noqa: F401
 
 logger = logging.getLogger(f"app.{__name__}")
-
-
-def _pick_provider_and_key(
-    provider: str | None, provider_keys: dict[str, str] | None
-) -> tuple[str, str]:
-    keys = provider_keys or {}
-    prov = (provider or "").lower()
-    if prov in ("claude", "gemini", "openrouter"):
-        key = keys.get(prov) or ""
-        if not key:
-            raise RuntimeError(f"Missing API key for provider '{prov}'.")
-        return prov, key
-    if keys.get("claude"):
-        return "claude", keys["claude"]
-    if keys.get("gemini"):
-        return "gemini", keys["gemini"]
-    if keys.get("openrouter"):
-        return "openrouter", keys["openrouter"]
-    raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' or 'openrouter' key.")
-
 
 
 def _extract_html(raw: str) -> str:

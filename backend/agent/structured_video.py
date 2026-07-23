@@ -22,6 +22,9 @@ from typing import Any
 
 from backend.agent.code_sanitize import sanitize_minimally
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.provider_config import (
+    resolve_provider_and_key as _pick_provider_and_key,
+)
 from backend.agent.prompts import (
     STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM,
     STRUCTURED_VIDEO_EDIT_SYSTEM,
@@ -576,24 +579,6 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
                     errors.append(f"Scene {index}: final calculation_step must state the answer explicitly.")
 
     return errors
-
-
-def _pick_provider_and_key(
-    provider: str | None,
-    provider_keys: dict[str, str] | None,
-) -> tuple[str, str]:
-    keys = provider_keys or {}
-    prov = (provider or "").strip().lower()
-    if prov in {"claude", "gemini", "openrouter"}:
-        key = str(keys.get(prov) or "").strip()
-        if not key:
-            raise RuntimeError(f"Missing API key for provider '{prov}'.")
-        return prov, key
-    for candidate in ("gemini", "claude", "openrouter"):
-        key = str(keys.get(candidate) or "").strip()
-        if key:
-            return candidate, key
-    raise RuntimeError("No provider keys available. Provide a Gemini, Claude, or OpenRouter key.")
 
 
 def _repair_plan_if_needed(

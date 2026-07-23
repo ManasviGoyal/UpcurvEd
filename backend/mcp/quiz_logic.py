@@ -1,5 +1,4 @@
 import json
-import os
 
 try:
     import json5 as _json5
@@ -8,35 +7,15 @@ except ImportError:  # optional fallback, continue without json5
 from typing import Any
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.provider_config import (
+    resolve_provider_and_key as _pick_provider_and_key,
+)
 from backend.agent.prompts import (
     QUIZ_EDIT_SYSTEM,
     QUIZ_GENERATE_SYSTEM,
     build_quiz_edit_user_prompt,
     build_quiz_user_prompt,
 )
-
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-
-
-def _pick_provider_and_key(
-    provider: str | None, provider_keys: dict[str, str] | None
-) -> tuple[str, str]:
-    """Return (provider, api_key). Prefer explicit provider, else infer from keys."""
-    keys = provider_keys or {}
-    prov = (provider or "").lower()
-    if prov in ("claude", "gemini", "openrouter"):
-        key = keys.get(prov) or ""
-        if not key:
-            raise RuntimeError(f"Missing API key for provider '{prov}'.")
-        return prov, key
-    # infer
-    if keys.get("claude"):
-        return "claude", keys["claude"]
-    if keys.get("gemini"):
-        return "gemini", keys["gemini"]
-    if keys.get("openrouter"):
-        return "openrouter", keys["openrouter"]
-    raise RuntimeError("No provider keys available. Provide 'claude' or 'gemini' or 'openrouter' key.")
 
 
 def _strip_code_fences(text: str) -> str:
@@ -361,16 +340,14 @@ def _generate_quiz_json_with_call_llm(
     provider_keys: dict[str, str] | None,
 ) -> dict[str, Any]:
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
-    # For Gemini, let the unified client choose its preferred default (gemini-3-flash-preview).
-    # For Claude, keep a sensible default.
-    use_model = model or ("claude-haiku-4-5" if prov == "claude" else None)
+    # The unified client selects the configured default model for every provider.
     user_prompt = build_quiz_user_prompt(prompt, num_questions, difficulty, context)
     # Strict system instruction lives in backend.agent.prompts.
     strict_system = QUIZ_GENERATE_SYSTEM
     text = call_llm(
         provider=prov,
         api_key=api_key,
-        model=use_model,
+        model=model,
         system=strict_system,
         user=user_prompt,
         temperature=0.4,  # Moderate temperature for question variety while maintaining accuracy
@@ -434,12 +411,11 @@ def edit_quiz_embedded(
     target_count = max(1, min(target_count, 20))
 
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
-    use_model = model or ("claude-haiku-4-5" if prov == "claude" else None)
     strict_system = QUIZ_EDIT_SYSTEM
     text = call_llm(
         provider=prov,
         api_key=api_key,
-        model=use_model,
+        model=model,
         system=strict_system,
         user=build_quiz_edit_user_prompt(
             original_quiz=original_quiz,
