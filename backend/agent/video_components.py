@@ -172,34 +172,36 @@ class GeneratedScene(VoiceoverScene):
         header = fit_text(title_text, 35, mn.WHITE, 10.6).to_edge(mn.UP, buff=0.4)
         self.play(mn.FadeIn(header, shift=mn.DOWN * 0.08), run_time=0.4)
 
-        # Worked examples get a dedicated deterministic calculation layout.
+        # Worked examples show one active equation at a time to prevent visual stacking.
         if learning_role == "example" and calculation_steps:
             formula = formula_mob(formula_text, 28) if formula_text else None
             if formula is not None:
                 formula.next_to(header, mn.DOWN, buff=0.25)
-            step_mobs = mn.VGroup(*[
-                fit_text(step, 24 if len(step) < 70 else 21, mn.WHITE, 10.2)
-                for step in calculation_steps
-            ])
-            step_mobs.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.22)
             anchor = formula if formula is not None else header
-            step_mobs.next_to(anchor, mn.DOWN, buff=0.38)
-            if step_mobs.height > 4.7:
-                step_mobs.scale_to_fit_height(4.7)
-            answer = step_mobs[-1]
-            answer_box = mn.SurroundingRectangle(answer, color=mn.GREEN_C, buff=0.14, corner_radius=0.08)
+            step_position = anchor.get_center() + mn.DOWN * 1.15
+            current_step = None
             with self.voiceover(text=narration) as tracker:
                 used = 0.4
                 if formula is not None:
                     self.play(mn.Write(formula), run_time=0.7)
                     used += 0.7
-                for index, step in enumerate(step_mobs):
-                    self.play(mn.FadeIn(step, shift=mn.RIGHT * 0.14), run_time=0.55)
-                    used += 0.55
-                    if index > 0:
-                        self.play(mn.Indicate(step), run_time=0.35)
-                        used += 0.35
-                self.play(mn.Create(answer_box), mn.Indicate(answer), run_time=0.75)
+                for step_text in calculation_steps:
+                    next_step = fit_text(
+                        step_text,
+                        25 if len(step_text) < 70 else 21,
+                        mn.WHITE,
+                        10.2,
+                    ).move_to(step_position)
+                    if current_step is None:
+                        self.play(mn.Write(next_step), run_time=0.65)
+                    else:
+                        self.play(mn.ReplacementTransform(current_step, next_step), run_time=0.75)
+                    current_step = next_step
+                    used += 0.75
+                answer_box = mn.SurroundingRectangle(
+                    current_step, color=mn.GREEN_C, buff=0.16, corner_radius=0.08
+                )
+                self.play(mn.Create(answer_box), mn.Indicate(current_step), run_time=0.75)
                 used += 0.75
                 hold_voiceover(tracker, used)
             clean_out(bg)
@@ -363,8 +365,31 @@ class GeneratedScene(VoiceoverScene):
         def formula_label(text, size=30, color=mn.YELLOW):
             return label(clean_text(text), size=size, color=color)
 
-        def calculation_step_label(text, size=24, color=mn.WHITE):
-            return label(clean_text(text), size=size, color=color)
+        def calculation_step_label(text, size=24, color=mn.WHITE, max_width=10.4):
+            mob = label(clean_text(text), size=size, color=color)
+            if mob.width > max_width:
+                mob.scale_to_fit_width(max_width)
+            return mob
+
+        def next_calculation_step(
+            current,
+            text,
+            *,
+            position=None,
+            size=24,
+            color=mn.WHITE,
+            run_time=0.8,
+            max_width=10.4,
+        ):
+            target = calculation_step_label(
+                text, size=size, color=color, max_width=max_width
+            )
+            target.move_to(mn.UP * 0.15 if position is None else position)
+            if current is None:
+                self.play(mn.Write(target), run_time=run_time)
+            else:
+                self.play(mn.ReplacementTransform(current, target), run_time=run_time)
+            return target
 
         def wait_for_voiceover(tracker, used_time):
             duration = float(getattr(tracker, "duration", 0) or 0)

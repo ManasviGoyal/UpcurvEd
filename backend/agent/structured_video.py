@@ -1,9 +1,9 @@
 """Structured Manim video generation for UpcurvEd.
 
-The model returns one complete teaching plan with embedded custom Manim bodies. Standard
-scenes render deterministically. Custom scenes receive static validation, one focused repair
-attempt, and a deterministic fallback only when the creative visual is not essential. Graph
-scenes are essential: they repair or fail rather than silently becoming generic concept cards.
+One model response contains a compact tagged JSON plan plus separate raw Manim body blocks.
+Standard scenes render deterministically. Custom scenes receive static validation, one focused
+repair attempt, and a deterministic fallback only when the creative visual is not essential.
+Graph scenes are essential: they repair or fail rather than silently becoming generic cards.
 """
 
 from __future__ import annotations
@@ -44,8 +44,10 @@ logger = logging.getLogger(__name__)
 
 _PLAN_START = "<<<PLAN_JSON>>>"
 _PLAN_END = "<<<END_PLAN_JSON>>>"
-_RAW_PLAN_START = "<<<RAW_MODEL_PLAN>>>"
-_RAW_PLAN_END = "<<<END_RAW_MODEL_PLAN>>>"
+_RAW_PLAN_START = "<<<RAW_MODEL_RESPONSE>>>"
+_RAW_PLAN_END = "<<<END_RAW_MODEL_RESPONSE>>>"
+_VIDEO_PLAN_TAG = "VIDEO_PLAN"
+_MANIM_BODY_TAG = "MANIM_BODY"
 
 _ALLOWED_TYPES = {
     "title_scene",
@@ -179,6 +181,130 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return parsed
 
 
+def _clean_body_block(body: str) -> str:
+    text = str(body or "").strip()
+    text = re.sub(r"^```(?:python)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _extract_tagged_section(text: str, tag: str) -> str | None:
+    pattern = re.compile(
+        rf"<{re.escape(tag)}\s*>\s*(.*?)\s*</{re.escape(tag)}\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(str(text or ""))
+    return match.group(1).strip() if match else None
+
+
+def _extract_manim_body_sections(text: str) -> dict[str, str]:
+    pattern = re.compile(
+        r"<MANIM_BODY\b(?P<attrs>[^>]*)>(?P<body>.*?)</MANIM_BODY\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    bodies: dict[str, str] = {}
+    for match in pattern.finditer(str(text or "")):
+        attrs = match.group("attrs")
+        id_match = re.search(
+            r"\bid\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s>]+))",
+            attrs,
+            flags=re.IGNORECASE,
+        )
+        if not id_match:
+            continue
+        ref = next((group for group in id_match.groups() if group), "").strip()
+        body = _clean_body_block(match.group("body"))
+        if ref and body:
+            bodies[ref] = body
+    return bodies
+
+
+def _body_ref_for_scene(scene: dict[str, Any], index: int) -> str:
+    existing = str(scene.get("manim_body_ref") or "").strip()
+    if existing:
+        return existing
+    scene_id = str(scene.get("id") or index).strip()
+    return f"scene_{scene_id}"
+
+
+def _attach_manim_bodies(
+    plan: dict[str, Any],
+    bodies: dict[str, str],
+) -> dict[str, Any]:
+    scenes = plan.get("scenes")
+    if not isinstance(scenes, list):
+        return plan
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        if scene.get("type") == "custom_manim_scene" or scene.get("manim_body_ref"):
+            ref = _body_ref_for_scene(scene, index)
+            scene["manim_body_ref"] = ref
+            scene_id = str(scene.get("id") or "").strip()
+            candidates = [ref, f"scene_{scene_id}" if scene_id else "", scene_id, f"scene_{index}"]
+            matched = next((candidate for candidate in candidates if candidate and candidate in bodies), None)
+            if matched:
+                scene["manim_body"] = bodies[matched]
+    return plan
+
+
+def _parse_structured_response(
+    raw: str,
+) -> tuple[dict[str, Any], dict[str, str], str]:
+    text = str(raw or "").strip()
+    plan_text = _extract_tagged_section(text, _VIDEO_PLAN_TAG)
+    bodies = _extract_manim_body_sections(text)
+
+    # Backward compatibility for models or saved data that still return one JSON object.
+    if plan_text is None:
+        parsed = _extract_json_object(text)
+        return parsed, bodies, text
+
+    parsed = _extract_json_object(plan_text)
+    return parsed, bodies, plan_text
+
+
+def _split_plan_and_bodies(
+    plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    cloned = json.loads(json.dumps(plan or {}, ensure_ascii=False))
+    bodies: dict[str, str] = {}
+    scenes = cloned.get("scenes")
+    if not isinstance(scenes, list):
+        return cloned, bodies
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        body = str(scene.pop("manim_body", "") or "").strip()
+        if scene.get("type") == "custom_manim_scene" or body:
+            ref = _body_ref_for_scene(scene, index)
+            scene["manim_body_ref"] = ref
+            if body:
+                bodies[ref] = body
+    return cloned, bodies
+
+
+def _write_response_debug_artifacts(
+    *,
+    logs_dir: pathlib.Path,
+    prefix: str,
+    raw_text: str,
+    plan_text: str,
+    bodies: dict[str, str],
+) -> None:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / f"{prefix}_response_raw.txt").write_text(raw_text, encoding="utf-8")
+    (logs_dir / f"{prefix}_plan_raw.json").write_text(plan_text, encoding="utf-8")
+    body_parts: list[str] = []
+    for ref, body in bodies.items():
+        body_parts.extend([f'<MANIM_BODY id="{ref}">', body, "</MANIM_BODY>", ""])
+        safe_ref = re.sub(r"[^A-Za-z0-9_.-]+", "_", ref).strip("_") or "scene"
+        (logs_dir / f"{prefix}_{safe_ref}.py").write_text(body + "\n", encoding="utf-8")
+    (logs_dir / f"{prefix}_creative_bodies_raw.txt").write_text(
+        "\n".join(body_parts), encoding="utf-8"
+    )
+
+
 def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
     title = _short_text(plan.get("title"), 72, _short_text(topic, 72, "Educational video"))
     subtitle = _short_text(plan.get("subtitle"), 100, "")
@@ -266,6 +392,7 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
             scene["calculation_steps"] = calculation_steps
         if scene_type == "custom_manim_scene":
             scene["code_goal"] = _short_text(incoming.get("code_goal") or visual, 240, visual)
+            scene["manim_body_ref"] = _body_ref_for_scene(incoming, index)
             scene["manim_body"] = str(incoming.get("manim_body") or "").strip()
         scenes.append(scene)
 
@@ -275,6 +402,7 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
     scenes[0]["type"] = "title_scene"
     scenes[0]["visual_mode"] = "text"
     scenes[0].pop("manim_body", None)
+    scenes[0].pop("manim_body_ref", None)
     scenes[0].pop("code_goal", None)
 
     return {
@@ -382,8 +510,18 @@ def _repair_plan_if_needed(
         max_tokens=7000,
     )
     raw_text = _coerce_llm_text(raw)
-    (logs_dir / "plan_repair_raw.txt").write_text(raw_text, encoding="utf-8")
-    repaired = _normalize_plan(_extract_json_object(raw_text), topic=topic)
+    (logs_dir / "plan_repair_response_raw.txt").write_text(raw_text, encoding="utf-8")
+    parsed, bodies, plan_text = _parse_structured_response(raw_text)
+    _write_response_debug_artifacts(
+        logs_dir=logs_dir,
+        prefix="plan_repair",
+        raw_text=raw_text,
+        plan_text=plan_text,
+        bodies=bodies,
+    )
+    parsed = _attach_manim_bodies(parsed, bodies)
+    parsed = _inherit_missing_scene_fields(parsed, plan)
+    repaired = _normalize_plan(parsed, topic=topic)
     remaining = _plan_quality_errors(repaired)
     if remaining:
         (logs_dir / "plan_repair_remaining_errors.json").write_text(
@@ -412,8 +550,9 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
 
     if cleaned.count("self.voiceover") < 2:
         errors.append("Custom scene needs at least 2 self.voiceover blocks.")
-    if cleaned.count("self.play") < 4:
-        errors.append("Custom scene needs at least 4 self.play calls.")
+    animation_actions = cleaned.count("self.play") + cleaned.count("next_calculation_step(")
+    if animation_actions < 4:
+        errors.append("Custom scene needs at least 4 visible animation actions.")
 
     motion_markers = (
         ".animate",
@@ -425,6 +564,7 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
         "mn.GrowFromCenter(",
         "mn.Create(",
         "mn.Indicate(",
+        "next_calculation_step(",
     )
     if not any(marker in cleaned for marker in motion_markers):
         errors.append("Custom scene needs meaningful movement or transformation.")
@@ -444,7 +584,11 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
             errors.append("Graph scene must visibly mark the graph feature discussed in narration.")
 
     if str(scene.get("learning_role") or "") == "example" and scene.get("calculation_steps"):
-        if "calculation_steps" not in cleaned and "calculation_step_label(" not in cleaned:
+        if (
+            "calculation_steps" not in cleaned
+            and "calculation_step_label(" not in cleaned
+            and "next_calculation_step(" not in cleaned
+        ):
             errors.append("Worked example must visibly animate calculation_steps.")
 
     try:
@@ -738,12 +882,19 @@ def _write_vtt_from_plan(plan: dict[str, Any], out_path: pathlib.Path) -> None:
 
 
 def _bundle_for_scene_code(plan: dict[str, Any], scene_codes: list[str], raw_plan: str) -> str:
+    transport_plan, bodies = _split_plan_and_bodies(plan)
     parts = [
-        "# Structured UpcurvEd Manim bundle v3",
+        "# Structured UpcurvEd Manim bundle v4",
         _PLAN_START,
-        json.dumps(plan, ensure_ascii=False, indent=2),
+        json.dumps(transport_plan, ensure_ascii=False, indent=2),
         _PLAN_END,
     ]
+    for ref, body in bodies.items():
+        parts.extend([
+            f'<MANIM_BODY id="{ref}">',
+            body.rstrip(),
+            "</MANIM_BODY>",
+        ])
     for index, code in enumerate(scene_codes, start=1):
         parts.extend([
             f"<<<SCENE_{index}_CODE>>>",
@@ -769,6 +920,8 @@ def parse_plan_from_scene_bundle(bundle: str, topic: str = "Edited video") -> di
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise RuntimeError("Original structured PLAN_JSON is invalid.")
+    # v4 bundles store raw custom bodies outside PLAN_JSON; v3 embedded them.
+    parsed = _attach_manim_bodies(parsed, _extract_manim_body_sections(text))
     return _normalize_plan(parsed, topic=topic)
 
 
@@ -793,6 +946,7 @@ def _inherit_missing_scene_fields(
         "visual_mode",
         "required_visual_elements",
         "labels",
+        "manim_body_ref",
     )
     for index, scene in enumerate(edited_scenes):
         if not isinstance(scene, dict):
@@ -807,7 +961,13 @@ def _inherit_missing_scene_fields(
             if field not in scene or scene.get(field) in (None, "", []):
                 if original.get(field) not in (None, "", []):
                     scene[field] = original[field]
-        if scene.get("type") == "custom_manim_scene" and not str(scene.get("manim_body") or "").strip():
+        scene_kind = str(scene.get("type") or scene.get("kind") or "").strip().lower()
+        custom_like = (
+            scene_kind in {"custom_manim_scene", "custom", "creative", "graph", "graph_scene"}
+            or str(scene.get("visual_mode") or "").strip().lower() == "graph"
+            or bool(scene.get("manim_body_ref"))
+        )
+        if custom_like and not str(scene.get("manim_body") or "").strip():
             body = str(original.get("manim_body") or "").strip()
             if body:
                 scene["manim_body"] = body
@@ -890,7 +1050,7 @@ def generate_structured_manim_video(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=dynamic_scene_object_one_call",
+        "structured_manim_generation_start job_id=%s provider=%s model=%s mode=tagged_plan_and_bodies_one_call",
         final_job_id,
         provider_name,
         model,
@@ -905,8 +1065,17 @@ def generate_structured_manim_video(
         max_tokens=7000,
     )
     raw_text = _coerce_llm_text(raw)
-    (logs_dir / "structured_plan_raw.txt").write_text(raw_text, encoding="utf-8")
-    plan = _normalize_plan(_extract_json_object(raw_text), topic=prompt)
+    (logs_dir / "structured_response_raw.txt").write_text(raw_text, encoding="utf-8")
+    parsed, bodies, plan_text = _parse_structured_response(raw_text)
+    _write_response_debug_artifacts(
+        logs_dir=logs_dir,
+        prefix="structured",
+        raw_text=raw_text,
+        plan_text=plan_text,
+        bodies=bodies,
+    )
+    parsed = _attach_manim_bodies(parsed, bodies)
+    plan = _normalize_plan(parsed, topic=prompt)
     plan, repaired = _repair_plan_if_needed(
         plan,
         topic=prompt,
@@ -958,8 +1127,16 @@ def edit_structured_manim_video(
         max_tokens=7000,
     )
     raw_text = _coerce_llm_text(raw)
-    (logs_dir / "structured_edit_raw.txt").write_text(raw_text, encoding="utf-8")
-    parsed = _extract_json_object(raw_text)
+    (logs_dir / "structured_edit_response_raw.txt").write_text(raw_text, encoding="utf-8")
+    parsed, bodies, plan_text = _parse_structured_response(raw_text)
+    _write_response_debug_artifacts(
+        logs_dir=logs_dir,
+        prefix="structured_edit",
+        raw_text=raw_text,
+        plan_text=plan_text,
+        bodies=bodies,
+    )
+    parsed = _attach_manim_bodies(parsed, bodies)
     parsed = _inherit_missing_scene_fields(parsed, original_plan)
     plan = _normalize_plan(parsed, topic=str(original_plan.get("title") or "Edited video"))
     plan, repaired = _repair_plan_if_needed(

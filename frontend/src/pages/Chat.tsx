@@ -3154,6 +3154,25 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (lower.includes("input must have at least 1 token")) {
       return "The model received an empty prompt. Try again or switch models.";
     }
+
+    const capacityPhrases = [
+      "resourceexhausted",
+      "resource exhausted",
+      "request limit reached",
+      "worker local total request limit reached",
+      "upstream capacity",
+      "model is overloaded",
+      "temporarily overloaded",
+      "temporarily unavailable",
+      "no available providers",
+      "provider unavailable",
+      "service unavailable",
+    ];
+
+    if (capacityPhrases.some((phrase) => lower.includes(phrase))) {
+      return "The selected model is temporarily at capacity. Try again in a moment or switch models.";
+    }
+
     if ((lower.includes("keyerror") && lower.includes("choices")) || lower.includes("missing choices") || lower.includes("did not return choices")) {
       return "The model provider returned an unexpected response. Try again or switch models.";
     }
@@ -3362,15 +3381,28 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         setSrtText(null);
         void fetchCaptions(videoUrl, data.signed_subtitle_url);
       } else {
-        // Keep the UI clean: show a friendly message only
-        const msg =
-          (data && typeof data === "object" && "message" in data && (data as any).message) ||
-          "Video generation failed.";
+        const errorBody = responseErrorBody(res, data, raw);
+        const friendly = formatGenerationError(
+          "Video generation",
+          errorBody,
+          "Video generation failed."
+        );
+
+        setApiError(friendly);
+        await processAndAddMessage(
+          friendly,
+          false,
+          undefined,
+          chatIdForGeneration
+        );
+
         const debugDetail =
-          (data && typeof data === "object" && "debug_detail" in data && String((data as any).debug_detail || "").trim()) ||
-          "";
-        setApiError(msg);
-        await processAndAddMessage("❌ Video generation failed.", false, undefined, chatIdForGeneration);
+          data &&
+          typeof data === "object" &&
+          "debug_detail" in data
+            ? String((data as any).debug_detail || "").trim()
+            : "";
+
         if (debugDetail) {
           toast({
             title: "Render detail",

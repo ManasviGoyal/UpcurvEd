@@ -3,15 +3,62 @@ from __future__ import annotations
 
 import json
 from textwrap import dedent
+from typing import Any
 
 
 # -------- STRUCTURED VIDEO PROMPTS --------
 
-STRUCTURED_VIDEO_SYSTEM = dedent("""\
-    Create one valid JSON object for a short educational Manim video.
-    Return JSON only. Choose the scene count needed for the topic.
 
-    Shape:
+def _scene_body_ref(scene: dict[str, Any], index: int) -> str:
+    existing = str(scene.get("manim_body_ref") or "").strip()
+    if existing:
+        return existing
+    scene_id = str(scene.get("id") or index).strip()
+    return f"scene_{scene_id}"
+
+
+def _split_plan_and_bodies(plan: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    """Prepare an existing normalized plan for an LLM prompt without embedding Python in JSON."""
+    cloned = json.loads(json.dumps(plan or {}, ensure_ascii=False))
+    bodies: list[tuple[str, str]] = []
+    scenes = cloned.get("scenes")
+    if not isinstance(scenes, list):
+        return cloned, bodies
+
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        body = str(scene.pop("manim_body", "") or "").strip()
+        if scene.get("type") == "custom_manim_scene" or body:
+            ref = _scene_body_ref(scene, index)
+            scene["manim_body_ref"] = ref
+            if body:
+                bodies.append((ref, body))
+    return cloned, bodies
+
+
+def _format_body_blocks(bodies: list[tuple[str, str]], tag: str = "MANIM_BODY") -> str:
+    if not bodies:
+        return "(none)"
+    return "\n\n".join(
+        f'<{tag} id="{ref}">\n{body}\n</{tag}>'
+        for ref, body in bodies
+    )
+
+
+STRUCTURED_VIDEO_SYSTEM = dedent("""\
+    Create one short educational Manim video in one response. Do not use markdown fences.
+
+    Output exactly:
+    <VIDEO_PLAN>
+    {valid compact JSON plan}
+    </VIDEO_PLAN>
+    followed by one raw Python block for every custom scene:
+    <MANIM_BODY id="scene_2">
+    body statements only
+    </MANIM_BODY>
+
+    Plan shape:
     {
       "title": "short title",
       "subtitle": "short subtitle",
@@ -29,51 +76,54 @@ STRUCTURED_VIDEO_SYSTEM = dedent("""\
           "visual": "specific visible action or relationship",
           "required_visual_elements": ["optional concrete element"],
           "labels": ["optional labels for standard components only"],
-          "formula": "optional plain-text formula shown on screen",
-          "calculation_steps": ["optional explicit substitution", "simplification", "final answer"],
+          "formula": "optional portable plain-text formula",
+          "calculation_steps": ["optional completed substitution", "simplification", "final answer"],
           "duration_sec": 12,
           "code_goal": "custom scene only",
-          "manim_body": "custom scene only: escaped Python construct-body code"
+          "manim_body_ref": "scene_2"
         }
       ]
     }
 
     Teaching rules:
-    - Scene 1 is title_scene. Use the fewest scenes that teach the topic clearly.
-    - Teach meaning before notation. Define unfamiliar ideas and the problem a formula solves
-      before presenting or deriving it. Do not begin with derivation unless requested.
-    - Graph-related ideas must first show and explain the relevant graph feature, then connect it
-      to algebra. Every visual_mode="graph" scene must be custom_manim_scene.
-    - Example: for "explain quadratic formula," graph a quadratic and define roots as x-intercepts;
-      then introduce the formula, work one example, and mark the answers back on the graph.
-    - A worked math example must visibly show actual substitution, simplification, and final answer
-      in calculation_steps. Never use instructions such as "compute the roots" as a substitute.
-    - If narration uses a formula, include formula and show it. Use portable plain text such as
+    - Scene 1 is title_scene. Use only the scenes needed to teach clearly.
+    - Teach meaning before notation. Define unfamiliar ideas and the problem a formula solves;
+      do not begin with derivation unless requested.
+    - Graph ideas must show and explain the relevant graph feature before algebra.
+      Every visual_mode="graph" scene is custom_manim_scene.
+    - For "explain quadratic formula": graph a quadratic, define roots as x-intercepts,
+      introduce the formula, work one example, and mark the answers back on the graph.
+    - A worked example must contain completed substitution, simplification, and final answer.
+      Never write instructions such as "compute the roots" in calculation_steps.
+    - If narration uses a formula, include and show it. Use portable text such as
       x = (-b +/- sqrt(b^2 - 4ac)) / (2a), not LaTeX or special math glyphs.
-    - labels are optional. Use them only when a standard component needs named parts. Never use
-      generic labels such as Concept, Equation, Step, Input, Output, Result, or Example.
-    - Use custom_manim_scene for graphs, geometric constructions, changing systems, or
-      topic-specific motion. Normally use no more than two custom scenes.
-    - Do not display internal names such as CONCEPT SCENE or PROCESS SCENE.
+    - labels are optional and topic-specific. Never use Concept, Equation, Step, Input,
+      Output, Result, or Example as filler labels.
+    - Use custom scenes for graphs, geometric constructions, changing systems, or
+      topic-specific motion. Normally use no more than two.
+    - Do not display internal scene-type names.
 
-    Every custom_manim_scene must include manim_body in this response.
+    Each custom scene must have a unique manim_body_ref and a matching MANIM_BODY block.
     The wrapper provides: scene, title, narration, labels, visual, formula, calculation_steps,
     learning_role, learner_question, visual_mode, required_visual_elements, bg, label(...),
-    formula_label(...), calculation_step_label(...), and wait_for_voiceover(...).
+    formula_label(...), calculation_step_label(...), next_calculation_step(...),
+    and wait_for_voiceover(...).
 
     Custom-body rules:
-    - Body statements only. No imports, class, def, files, images, SVG, Tex, MathTex, network,
-      random, external libraries, eval, exec, or system access. Use mn. prefixes.
-    - Simple Manim objects are allowed, including Text, Circle, Rectangle, RoundedRectangle,
-      Dot, Line, DashedLine, Arrow, Arc, VGroup, NumberLine, Axes, and NumberPlane.
-    - Include at least 2 voiceover blocks, 4 self.play calls, and meaningful movement.
-    - For visual_mode="graph", create Axes or NumberPlane, draw/plot the relationship, and mark
-      the graph features named in required_visual_elements.
-    - For learning_role="example", visibly animate calculation_steps and emphasize the answer.
+    - Body statements only. No imports, class, def, files, images, SVG, Tex, MathTex,
+      network, random, external libraries, eval, exec, or system access. Use mn. prefixes.
+    - Allowed primitives include Text, Circle, Rectangle, RoundedRectangle, Dot, Line,
+      DashedLine, Arrow, Arc, VGroup, NumberLine, Axes, and NumberPlane.
+    - Include at least 2 voiceover blocks, 4 visible animation actions, and meaningful motion.
+    - A graph body must create Axes or NumberPlane, draw/plot the relationship, and visibly
+      mark the features listed in required_visual_elements.
+    - For multiple calculation steps, show one active equation in the calculation area.
+      Replace or fade out the previous equation before showing the next; do not stack equations
+      at the same coordinates. Prefer:
+      current_step = next_calculation_step(current_step, calculation_steps[i], position=...)
+    - Keep the final answer visible long enough to interpret it.
     - If formula is present, display it with formula_label(formula) or mn.Text(formula).
     - Keep strings on one line and close every quote, bracket, and parenthesis.
-
-    The JSON must be complete and not truncated.
 """)
 
 
@@ -82,57 +132,74 @@ def build_structured_video_user_prompt(goal: str) -> str:
         Create a concise educational video about:
         {goal}
 
-        Return the complete JSON object, including manim_body in every custom scene.
+        Return one VIDEO_PLAN section and matching raw MANIM_BODY blocks for custom scenes.
     """).strip()
 
 
 STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = dedent("""\
-    Repair one educational-video JSON plan. Return complete valid JSON only.
-    Keep good material and make the smallest changes needed to satisfy the listed errors.
-    A graph scene must be custom Manim with real axes/number plane, a plotted or coordinate-based
-    relationship, and marked features. A worked math example must contain explicit
-    calculation_steps for substitution, simplification, and final answer. Keep meaning before
-    notation and preserve visible formulas. Include complete manim_body in every custom scene.
+    Repair one educational-video response. Do not use markdown fences.
+    Return one complete <VIDEO_PLAN> JSON section followed by MANIM_BODY blocks only for
+    custom scenes that are new or changed. Omitted existing bodies will be preserved.
+
+    Keep good material and make the smallest changes needed. A graph scene must use custom
+    Manim with real axes/number plane, a plotted or coordinate-based relationship, and marked
+    features. A worked example must contain completed substitution, simplification, and final
+    answer. For multiple calculation steps, show one active equation at a time using
+    next_calculation_step, ReplacementTransform, Transform, or FadeOut. Never stack equations
+    at the same coordinates. Keep meaning before notation and preserve visible formulas.
 """)
 
 
 def build_structured_video_plan_repair_prompt(*, plan: dict, errors: list[str]) -> str:
+    transport_plan, bodies = _split_plan_and_bodies(plan)
     return dedent(f"""\
-        Plan:
-        {json.dumps(plan, ensure_ascii=True, separators=(",", ":"))}
+        Current plan:
+        <ORIGINAL_VIDEO_PLAN>
+        {json.dumps(transport_plan, ensure_ascii=True, separators=(",", ":"))}
+        </ORIGINAL_VIDEO_PLAN>
+
+        Current custom bodies:
+        {_format_body_blocks(bodies, tag="ORIGINAL_MANIM_BODY")}
 
         Errors:
         {json.dumps(errors, ensure_ascii=True)}
 
-        Return the complete repaired JSON object only.
+        Return the repaired VIDEO_PLAN and only changed/new MANIM_BODY blocks.
     """).strip()
 
 
 STRUCTURED_VIDEO_EDIT_SYSTEM = dedent("""\
-    Edit one structured educational-video JSON object. Return complete valid JSON only.
-    You may add, remove, combine, split, or reorder scenes; do not force a scene count.
+    Edit one structured educational video. Do not use markdown fences.
+    Return one complete <VIDEO_PLAN> JSON section followed by MANIM_BODY blocks only for
+    custom scenes that are new or changed. Omitted existing bodies will be preserved.
 
-    Preserve useful material and unaffected manim_body code. Keep scene 1 as title_scene.
-    Preserve or improve learning_role, learner_question, visual_mode, required_visual_elements,
-    formula, calculation_steps, and optional labels. Teach meaning before notation.
-    Every graph scene must be custom Manim and show the graph feature before algebra.
-    Every worked math example must visibly show substitution, simplification, and final answer.
+    You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
+    Preserve useful material and improve learning_role, learner_question, visual_mode,
+    required_visual_elements, formula, calculation_steps, and optional labels as needed.
+    Teach meaning before notation. Graph explanations show the graph feature before algebra.
+    Worked examples show completed substitution, simplification, and final answer.
 
-    Revised custom code follows the generation rules: body statements only, mn. prefixes,
-    simple primitives, no external access, at least 2 voiceovers and 4 plays, meaningful motion,
-    visible formulas, visible calculation steps, and a real graph when visual_mode is graph.
+    Custom code follows the generation rules. For multiple calculation steps, keep one active
+    equation in the calculation area and replace or fade out the previous one. Prefer
+    next_calculation_step(...); never stack equations at the same coordinates.
 """)
 
 
 def build_structured_video_edit_user_prompt(original_plan: dict, edit_instructions: str) -> str:
+    transport_plan, bodies = _split_plan_and_bodies(original_plan)
     return dedent(f"""\
-        Original video object:
-        {json.dumps(original_plan, ensure_ascii=True, separators=(",", ":"))}
+        Original plan:
+        <ORIGINAL_VIDEO_PLAN>
+        {json.dumps(transport_plan, ensure_ascii=True, separators=(",", ":"))}
+        </ORIGINAL_VIDEO_PLAN>
+
+        Original custom bodies:
+        {_format_body_blocks(bodies, tag="ORIGINAL_MANIM_BODY")}
 
         Edit request:
         {edit_instructions}
 
-        Return the complete edited JSON object only.
+        Return the complete edited VIDEO_PLAN and only changed/new MANIM_BODY blocks.
     """).strip()
 
 
@@ -142,14 +209,16 @@ STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = dedent("""\
 
     The wrapper provides: scene, title, narration, labels, visual, formula, calculation_steps,
     learning_role, learner_question, visual_mode, required_visual_elements, bg, label(...),
-    formula_label(...), calculation_step_label(...), and wait_for_voiceover(...).
+    formula_label(...), calculation_step_label(...), next_calculation_step(...),
+    and wait_for_voiceover(...).
 
     Use mn. prefixes and simple primitives. No imports, class, def, files, images, SVG, Tex,
     MathTex, network, random, external libraries, eval, exec, or system access. Include at least
-    2 voiceover blocks, 4 self.play calls, and meaningful movement. For a graph scene, create
-    Axes or NumberPlane, draw/plot the relationship, and visibly mark the required features.
-    For a worked example, visibly animate calculation_steps and emphasize the final answer.
-    Display formula when present. Close every quote, bracket, and parenthesis.
+    2 voiceover blocks, 4 visible animation actions, and meaningful motion. A graph must create
+    Axes or NumberPlane, draw/plot the relationship, and mark the required features.
+    For multiple calculation steps, keep one active equation and replace or fade out the prior
+    equation. Prefer next_calculation_step(...); never stack equations at the same coordinates.
+    Display formula when present and close every quote, bracket, and parenthesis.
 """)
 
 
