@@ -1,6 +1,7 @@
 # backend/mcp/story_video_logic.py
 import json
 import logging
+import math
 import os
 import pathlib
 import re
@@ -132,9 +133,17 @@ _DEFAULT_VISUAL_SEQUENCE = (
 )
 _HOST_ROLES = {"lead", "small_guide", "observer", "absent"}
 
+STORY_SCENE_COUNT = 5
+STORY_CAPTION_MIN_WORDS = 28
+STORY_CAPTION_TARGET_MAX_WORDS = 42
+STORY_CAPTION_MAX_WORDS = 48
+STORY_READING_WORDS_PER_MINUTE = 145.0
+STORY_TRANSITION_HOLD_SEC = 1.25
+_DEFAULT_HOST_ROLES = ("lead", "small_guide", "absent", "observer", "small_guide")
+
 DRAW_JS_BUNDLE_SYSTEM = f"""{ARTIFACT_SAFETY_INSTRUCTION}
 
-Create concise Canvas drawing bodies for all six scenes of one educational story.
+Create concise Canvas drawing bodies for all five scenes of one educational story.
 Return no JSON, markdown, explanation, or code fences.
 
 Output exactly one tagged block per scene:
@@ -142,7 +151,7 @@ Output exactly one tagged block per scene:
 JavaScript body statements only
 </SCENE_DRAW>
 ...
-<SCENE_DRAW id="6">
+<SCENE_DRAW id="5">
 JavaScript body statements only
 </SCENE_DRAW>
 
@@ -164,7 +173,7 @@ Reliability rules:
 
 Creative rules:
 - Follow each scene's visual_strategy and animation_goal.
-- Make the topic visualization occupy most of the canvas.
+- Make the topic visualization occupy most of the available canvas above the story caption bar.
 - A guide character is optional. Follow host_role: lead, small_guide, observer, or absent.
 - A speech bubble is optional. Use zero or one, only when it improves the story.
 - Use drawLabel and drawEquation for essential educational text.
@@ -176,7 +185,7 @@ Creative rules:
 
 STORY_PLAN_SYSTEM = f"""{ARTIFACT_SAFETY_INSTRUCTION}
 
-Create one accurate, engaging six-scene educational story plan.
+Create one accurate, engaging five-scene educational story plan.
 Return tagged plain text only. Do not return JSON, markdown, commentary, or code fences.
 
 Required transport:
@@ -191,7 +200,7 @@ Required transport:
 <CONCLUSION>Curiosity question or practical takeaway</CONCLUSION>
 </STORY_META>
 
-Then return exactly six independent scene blocks:
+Then return exactly five independent scene blocks:
 <STORY_SCENE id="1">
 <HEADING>Short scene heading</HEADING>
 <LESSON>One or two accurate explanatory sentences</LESSON>
@@ -199,15 +208,22 @@ Then return exactly six independent scene blocks:
 <VOCABULARY>term | term</VOCABULARY>
 <CAUSE_EFFECT>cause -> effect or input -> result</CAUSE_EFFECT>
 <MISCONCEPTION_FIX>Optional correction</MISCONCEPTION_FIX>
-<CAPTION>Short narrator line with concrete learning</CAPTION>
+<CAPTION>A natural narrator passage of 28-42 words, never more than 48 words</CAPTION>
 <SPEECH_BUBBLE>Optional, no more than eight words</SPEECH_BUBBLE>
 <VISUAL>Specific drawable visual description</VISUAL>
 <VISUAL_STRATEGY>One allowed strategy</VISUAL_STRATEGY>
 <HOST_ROLE>lead | small_guide | observer | absent</HOST_ROLE>
 <ESSENTIAL_LABELS>short label | short equation or value</ESSENTIAL_LABELS>
 <ANIMATION_GOAL>One visible change over time</ANIMATION_GOAL>
-<DURATION_SEC>10</DURATION_SEC>
+<DURATION_SEC>One whole number from 14 through 22</DURATION_SEC>
 </STORY_SCENE>
+
+Caption rules:
+- Write two or three complete, natural sentences totaling 28-42 words. Never exceed 48 words.
+- The caption is the learner-facing story narration. It must sound like a story, not internal metadata.
+- Do not paste SCIENCE_FACT and CAUSE_EFFECT together. Do not use arrows, field labels, or fragments.
+- Include one concrete action, observation, example, or discovery while preserving scientific accuracy.
+- End with complete punctuation.
 
 Transport rules:
 - Close every tag, but each scene is parsed independently if a closing scene tag is omitted.
@@ -215,7 +231,7 @@ Transport rules:
 - Do not use angle brackets inside field values. Write "less than" instead of the < symbol.
 - Do not use JSON punctuation, arrays, escaped quotes, or nested markup.
 - Use a vertical bar to separate list items.
-- Return exactly six STORY_SCENE blocks numbered 1 through 6.
+- Return exactly five STORY_SCENE blocks numbered 1 through 5.
 """
 
 
@@ -232,7 +248,14 @@ def _story_prompt(topic: str, host_character: str | None = None, theme: str | No
         f"Allowed visual strategies: {strategies}\n"
         f"{host_line}"
         f"{theme_line}"
-        "Plan exactly six scenes, each exactly 10 seconds.\n"
+        "Plan exactly five scenes. Use a clear arc: hook or setup, explanation, concrete example, "
+        "comparison or misconception correction, and application or conclusion.\n"
+        "Write each CAPTION as two or three complete natural sentences totaling 28-42 words, "
+        "with an absolute maximum of 48 words.\n"
+        "The CAPTION must be original learner-facing narration. Do not concatenate SCIENCE_FACT "
+        "and CAUSE_EFFECT, and do not use arrows or metadata fragments in the caption.\n"
+        "Estimate a duration from 14 through 22 seconds; the runtime will enforce enough reading time "
+        "and add a short end hold before the next scene.\n"
         "Use at least four different visual strategies and never repeat one in consecutive scenes.\n"
         "Let the learning visual dominate. Do not place the same character beside the same table in every scene.\n"
         "Use characters in some scenes, but allow diagrams, maps, charts, object transformations, equations, and simulations to stand alone.\n"
@@ -432,7 +455,7 @@ def _parse_tagged_story_plan(raw: str) -> dict[str, Any] | None:
         "scenes": [],
     }
 
-    for scene_id, block in sorted(scene_blocks, key=lambda item: item[0])[:6]:
+    for scene_id, block in sorted(scene_blocks, key=lambda item: item[0])[:STORY_SCENE_COUNT]:
         scene = {
             "id": scene_id,
             "heading": _tag_value(block, "HEADING"),
@@ -448,7 +471,7 @@ def _parse_tagged_story_plan(raw: str) -> dict[str, Any] | None:
             "host_role": _tag_value(block, "HOST_ROLE"),
             "essential_labels": _tag_list(block, "ESSENTIAL_LABEL", "ESSENTIAL_LABELS"),
             "animation_goal": _tag_value(block, "ANIMATION_GOAL"),
-            "duration_sec": _tag_value(block, "DURATION_SEC", "10"),
+            "duration_sec": _tag_value(block, "DURATION_SEC", "16"),
         }
         plan["scenes"].append(scene)
 
@@ -472,7 +495,7 @@ def _extract_story_plan(raw: str, topic: str) -> dict[str, Any]:
         return legacy
     except Exception as exc:
         # Transport failure should not abort the entire artifact. Normalization will
-        # construct six deterministic topic-aware scenes, and the existing second
+        # construct five deterministic topic-aware scenes, and the existing second
         # visual-bundle call can still add custom drawings to those scenes.
         logger.warning(
             "story_plan_transport_unusable; using local topic defaults error=%s",
@@ -490,7 +513,15 @@ def _extract_story_plan(raw: str, topic: str) -> dict[str, Any]:
 def _compact_text(value: Any, limit: int = 220) -> str:
     text = str(value or "").strip()
     text = re.sub(r"\s+", " ", text)
-    return text[:limit]
+    if len(text) <= limit:
+        return text
+    clipped = text[: limit + 1]
+    boundary = clipped.rfind(" ")
+    if boundary >= max(1, int(limit * 0.65)):
+        clipped = clipped[:boundary]
+    else:
+        clipped = clipped[:limit]
+    return clipped.rstrip(" ,;:-")
 
 
 def _normalize_terms(value: Any, limit: int = 4) -> list[str]:
@@ -520,93 +551,131 @@ def _short_bubble(value: Any, fallback: str) -> str:
     return " ".join(words[:8])
 
 
+def _caption_word_count(value: Any) -> int:
+    return len(re.findall(r"\b[\w%+-]+\b", str(value or "")))
+
+
+def _trim_story_caption(value: Any, max_words: int = STORY_CAPTION_MAX_WORDS) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    words = text.split()
+    if len(words) > max_words:
+        limited_text = " ".join(words[:max_words])
+        sentence_ends = list(re.finditer(r"[.!?](?=\s|$)", limited_text))
+        if sentence_ends:
+            complete = limited_text[: sentence_ends[-1].end()].strip()
+            if _caption_word_count(complete) >= max(16, STORY_CAPTION_MIN_WORDS // 2):
+                text = complete
+            else:
+                text = limited_text.rstrip(" ,;:-")
+        else:
+            text = limited_text.rstrip(" ,;:-")
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
 def _science_caption(scene: dict[str, Any], lesson: str) -> str:
-    fact = _compact_text(scene.get("science_fact"), 180)
-    cause = _compact_text(scene.get("cause_effect"), 150)
-    caption = _compact_text(scene.get("caption"), 180)
-    if fact and cause:
-        return f"{fact} {cause}"[:220]
-    if fact:
-        return fact
-    if caption:
-        return caption
-    return lesson[:220]
+    explicit = _trim_story_caption(scene.get("caption"))
+    fact = _trim_story_caption(scene.get("science_fact"))
+    lesson_text = _trim_story_caption(lesson)
+
+    if explicit and _caption_word_count(explicit) >= 18:
+        return explicit
+
+    parts: list[str] = []
+    for candidate in (explicit, lesson_text, fact):
+        candidate = _trim_story_caption(candidate)
+        if not candidate:
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", " ", candidate.lower()).strip()
+        if not normalized:
+            continue
+        existing = {re.sub(r"[^a-z0-9]+", " ", item.lower()).strip() for item in parts}
+        if normalized in existing:
+            continue
+        parts.append(candidate)
+        combined = _trim_story_caption(" ".join(parts))
+        if _caption_word_count(combined) >= STORY_CAPTION_MIN_WORDS:
+            return combined
+
+    return _trim_story_caption(" ".join(parts)) or "Notice what changes, then connect that change to the main idea."
+
+
+def _story_scene_duration(caption: str, requested: Any = 16) -> int:
+    try:
+        requested_seconds = float(requested)
+    except (TypeError, ValueError):
+        requested_seconds = 16.0
+    requested_seconds = max(0.0, requested_seconds)
+    reading_seconds = (_caption_word_count(caption) * 60.0) / STORY_READING_WORDS_PER_MINUTE
+    target = max(requested_seconds, reading_seconds + 4.0)
+    return int(math.ceil(max(14.0, min(24.0, target))))
 
 
 def _default_science_scenes(topic: str) -> list[dict[str, Any]]:
     topic_txt = _compact_text(topic, 60) or "this topic"
     return [
         {
-            "heading": "Observe the system",
-            "lesson": f"Scientists start by asking what parts make {topic_txt} work.",
-            "science_fact": f"{topic_txt} can be understood by looking at parts, patterns, and changes.",
-            "vocabulary": ["system", "pattern"],
+            "heading": "Notice the pattern",
+            "lesson": f"Start by looking for the parts, patterns, and changes that make {topic_txt} meaningful.",
+            "science_fact": f"Careful observation helps reveal useful patterns in {topic_txt}.",
+            "vocabulary": ["pattern", "observation"],
             "cause_effect": "Careful observation reveals what changes and what stays stable.",
             "misconception_fix": "",
-            "caption": f"Look for the parts and patterns in {topic_txt}.",
+            "caption": f"A curious learner begins by looking closely at {topic_txt}. Small details reveal a pattern, and that pattern gives the learner a useful question to explore in the next scene.",
             "speech_bubble": "Look for the pattern",
-            "visual": "Scientist guide points to a simple system diagram with colored parts and arrows.",
-            "duration_sec": 10,
+            "visual": "A guide highlights changing parts in a topic-specific environment while a simple pattern emerges.",
+            "duration_sec": 16,
         },
         {
-            "heading": "Find the mechanism",
+            "heading": "Follow the mechanism",
             "lesson": f"A mechanism explains how one step in {topic_txt} leads to the next.",
-            "science_fact": "A mechanism is a chain of cause and effect.",
+            "science_fact": "A mechanism is a connected chain of cause and effect.",
             "vocabulary": ["mechanism", "cause", "effect"],
             "cause_effect": "One change triggers another change.",
             "misconception_fix": "",
-            "caption": "A mechanism connects causes to effects.",
+            "caption": "The learner follows each step instead of memorizing an isolated fact. One change leads to another, and the moving arrows make the cause-and-effect relationship easier to understand.",
             "speech_bubble": "Cause leads to effect",
-            "visual": "Arrows connect three glowing objects from left to right.",
-            "duration_sec": 10,
+            "visual": "Arrows connect three changing objects from left to right in a topic-specific mechanism.",
+            "duration_sec": 16,
         },
         {
-            "heading": "Measure the change",
-            "lesson": f"Many science ideas become clearer when we compare before and after states.",
-            "science_fact": "Comparing states helps reveal evidence.",
-            "vocabulary": ["evidence", "measurement"],
-            "cause_effect": "Measurement turns observations into evidence.",
+            "heading": "Try a real example",
+            "lesson": f"A concrete example shows how the main idea in {topic_txt} works in a real situation.",
+            "science_fact": "Worked examples connect an abstract rule to observable quantities or actions.",
+            "vocabulary": ["example", "evidence"],
+            "cause_effect": "Applying the idea produces a visible result.",
             "misconception_fix": "",
-            "caption": "Compare before and after to see evidence.",
-            "speech_bubble": "Evidence shows change",
-            "visual": "Before and after panels show an object changing with a small chart.",
-            "duration_sec": 10,
+            "caption": "Next, the learner tests the idea with a real example. The quantities, labels, or objects change on screen, allowing the learner to see how the rule produces a specific result.",
+            "speech_bubble": "Try the idea",
+            "visual": "A before-and-after or object simulation shows a concrete topic-specific example changing over time.",
+            "duration_sec": 17,
         },
         {
-            "heading": "Use a model",
-            "lesson": f"A model is a simplified picture that helps explain {topic_txt}.",
-            "science_fact": "Models are useful because they show invisible or complex processes.",
-            "vocabulary": ["model", "process"],
-            "cause_effect": "A good model shows how the parts interact.",
-            "misconception_fix": "",
-            "caption": "Models make invisible processes easier to see.",
-            "speech_bubble": "Models show hidden steps",
-            "visual": "Guide moves small particles through a simple model with arrows.",
-            "duration_sec": 10,
-        },
-        {
-            "heading": "Fix a misconception",
-            "lesson": f"A strong explanation of {topic_txt} separates what is true from what only sounds true.",
-            "science_fact": "Scientific claims should match evidence and mechanisms.",
-            "vocabulary": ["claim", "evidence"],
-            "cause_effect": "Better evidence improves the explanation.",
-            "misconception_fix": "Do not accept a simple story if it misses the mechanism.",
-            "caption": "A claim is stronger when evidence supports it.",
+            "heading": "Compare the explanations",
+            "lesson": f"Comparing two explanations helps separate strong evidence from a common misconception about {topic_txt}.",
+            "science_fact": "A strong explanation should match both the evidence and the mechanism.",
+            "vocabulary": ["compare", "evidence"],
+            "cause_effect": "Better evidence produces a more accurate explanation.",
+            "misconception_fix": "Do not accept an explanation that ignores the observed mechanism.",
+            "caption": "Two explanations may sound possible at first, but only one matches the evidence and the mechanism. The learner compares them carefully and chooses the explanation that accounts for what actually changed.",
             "speech_bubble": "Check the evidence",
-            "visual": "Two signs appear; the guide chooses the one connected to evidence dots.",
-            "duration_sec": 10,
+            "visual": "A split-screen comparison connects evidence markers to the stronger explanation.",
+            "duration_sec": 18,
         },
         {
-            "heading": "Apply the idea",
-            "lesson": f"Once we understand {topic_txt}, we can use it to make better predictions.",
-            "science_fact": "Scientific understanding helps us predict what may happen next.",
+            "heading": "Use what you learned",
+            "lesson": f"Understanding {topic_txt} helps learners make predictions and recognize the idea in new situations.",
+            "science_fact": "A useful model can explain an observation and predict what may happen next.",
             "vocabulary": ["prediction", "application"],
-            "cause_effect": "Knowing the mechanism helps predict the outcome.",
+            "cause_effect": "Understanding the mechanism supports a better prediction.",
             "misconception_fix": "",
-            "caption": "Use the mechanism to make a prediction.",
-            "speech_bubble": "Predict the next step",
-            "visual": "A path of arrows leads from question to model to prediction.",
-            "duration_sec": 10,
+            "caption": "At the end, the learner uses the new understanding to make a prediction or solve a practical problem. The same idea can now be recognized in another situation beyond the story.",
+            "speech_bubble": "Use the idea",
+            "visual": "A path leads from the learned model to a prediction and a new real-world application.",
+            "duration_sec": 18,
         },
     ]
 
@@ -632,7 +701,7 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
         scenes_in = []
 
     scenes: list[dict[str, Any]] = []
-    for i, s in enumerate(scenes_in[:6], start=1):
+    for i, s in enumerate(scenes_in[:STORY_SCENE_COUNT], start=1):
         if not isinstance(s, dict):
             continue
         heading = _compact_text(s.get("heading") or f"Scene {i}", 60)
@@ -647,7 +716,7 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
             visual_strategy = _DEFAULT_VISUAL_SEQUENCE[(i - 1) % len(_DEFAULT_VISUAL_SEQUENCE)]
         host_role = str(s.get("host_role") or "").strip().lower()
         if host_role not in _HOST_ROLES:
-            host_role = ("lead", "small_guide", "absent", "observer", "small_guide", "absent")[(i - 1) % 6]
+            host_role = _DEFAULT_HOST_ROLES[(i - 1) % len(_DEFAULT_HOST_ROLES)]
         essential_labels = _normalize_terms(s.get("essential_labels"), limit=4)
         animation_goal = _compact_text(s.get("animation_goal"), 180)
 
@@ -661,6 +730,7 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
             animation_goal = "Reveal the relationship by changing one meaningful quantity or position."
 
         caption = _science_caption(s, lesson)
+        duration_sec = _story_scene_duration(caption, s.get("duration_sec"))
         speech_bubble = _short_bubble(s.get("speech_bubble"), heading) if s.get("speech_bubble") else ""
 
         scenes.append(
@@ -679,14 +749,14 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
                 "host_role": host_role,
                 "essential_labels": essential_labels,
                 "animation_goal": animation_goal,
-                "duration_sec": 10,
+                "duration_sec": duration_sec,
             }
         )
 
-    if len(scenes) < 6:
+    if len(scenes) < STORY_SCENE_COUNT:
         defaults = _default_science_scenes(topic)
         for fallback in defaults:
-            if len(scenes) >= 6:
+            if len(scenes) >= STORY_SCENE_COUNT:
                 break
             idx = len(scenes) + 1
             fallback = dict(fallback)
@@ -694,16 +764,20 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
                 {
                     "id": idx,
                     "visual_strategy": _DEFAULT_VISUAL_SEQUENCE[(idx - 1) % len(_DEFAULT_VISUAL_SEQUENCE)],
-                    "host_role": ("lead", "small_guide", "absent", "observer", "small_guide", "absent")[(idx - 1) % 6],
+                    "host_role": _DEFAULT_HOST_ROLES[(idx - 1) % len(_DEFAULT_HOST_ROLES)],
                     "essential_labels": list(fallback.get("vocabulary") or [])[:3],
                     "animation_goal": "Reveal the relationship through one visible change.",
                 }
+            )
+            fallback["caption"] = _science_caption(fallback, str(fallback.get("lesson") or ""))
+            fallback["duration_sec"] = _story_scene_duration(
+                str(fallback.get("caption") or ""), fallback.get("duration_sec")
             )
             scenes.append(fallback)
 
     # Preserve valid model choices but deterministically prevent repetitive layouts.
     used: set[str] = set()
-    for idx, scene in enumerate(scenes[:6]):
+    for idx, scene in enumerate(scenes[:STORY_SCENE_COUNT]):
         strategy = str(scene.get("visual_strategy") or "")
         previous = str(scenes[idx - 1].get("visual_strategy") or "") if idx else ""
         if strategy == previous:
@@ -747,7 +821,7 @@ def _normalize_story_plan(plan: dict[str, Any], topic: str) -> dict[str, Any]:
         "misconception_to_fix": misconception_to_fix,
         "moral": moral,
         "conclusion": conclusion,
-        "scenes": scenes[:6],
+        "scenes": scenes[:STORY_SCENE_COUNT],
     }
 
 
@@ -970,8 +1044,8 @@ def _story_draw_bundle_prompt(
         "scenes": scenes,
     }
     return (
-        "Create all six distinct scene drawing bodies from this compact story plan. "
-        "Return exactly six SCENE_DRAW blocks in scene order.\n"
+        "Create all five distinct scene drawing bodies from this compact story plan. "
+        "Return exactly five SCENE_DRAW blocks in scene order.\n"
         + json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     )
 
@@ -986,7 +1060,7 @@ def _deterministic_scene_js(
     index: int,
     host_character: str | None,
 ) -> str:
-    strategy = str(scene.get("visual_strategy") or _DEFAULT_VISUAL_SEQUENCE[(index - 1) % 6])
+    strategy = str(scene.get("visual_strategy") or _DEFAULT_VISUAL_SEQUENCE[(index - 1) % len(_DEFAULT_VISUAL_SEQUENCE)])
     labels = list(scene.get("essential_labels") or scene.get("vocabulary") or [])
     while len(labels) < 3:
         labels.append(("Input", "Change", "Result")[len(labels)])
@@ -1167,7 +1241,8 @@ def _build_scene_template_html(
         "essential_labels": list(scene.get("essential_labels") or []),
         "animation_goal": str(scene.get("animation_goal") or ""),
         "draw_status": str(scene.get("draw_status") or "custom"),
-        "duration_sec": int(scene.get("duration_sec") or 10),
+        "duration_sec": int(scene.get("duration_sec") or 16),
+        "transition_hold_sec": STORY_TRANSITION_HOLD_SEC,
         "theme": THEME_PRESETS[theme_key],
         "host": host_payload,
     }
@@ -1528,43 +1603,72 @@ def _build_scene_template_html(
             x.fillStyle = '#f97316';
             x.beginPath(); x.arc(cx + 30, tableY - 12, 10, 0, Math.PI * 2); x.fill();
         }}
+    function wrapCanvasText(ctx, text, maxWidth, maxLines) {{
+      const words = String(text || '').split(/\\s+/).filter(Boolean);
+      const lines = [];
+      let line = '';
+      for (const word of words) {{
+        const candidate = line ? line + ' ' + word : word;
+        if (ctx.measureText(candidate).width > maxWidth && line) {{
+          lines.push(line);
+          line = word;
+          if (lines.length >= maxLines - 1) break;
+        }} else {{
+          line = candidate;
+        }}
+      }}
+      if (line && lines.length < maxLines) lines.push(line);
+      return lines;
+    }}
     function tick(t) {{
       const dt = (t - start) / 1000;
+      const barH = Math.min(150, Math.max(126, Math.round(h * 0.22)));
+      const contentH = Math.max(240, h - barH);
+      const holdSec = Math.min(Number(S.transition_hold_sec || 1.25), Number(S.duration_sec || 16) * 0.2);
+      const visualDt = Math.min(dt, Math.max(0, Number(S.duration_sec || 16) - holdSec));
       const g = x.createLinearGradient(0,0,0,h);
       g.addColorStop(0, S.theme.bg0); g.addColorStop(1, S.theme.bg1);
       x.fillStyle = g; x.fillRect(0,0,w,h);
             if (drawSceneFn) {{
                 try {{
-                    drawSceneFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                    drawSceneFn(x, w, contentH, visualDt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
                         drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
                         drawFractionCircle, drawBarChart, drawMeasurement);
                 }} catch (e) {{
-                    if (fallbackDrawFn) fallbackDrawFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                    if (fallbackDrawFn) fallbackDrawFn(x, w, contentH, visualDt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
                         drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
                         drawFractionCircle, drawBarChart, drawMeasurement);
-                    else drawFallbackAnimated(dt);
+                    else drawFallbackAnimated(visualDt);
                 }}
             }} else if (fallbackDrawFn) {{
-                fallbackDrawFn(x, w, h, dt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                fallbackDrawFn(x, w, contentH, visualDt, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
                     drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
                     drawFractionCircle, drawBarChart, drawMeasurement);
             }} else {{
-                drawFallbackAnimated(dt);
+                drawFallbackAnimated(visualDt);
             }}
-      // Bottom-of-canvas info bar
-      const barH = 80;
+      // Learner-facing story text appears only in this bottom canvas bar.
       const barY = h - barH;
-      x.fillStyle = S.theme.panel || 'rgba(0,0,0,0.55)';
+      x.fillStyle = S.theme.panel || 'rgba(0,0,0,0.72)';
       x.fillRect(0, barY, w, barH);
       x.fillStyle = '#ffffff';
       x.font = '700 20px Arial';
       x.textAlign = 'center';
       x.textBaseline = 'top';
-      x.fillText(String(S.heading || '').slice(0, 60), w / 2, barY + 12);
-      x.font = '400 15px Arial';
-      x.fillStyle = 'rgba(255,255,255,0.82)';
-      const capText = String(S.caption || S.science_fact || S.lesson || '').slice(0, 140);
-      x.fillText(capText, w / 2, barY + 40);
+      x.fillText(String(S.heading || ''), w / 2, barY + 11);
+      const captionFont = h < 520 ? 14 : 16;
+      const lineHeight = captionFont + 8;
+      x.font = '400 ' + captionFont + 'px Arial';
+      x.fillStyle = 'rgba(255,255,255,0.88)';
+      const captionLines = wrapCanvasText(
+        x,
+        String(S.caption || S.science_fact || S.lesson || ''),
+        Math.max(240, w - 72),
+        4
+      );
+      captionLines.forEach((line, index) => {{
+        x.fillText(line, w / 2, barY + 40 + index * lineHeight);
+      }});
       x.textAlign = 'left';
       x.textBaseline = 'alphabetic';
       requestAnimationFrame(tick);
@@ -1887,7 +1991,7 @@ def _build_story_slider_html(
                 "essential_labels": list(scene.get("essential_labels") or []),
                 "animation_goal": str(scene.get("animation_goal") or ""),
                 "draw_status": str(scene.get("draw_status") or "custom"),
-                "duration_sec": int(scene.get("duration_sec") or 10),
+                "duration_sec": int(scene.get("duration_sec") or 16),
                 "theme": scene_theme,
                 "draw_js": draw_js_by_scene[idx] if idx < len(draw_js_by_scene) else "",
                 "fallback_js": fallback_js_by_scene[idx] if idx < len(fallback_js_by_scene) else "",
@@ -1898,6 +2002,7 @@ def _build_story_slider_html(
         "moral": str(plan.get("moral") or ""),
         "conclusion": str(plan.get("conclusion") or ""),
         "host": host_payload,
+        "transition_hold_sec": STORY_TRANSITION_HOLD_SEC,
         "scenes": scenes_payload,
     }
     payload_json = json.dumps(payload, ensure_ascii=True)
@@ -1911,19 +2016,16 @@ def _build_story_slider_html(
     .wrap {{ display: grid; grid-template-rows: minmax(0, 1fr) auto; width: 100%; height: 100%; }}
     .viz {{ position: relative; min-width: 0; min-height: 0; }}
     #c {{ width: 100%; height: 100%; display: block; }}
-    .panel {{ background: rgba(8, 14, 34, 0.94); border-top: 1px solid rgba(255,255,255,0.12); padding: 12px 14px; display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 12px; align-items: start; }}
-    .title {{ font-size: 24px; font-weight: 700; margin: 0 0 6px 0; }}
-    .row {{ display: flex; align-items: center; gap: 8px; }}
-    .meta {{ font-size: 13px; color: #bfdbfe; margin-bottom: 6px; }}
-    .caption {{ font-size: 14px; line-height: 1.4; color: #e2e8f0; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px; }}
+    .panel {{ background: rgba(8, 14, 34, 0.96); border-top: 1px solid rgba(255,255,255,0.12); padding: 10px 14px; display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1.4fr) auto; gap: 14px; align-items: center; }}
+    .title {{ font-size: 18px; font-weight: 700; margin: 0 0 3px 0; }}
+    .meta {{ font-size: 13px; color: #bfdbfe; }}
     .dots {{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }}
     .dot {{ width: 10px; height: 10px; border-radius: 999px; background: rgba(255,255,255,0.28); border: 0; cursor: pointer; }}
     .dot.active {{ background: #7dd3fc; }}
-    .controls {{ display: flex; gap: 8px; align-items: center; justify-content: flex-end; min-width: 130px; }}
+    .controls {{ display: flex; gap: 8px; align-items: center; justify-content: flex-end; min-width: 210px; }}
     button {{ border: 1px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.08); color: #fff; padding: 8px 10px; border-radius: 8px; cursor: pointer; }}
     button:hover {{ background: rgba(255,255,255,0.14); }}
     input[type="range"] {{ width: 100%; margin-top: 4px; }}
-    .footer {{ font-size: 12px; color: #cbd5e1; padding-top: 6px; }}
     .col-main {{ min-width: 0; }}
     .col-nav {{ min-width: 0; }}
     @media (max-width: 920px) {{
@@ -1938,13 +2040,7 @@ def _build_story_slider_html(
     <aside class="panel">
       <div class="col-main">
         <h2 class="title" id="storyTitle">Story</h2>
-        <div class="row meta">
-          <strong id="sceneLabel">Scene 1</strong>
-          <span>•</span>
-          <span id="sceneHeading">Loading...</span>
-        </div>
-        <div class="caption" id="sceneCaption">...</div>
-        <div class="footer" id="storyFooter"></div>
+        <div class="meta"><strong id="sceneLabel">Scene 1 of 5</strong></div>
       </div>
       <div class="col-nav">
         <input id="sceneSlider" type="range" min="1" max="1" step="1" value="1" />
@@ -1952,6 +2048,7 @@ def _build_story_slider_html(
       </div>
       <div class="controls">
         <button id="prevBtn" type="button" aria-label="Previous scene">Prev</button>
+        <button id="pauseBtn" type="button" aria-label="Pause story" aria-pressed="false">Pause</button>
         <button id="nextBtn" type="button" aria-label="Next scene">Next</button>
       </div>
     </aside>
@@ -1963,12 +2060,10 @@ def _build_story_slider_html(
     const viz = document.getElementById('viz');
     const storyTitle = document.getElementById('storyTitle');
     const sceneLabel = document.getElementById('sceneLabel');
-    const sceneHeading = document.getElementById('sceneHeading');
-    const sceneCaption = document.getElementById('sceneCaption');
     const sceneSlider = document.getElementById('sceneSlider');
     const sceneDots = document.getElementById('sceneDots');
-    const storyFooter = document.getElementById('storyFooter');
     const prevBtn = document.getElementById('prevBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
     const nextBtn = document.getElementById('nextBtn');
         const scenes = Array.isArray(P.scenes) ? P.scenes : [];
         function drawCharacter(ctx, cx, cy, scale, headColor, bodyColor, eyeColor, mouthUp, bobAmt) {{
@@ -2249,12 +2344,11 @@ def _build_story_slider_html(
             return null;
         }});
     storyTitle.textContent = P.title || "Story";
-    storyFooter.textContent = "";
-    storyFooter.style.display = "none";
-    sceneCaption.textContent = P.moral || P.conclusion || "";
     let w = 0, h = 0;
     let current = 0;
-    let sceneStart = performance.now();
+    let elapsedSeconds = 0;
+    let previousFrameTime = performance.now();
+    let isPaused = false;
     function fit() {{
       cv.width = Math.max(800, viz.clientWidth);
       cv.height = Math.max(450, viz.clientHeight);
@@ -2263,11 +2357,9 @@ def _build_story_slider_html(
     function setScene(idx) {{
       const n = scenes.length || 1;
       current = ((idx % n) + n) % n;
-      sceneStart = performance.now();
-      const s = scenes[current] || {{}};
-      sceneLabel.textContent = `Scene ${{current + 1}}`;
-      sceneHeading.textContent = String(s.heading || P.title || 'Story');
-      sceneCaption.textContent = String(s.caption || s.science_fact || s.lesson || '');
+      elapsedSeconds = 0;
+      previousFrameTime = performance.now();
+      sceneLabel.textContent = `Scene ${{current + 1}} of ${{n}}`;
       sceneSlider.value = String(current + 1);
       Array.from(sceneDots.children).forEach((el, i) => el.classList.toggle('active', i === current));
     }}
@@ -2282,6 +2374,13 @@ def _build_story_slider_html(
         sceneDots.appendChild(d);
       }}
       prevBtn.addEventListener('click', () => setScene(current - 1));
+      pauseBtn.addEventListener('click', () => {{
+        isPaused = !isPaused;
+        pauseBtn.textContent = isPaused ? 'Play' : 'Pause';
+        pauseBtn.setAttribute('aria-label', isPaused ? 'Play story' : 'Pause story');
+        pauseBtn.setAttribute('aria-pressed', String(isPaused));
+        previousFrameTime = performance.now();
+      }});
       nextBtn.addEventListener('click', () => setScene(current + 1));
       sceneSlider.addEventListener('input', () => setScene(Number(sceneSlider.value) - 1));
     }}
@@ -2355,11 +2454,35 @@ def _build_story_slider_html(
             ctx.fillStyle = theme?.accent || '#f97316';
             ctx.beginPath(); ctx.arc(cx + 30, tableY - 12, 10, 0, Math.PI * 2); ctx.fill();
         }}
+    function wrapCanvasText(ctx, text, maxWidth, maxLines) {{
+      const words = String(text || '').split(/\\s+/).filter(Boolean);
+      const lines = [];
+      let line = '';
+      for (const word of words) {{
+        const candidate = line ? line + ' ' + word : word;
+        if (ctx.measureText(candidate).width > maxWidth && line) {{
+          lines.push(line);
+          line = word;
+          if (lines.length >= maxLines - 1) break;
+        }} else {{
+          line = candidate;
+        }}
+      }}
+      if (line && lines.length < maxLines) lines.push(line);
+      return lines;
+    }}
     function draw(t) {{
+      const delta = Math.min(0.1, Math.max(0, (t - previousFrameTime) / 1000));
+      previousFrameTime = t;
+      if (!isPaused) elapsedSeconds += delta;
       const s = scenes[current] || {{}};
       const theme = s.theme || {{ bg0:'#070f25', bg1:'#1d345f', accent:'#7dd3fc', glow:'#60a5fa' }};
-      const elapsed = (t - sceneStart) / 1000;
-      const dur = Math.max(5, Number(s.duration_sec || 10));
+      const elapsed = elapsedSeconds;
+      const dur = Math.max(14, Number(s.duration_sec || 16));
+      const holdSec = Math.min(Number(P.transition_hold_sec || 1.25), dur * 0.2);
+      const visualElapsed = Math.min(elapsed, Math.max(0, dur - holdSec));
+      const barH = Math.min(150, Math.max(126, Math.round(h * 0.22)));
+      const contentH = Math.max(240, h - barH);
       const g = ctx.createLinearGradient(0, 0, 0, h);
       g.addColorStop(0, theme.bg0); g.addColorStop(1, theme.bg1);
       ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
@@ -2368,35 +2491,44 @@ def _build_story_slider_html(
     const fallbackFn = fallbackFns[current];
     if (fn) {{
             try {{
-                fn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                fn(ctx, w, contentH, visualElapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
                     drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
                     drawFractionCircle, drawBarChart, drawMeasurement);
             }} catch (e) {{
-                if (fallbackFn) fallbackFn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+                if (fallbackFn) fallbackFn(ctx, w, contentH, visualElapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
                     drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
                     drawFractionCircle, drawBarChart, drawMeasurement);
-                else drawFallbackAnimated(elapsed, theme);
+                else drawFallbackAnimated(visualElapsed, theme);
             }}
     }} else if (fallbackFn) {{
-            fallbackFn(ctx, w, h, elapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
+            fallbackFn(ctx, w, contentH, visualElapsed, drawCharacter, drawCloud, drawGround, drawSpeechBubble, drawStar,
                 drawCharacterTemplate, drawLabel, drawEquation, drawArrow, drawPanel, drawRoute,
                 drawFractionCircle, drawBarChart, drawMeasurement);
     }} else {{
-            drawFallbackAnimated(elapsed, theme);
+            drawFallbackAnimated(visualElapsed, theme);
     }}
-      // Bottom-of-canvas info bar
-      const barH = 80;
+      // Learner-facing story text appears only in this bottom canvas bar.
       const barY = h - barH;
-      ctx.fillStyle = theme.panel || 'rgba(0,0,0,0.55)';
+      ctx.fillStyle = theme.panel || 'rgba(0,0,0,0.72)';
       ctx.fillRect(0, barY, w, barH);
       ctx.fillStyle = '#ffffff';
       ctx.font = '700 20px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(String(s.heading || '').slice(0, 60), w / 2, barY + 12);
-      ctx.font = '400 15px Arial';
-      ctx.fillStyle = 'rgba(255,255,255,0.82)';
-      ctx.fillText(String(s.caption || s.science_fact || s.lesson || '').slice(0, 140), w / 2, barY + 40);
+      ctx.fillText(String(s.heading || ''), w / 2, barY + 11);
+      const captionFont = h < 520 ? 14 : 16;
+      const lineHeight = captionFont + 8;
+      ctx.font = '400 ' + captionFont + 'px Arial';
+      ctx.fillStyle = 'rgba(255,255,255,0.88)';
+      const captionLines = wrapCanvasText(
+        ctx,
+        String(s.caption || s.science_fact || s.lesson || ''),
+        Math.max(240, w - 72),
+        4
+      );
+      captionLines.forEach((line, index) => {{
+        ctx.fillText(line, w / 2, barY + 40 + index * lineHeight);
+      }});
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       // Progress bar at top
@@ -2405,7 +2537,7 @@ def _build_story_slider_html(
       ctx.fillRect(16, 10, w - 32, 8);
       ctx.fillStyle = theme.accent || '#7dd3fc';
       ctx.fillRect(16, 10, (w - 32) * p, 8);
-      if (elapsed >= dur && scenes.length > 1) setScene(current + 1);
+      if (!isPaused && elapsed >= dur && scenes.length > 1) setScene(current + 1);
       requestAnimationFrame(draw);
     }}
     window.addEventListener('resize', fit);
