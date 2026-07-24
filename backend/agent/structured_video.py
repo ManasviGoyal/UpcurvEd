@@ -3,8 +3,8 @@
 One model response contains low-fragility tagged scene fields plus separate raw Manim bodies.
 The parser salvages complete scenes independently and retains legacy JSON compatibility for
 existing bundles/models. Standard scenes render deterministically. Custom scenes receive static
-validation, one focused repair attempt, and a deterministic fallback when the creative visual is
-not essential. Graph scenes remain essential.
+validation; optional failures fall back locally without another model call, while essential graphs
+or explicitly marked constructions keep one focused repair attempt.
 """
 
 from __future__ import annotations
@@ -255,6 +255,63 @@ def _normalize_labels(value: Any) -> list[str]:
         for label in labels
         if re.sub(r"[^a-z0-9]+", " ", label.lower()).strip() not in _GENERIC_LABELS
     ]
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "required"}
+
+
+def _derive_display_points(value: Any, *, limit: int = 3) -> list[str]:
+    """Create short learner-facing points from existing narration without another LLM call."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return []
+
+    raw_parts = re.split(r"(?<=[.!?])\s+|[;•]+", text)
+    candidates: list[str] = []
+    for raw in raw_parts:
+        part = re.sub(r"^[\s\-–—•]+", "", raw).strip()
+        if not part:
+            continue
+        # Long single sentences often contain useful learner-facing clauses.
+        clauses = re.split(
+            r",\s+|\s+(?:and|but|so|because|while|whereas)\s+",
+            part,
+            flags=re.IGNORECASE,
+        )
+        useful = [clause.strip(" ,.;:") for clause in clauses if len(clause.strip().split()) >= 3]
+        if len(useful) >= 2 and len(part) > 105:
+            candidates.extend(useful)
+        else:
+            candidates.append(part.strip(" ,;"))
+
+    points: list[str] = []
+    for candidate in candidates:
+        point = _short_text(candidate, 112, "").rstrip(" .")
+        if not point:
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", " ", point.lower()).strip()
+        if normalized and normalized not in {
+            re.sub(r"[^a-z0-9]+", " ", existing.lower()).strip()
+            for existing in points
+        }:
+            points.append(point)
+        if len(points) >= limit:
+            break
+    return points
+
+
+def _scene_has_standard_visible_content(scene: dict[str, Any]) -> bool:
+    return bool(
+        str(scene.get("subtitle") or "").strip()
+        or str(scene.get("learner_question") or "").strip()
+        or str(scene.get("formula") or "").strip()
+        or [x for x in (scene.get("key_points") or []) if str(x).strip()]
+        or [x for x in (scene.get("labels") or []) if str(x).strip()]
+        or [x for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
+    )
 
 
 def _json_object_candidate(raw: str) -> str:
@@ -562,12 +619,14 @@ def _parse_tagged_video_plan(text: str) -> tuple[dict[str, Any], str] | None:
         "visual": "VISUAL",
         "formula": "FORMULA",
         "duration_sec": "DURATION_SEC",
+        "essential_visual": "ESSENTIAL_VISUAL",
         "code_goal": "CODE_GOAL",
         "manim_body_ref": "MANIM_BODY_REF",
     }
     list_fields = {
         "required_visual_elements": "REQUIRED_VISUAL_ELEMENT",
         "labels": "LABEL",
+        "key_points": "KEY_POINT",
     }
 
     for index, (attrs, block) in enumerate(scene_blocks, start=1):
@@ -776,7 +835,13 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
             incoming.get("required_visual_elements"), limit=6, item_limit=64
         )
         labels = _normalize_labels(incoming.get("labels"))
+        key_points = _normalize_string_list(
+            incoming.get("key_points") or incoming.get("display_points"),
+            limit=5,
+            item_limit=120,
+        )
         formula = _normalize_math(incoming.get("formula") or incoming.get("equation"), 220)
+        essential_visual = _coerce_bool(incoming.get("essential_visual")) or visual_mode == "graph"
         raw_steps = (
             incoming.get("steps")
             or incoming.get("calculation_steps")
@@ -828,6 +893,8 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
             "visual": visual,
             "required_visual_elements": required_elements,
             "labels": labels,
+            "key_points": key_points,
+            "essential_visual": essential_visual,
             "duration_sec": duration,
         }
         if formula:
@@ -887,8 +954,12 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
         formula = str(scene.get("formula") or "").strip()
         steps = [str(x) for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
 
-        if scene_type == "custom_manim_scene" and not body:
-            errors.append(f"Scene {index}: custom_manim_scene is missing manim_body.")
+        if (
+            scene_type == "custom_manim_scene"
+            and not body
+            and (mode == "graph" or _coerce_bool(scene.get("essential_visual")))
+        ):
+            errors.append(f"Scene {index}: essential custom_manim_scene is missing manim_body.")
 
         if mode == "graph":
             if scene_type != "custom_manim_scene":
@@ -952,9 +1023,29 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
             scene["required_visual_elements"] = [inferred]
             fixes.append(f"Scene {index}: inferred a required graph feature locally.")
 
-        # A non-graph custom scene without code can safely become a deterministic component
-        # scene. This avoids a whole-plan repair call for an optional creative flourish.
-        if scene_type == "custom_manim_scene" and not body and visual_mode != "graph":
+        # Every teaching scene keeps learner-facing material available even when a custom
+        # visual later falls back. Use existing narration only; do not make another LLM call.
+        if index > 1 and not _scene_has_standard_visible_content(scene):
+            points = _derive_display_points(scene.get("narration"), limit=3)
+            title_norm = re.sub(r"[^a-z0-9]+", " ", str(scene.get("title") or "").lower()).strip()
+            points = [
+                point for point in points
+                if re.sub(r"[^a-z0-9]+", " ", point.lower()).strip() != title_norm
+            ]
+            if not points:
+                points = [f"Focus on the key relationship in {str(scene.get('title') or 'this idea')}."]
+            scene["key_points"] = points
+            current_duration = float(scene.get("duration_sec") or 8.0)
+            visual_minimum = _estimate_speech_seconds(scene.get("narration")) + 1.0 + 0.55 * len(points)
+            scene["duration_sec"] = max(current_duration, min(90.0, visual_minimum))
+            fixes.append(
+                f"Scene {index}: derived learner-facing display points locally from narration."
+            )
+
+        # A nonessential custom scene without code becomes a deterministic animated component.
+        # Essential graphs/constructions remain eligible for one focused repair call.
+        is_essential = visual_mode == "graph" or _coerce_bool(scene.get("essential_visual"))
+        if scene_type == "custom_manim_scene" and not body and not is_essential:
             scene["type"] = "concept_scene"
             if visual_mode not in {"diagram", "comparison", "process", "text"}:
                 scene["visual_mode"] = "diagram"
@@ -1209,46 +1300,59 @@ def _render_scene_clip(
     else:
         failure_stage = "static_validation"
 
-    logger.warning(
-        "custom_scene_repair_start scene=%s stage=%s detail=%s",
-        scene_index,
-        failure_stage,
-        initial_detail,
+    should_repair = (
+        str(scene.get("visual_mode") or "") == "graph"
+        or _coerce_bool(scene.get("essential_visual"))
     )
-    repair_raw = call_llm(
-        provider=provider_name,
-        api_key=api_key,
-        model=model,
-        system=STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM,
-        user=build_structured_video_creative_repair_prompt(
-            scene=scene,
-            original_body=original_body,
-            failure_stage=failure_stage,
-            error_detail=initial_detail[:3000],
-        ),
-        temperature=0.12,
-        max_tokens=4200,
-    )
-    repaired_body = _extract_body(repair_raw)
-    (logs_dir / f"scene_{scene_index:02d}_repair_raw.py").write_text(repaired_body, encoding="utf-8")
-    repaired_errors = _validate_custom_body(repaired_body, scene)
-    repair_detail = "; ".join(repaired_errors)
-    if not repaired_errors:
-        repaired_code = build_custom_scene_code(scene, repaired_body)
-        (logs_dir / f"scene_{scene_index:02d}_repaired.py").write_text(repaired_code, encoding="utf-8")
-        repaired_job_id = f"{scene_job_id}-repair"
-        clip, result, render_detail = _render_code_once(code=repaired_code, scene_job_id=repaired_job_id)
-        if clip is not None:
-            scene["manim_body"] = repaired_body
-            return clip, {
-                "scene_index": scene_index,
-                "scene_type": scene.get("type"),
-                "render_source": "custom_repaired",
-                "used_fallback": False,
-                "job_id": result.get("job_id"),
-                "initial_failure": initial_detail[:1200],
-            }, repaired_code
-        repair_detail = render_detail
+    repair_detail = "LLM repair skipped for optional custom scene."
+    if should_repair:
+        logger.warning(
+            "custom_scene_repair_start scene=%s stage=%s detail=%s",
+            scene_index,
+            failure_stage,
+            initial_detail,
+        )
+        repair_raw = call_llm(
+            provider=provider_name,
+            api_key=api_key,
+            model=model,
+            system=STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM,
+            user=build_structured_video_creative_repair_prompt(
+                scene=scene,
+                original_body=original_body,
+                failure_stage=failure_stage,
+                error_detail=initial_detail[:3000],
+            ),
+            temperature=0.12,
+            max_tokens=4200,
+        )
+        repaired_body = _extract_body(repair_raw)
+        (logs_dir / f"scene_{scene_index:02d}_repair_raw.py").write_text(repaired_body, encoding="utf-8")
+        repaired_errors = _validate_custom_body(repaired_body, scene)
+        repair_detail = "; ".join(repaired_errors)
+        if not repaired_errors:
+            repaired_code = build_custom_scene_code(scene, repaired_body)
+            (logs_dir / f"scene_{scene_index:02d}_repaired.py").write_text(repaired_code, encoding="utf-8")
+            repaired_job_id = f"{scene_job_id}-repair"
+            clip, result, render_detail = _render_code_once(code=repaired_code, scene_job_id=repaired_job_id)
+            if clip is not None:
+                scene["manim_body"] = repaired_body
+                return clip, {
+                    "scene_index": scene_index,
+                    "scene_type": scene.get("type"),
+                    "render_source": "custom_repaired",
+                    "used_fallback": False,
+                    "job_id": result.get("job_id"),
+                    "initial_failure": initial_detail[:1200],
+                }, repaired_code
+            repair_detail = render_detail
+    else:
+        logger.warning(
+            "custom_scene_optional_fallback scene=%s stage=%s detail=%s",
+            scene_index,
+            failure_stage,
+            initial_detail,
+        )
 
     # A graph is an essential teaching visual. Never replace it with a generic card.
     if str(scene.get("visual_mode") or "") == "graph":
@@ -1475,7 +1579,9 @@ def _inherit_missing_scene_fields(
         "learner_question",
         "visual_mode",
         "required_visual_elements",
+        "essential_visual",
         "labels",
+        "key_points",
         "manim_body_ref",
     )
     for index, scene in enumerate(edited_scenes):

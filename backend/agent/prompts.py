@@ -89,12 +89,14 @@ def _format_structured_plan(plan: dict[str, Any]) -> str:
         ("VISUAL", "visual"),
         ("FORMULA", "formula"),
         ("DURATION_SEC", "duration_sec"),
+        ("ESSENTIAL_VISUAL", "essential_visual"),
         ("CODE_GOAL", "code_goal"),
         ("MANIM_BODY_REF", "manim_body_ref"),
     )
     list_fields = (
         ("REQUIRED_VISUAL_ELEMENT", "required_visual_elements"),
         ("LABEL", "labels"),
+        ("KEY_POINT", "key_points"),
     )
 
     for index, scene in enumerate(scenes, start=1):
@@ -192,6 +194,7 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     <VISUAL>Internal production direction for the animation.</VISUAL>
     <REQUIRED_VISUAL_ELEMENT>first concrete element</REQUIRED_VISUAL_ELEMENT>
     <REQUIRED_VISUAL_ELEMENT>second concrete element</REQUIRED_VISUAL_ELEMENT>
+    <ESSENTIAL_VISUAL>false</ESSENTIAL_VISUAL>
     <CODE_GOAL>Internal instruction describing what the code must demonstrate.</CODE_GOAL>
     <MANIM_BODY_REF>scene_3</MANIM_BODY_REF>
     </SCENE_PLAN>
@@ -204,7 +207,7 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Never output JSON, Python dictionaries, markdown fences, or prose outside the tags.
     - Put each field in its own opening and closing tag. Close each SCENE_PLAN before starting
       the next one. Omit optional fields rather than returning empty tags.
-    - Repeat REQUIRED_VISUAL_ELEMENT and LABEL tags for multiple values.
+    - Repeat REQUIRED_VISUAL_ELEMENT, LABEL, and KEY_POINT tags for multiple values.
     - For a sequence, repeat STEP_TEXT and immediately follow each one with its matching
       STEP_NARRATION. CALCULATION_STEP may be read for legacy compatibility, but new output
       must use STEP_TEXT.
@@ -212,9 +215,9 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Output all SCENE_PLAN blocks before any MANIM_BODY blocks.
 
     Field visibility rules:
-    - Learner-facing fields are TITLE, SUBTITLE, LEARNER_QUESTION, NARRATION, LABEL, FORMULA,
-      STEP_TEXT, and STEP_NARRATION. Write only educational content in these fields.
-    - VISUAL, CODE_GOAL, MANIM_BODY_REF, and MANIM_BODY are internal production fields. They
+    - Learner-facing fields are TITLE, SUBTITLE, LEARNER_QUESTION, NARRATION, LABEL, KEY_POINT,
+      FORMULA, STEP_TEXT, and STEP_NARRATION. Write only educational content in these fields.
+    - VISUAL, ESSENTIAL_VISUAL, CODE_GOAL, MANIM_BODY_REF, and MANIM_BODY are internal production fields. They
       may describe fades, movement, layout, camera behavior, or implementation, but they are
       never shown to learners.
     - Never place production directions such as how text enters, exits, moves, or transitions
@@ -228,6 +231,13 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
 
     Teaching rules:
     - Scene 1 must be title_scene. Use only the scenes needed to teach clearly.
+    - Every non-title scene must show meaningful learner-facing visual content throughout the
+      narration. Never create a long scene that displays only its heading.
+    - Every non-title scene must include at least one of these: two or more KEY_POINT or LABEL
+      values, one or more STEP_TEXT values, a displayed FORMULA, or a topic-specific custom
+      Manim visual that visibly explains the idea.
+    - KEY_POINT is for concise learner-facing bullets or cards when a scene does not need an
+      ordered sequence. Use two to five topic-specific points rather than generic filler.
     - Teach meaning before notation. Define unfamiliar ideas and the problem a formula solves.
     - Graph ideas must show the relevant graph feature before algebra. Every graph scene must
       be custom_manim_scene and must name concrete REQUIRED_VISUAL_ELEMENT fields.
@@ -245,14 +255,23 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
       x = (-b +/- sqrt(b^2 - 4ac)) / (2a), not LaTeX or special math glyphs.
     - LABEL is optional and topic-specific. Do not use Concept, Equation, Step, Input, Output,
       Result, or Example as filler labels.
-    - Use custom scenes for graphs, geometric constructions, changing systems, or genuinely
-      topic-specific motion. Normally use no more than two custom scenes.
+    - Use custom scenes whenever moving objects, changing quantities, spatial relationships,
+      measurements, transformations, concrete everyday examples, diagrams, timelines, graphs,
+      or simulations would make the explanation clearer.
+    - A broad four-to-seven-scene educational video should normally contain two to four simple
+      custom_manim_scene visuals. Other scenes may use stable components with KEY_POINT, LABEL,
+      FORMULA, or STEP_TEXT content.
+    - Keep each custom visual focused and reliable: use roughly two to five main visual objects,
+      animate the central relationship, and keep important objects visible while narrated.
+      A small clear animation is better than a complex fragile one.
+    - Set ESSENTIAL_VISUAL to true only for a graph or a geometric/construction visual that is
+      explicitly required by the user. Otherwise use false or omit it.
     - Do not display internal scene-type names.
 
     Every custom scene needs a unique MANIM_BODY_REF and matching MANIM_BODY block. The wrapper
     provides: scene, title, narration, labels, visual, formula, steps, step_narrations,
-    calculation_steps as a legacy alias, learning_role, learner_question, visual_mode,
-    required_visual_elements, bg, label(...), formula_label(...), instruction_step_label(...),
+    calculation_steps as a legacy alias, key_points, learning_role, learner_question,
+    visual_mode, required_visual_elements, essential_visual, bg, label(...), formula_label(...), instruction_step_label(...),
     calculation_step_label(...), add_instruction_step(...), next_calculation_step(...), and
     wait_for_voiceover(...).
 
@@ -264,8 +283,10 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Use simple primitives such as Text, Circle, Rectangle, RoundedRectangle, Dot, Line,
       DashedLine, Arrow, Arc, VGroup, NumberLine, Axes, and NumberPlane.
     - Include at least one voiceover block, three visible animation actions, and meaningful
-      motion. Graph bodies must create Axes or NumberPlane, draw the relationship, and mark
-      the listed visual features.
+      topic-specific motion. Graph bodies must create Axes or NumberPlane, draw the relationship,
+      and mark the listed visual features.
+    - Do not animate decorative motion alone. The movement must show the relationship described
+      by the narration. Keep two to five main objects on screen instead of building a dense scene.
     - When a custom scene truly needs instructional steps, keep earlier steps visible, add
       each new step beneath the previous ones, narrate each step, and hold the completed
       sequence for at least 2.5 seconds. Prefer add_instruction_step(...).
@@ -292,8 +313,9 @@ STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety("""\
     Use the exact field tags from the supplied current plan. Keep good material and make the
     smallest changes needed. Close every field and SCENE_PLAN tag. A graph scene must use real
     axes or a number plane, draw a coordinate-based relationship, and mark the required
-    features. Preserve STEP_TEXT and STEP_NARRATION pairs for instructional sequences. A
-    worked mathematics example must show completed substitution, simplification, and final
+    features. Preserve KEY_POINT values and STEP_TEXT/STEP_NARRATION pairs. Every non-title
+    scene must retain visible learner-facing content beyond its heading. A worked mathematics
+    example must show completed substitution, simplification, and final
     answer. Keep earlier steps visible and hold the completed sequence. Begin each MANIM_BODY
     at column 1 and indent only statements nested inside with, if, for, or while.
 """)
@@ -326,10 +348,13 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety("""\
 
     You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
     Preserve useful material and improve learning_role, learner_question, visual_mode,
-    required_visual_elements, formula, steps, step_narrations, and optional labels as needed.
+    required_visual_elements, essential_visual, formula, key_points, steps, step_narrations,
+    and optional labels as needed.
     Teach meaning before notation. Graph explanations show the graph feature before algebra.
-    Use STEP_TEXT and STEP_NARRATION for ordered explanations in any subject. Worked math
-    examples show completed substitution, simplification, and final answer.
+    Use KEY_POINT for concise bullets/cards and STEP_TEXT with STEP_NARRATION for ordered
+    explanations in any subject. Every non-title scene must show meaningful visible content;
+    never leave a long narration over a heading-only slide. Worked math examples show completed
+    substitution, simplification, and final answer.
 
     Use the exact field tags shown in the original plan. Close every field and SCENE_PLAN tag.
     Custom code follows the generation rules. Keep earlier instructional steps visible, narrate
@@ -360,9 +385,9 @@ STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one Manim construct-body. Return corrected Python body statements only.
     Preserve the teaching goal and make the smallest useful correction.
 
-    The wrapper provides: scene, title, narration, labels, visual, formula, steps,
+    The wrapper provides: scene, title, narration, labels, key_points, visual, formula, steps,
     step_narrations, calculation_steps as a legacy alias, learning_role, learner_question,
-    visual_mode, required_visual_elements, bg, label(...), formula_label(...),
+    visual_mode, required_visual_elements, essential_visual, bg, label(...), formula_label(...),
     instruction_step_label(...), calculation_step_label(...), add_instruction_step(...),
     next_calculation_step(...), and wait_for_voiceover(...).
 
