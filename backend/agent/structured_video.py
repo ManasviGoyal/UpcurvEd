@@ -28,10 +28,12 @@ from backend.agent.llm.provider_config import (
     resolve_provider_and_key as _pick_provider_and_key,
 )
 from backend.agent.prompts import (
+    STRUCTURED_VIDEO_BATCH_CREATIVE_REPAIR_SYSTEM,
     STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM,
     STRUCTURED_VIDEO_EDIT_SYSTEM,
     STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM,
     STRUCTURED_VIDEO_SYSTEM,
+    build_structured_video_batch_creative_repair_prompt,
     build_structured_video_creative_repair_prompt,
     build_structured_video_edit_user_prompt,
     build_structured_video_plan_repair_prompt,
@@ -303,15 +305,32 @@ def _derive_display_points(value: Any, *, limit: int = 3) -> list[str]:
     return points
 
 
+def _standard_visible_content_score(scene: dict[str, Any]) -> int:
+    """Estimate whether a deterministic scene has enough learner-facing material.
+
+    A lone subtitle or question is not enough for a long teaching scene. Formula and ordered
+    step renderers count as substantial content; otherwise require at least two visible ideas.
+    """
+    steps = [
+        value
+        for value in (scene.get("steps") or scene.get("calculation_steps") or [])
+        if str(value).strip()
+    ]
+    if steps:
+        return max(2, len(steps))
+    if str(scene.get("formula") or "").strip():
+        return 2
+
+    score = 0
+    score += len([value for value in (scene.get("key_points") or []) if str(value).strip()])
+    score += len([value for value in (scene.get("labels") or []) if str(value).strip()])
+    score += 1 if str(scene.get("subtitle") or "").strip() else 0
+    score += 1 if str(scene.get("learner_question") or "").strip() else 0
+    return score
+
+
 def _scene_has_standard_visible_content(scene: dict[str, Any]) -> bool:
-    return bool(
-        str(scene.get("subtitle") or "").strip()
-        or str(scene.get("learner_question") or "").strip()
-        or str(scene.get("formula") or "").strip()
-        or [x for x in (scene.get("key_points") or []) if str(x).strip()]
-        or [x for x in (scene.get("labels") or []) if str(x).strip()]
-        or [x for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
-    )
+    return _standard_visible_content_score(scene) >= 2
 
 
 def _json_object_candidate(raw: str) -> str:
@@ -954,13 +973,6 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
         formula = str(scene.get("formula") or "").strip()
         steps = [str(x) for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
 
-        if (
-            scene_type == "custom_manim_scene"
-            and not body
-            and (mode == "graph" or _coerce_bool(scene.get("essential_visual")))
-        ):
-            errors.append(f"Scene {index}: essential custom_manim_scene is missing manim_body.")
-
         if mode == "graph":
             if scene_type != "custom_manim_scene":
                 errors.append(f"Scene {index}: visual_mode=graph must use custom_manim_scene.")
@@ -1026,35 +1038,48 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
         # Every teaching scene keeps learner-facing material available even when a custom
         # visual later falls back. Use existing narration only; do not make another LLM call.
         if index > 1 and not _scene_has_standard_visible_content(scene):
-            points = _derive_display_points(scene.get("narration"), limit=3)
-            title_norm = re.sub(r"[^a-z0-9]+", " ", str(scene.get("title") or "").lower()).strip()
-            points = [
-                point for point in points
-                if re.sub(r"[^a-z0-9]+", " ", point.lower()).strip() != title_norm
+            existing_points = [
+                str(value).strip()
+                for value in (scene.get("key_points") or scene.get("labels") or [])
+                if str(value).strip()
             ]
-            if not points:
-                points = [f"Focus on the key relationship in {str(scene.get('title') or 'this idea')}."]
-            scene["key_points"] = points
+            points = list(existing_points)
+            title_norm = re.sub(r"[^a-z0-9]+", " ", str(scene.get("title") or "").lower()).strip()
+            for point in _derive_display_points(scene.get("narration"), limit=4):
+                normalized = re.sub(r"[^a-z0-9]+", " ", point.lower()).strip()
+                if normalized == title_norm:
+                    continue
+                if normalized not in {
+                    re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+                    for value in points
+                }:
+                    points.append(point)
+                if len(points) >= 3:
+                    break
+            if len(points) < 2:
+                question = _short_text(
+                    scene.get("learner_question") or scene.get("subtitle"), 112, ""
+                )
+                if question and question.lower() not in {value.lower() for value in points}:
+                    points.append(question)
+            if len(points) < 2:
+                topic_title = str(scene.get("title") or "this idea")
+                points.append(f"See how the parts of {topic_title} connect")
+            scene["key_points"] = points[:4]
             current_duration = float(scene.get("duration_sec") or 8.0)
-            visual_minimum = _estimate_speech_seconds(scene.get("narration")) + 1.0 + 0.55 * len(points)
+            visual_minimum = (
+                _estimate_speech_seconds(scene.get("narration"))
+                + 1.0
+                + 0.55 * len(scene["key_points"])
+            )
             scene["duration_sec"] = max(current_duration, min(90.0, visual_minimum))
             fixes.append(
-                f"Scene {index}: derived learner-facing display points locally from narration."
+                f"Scene {index}: ensured at least two learner-facing display points locally."
             )
 
-        # A nonessential custom scene without code becomes a deterministic animated component.
-        # Essential graphs/constructions remain eligible for one focused repair call.
-        is_essential = visual_mode == "graph" or _coerce_bool(scene.get("essential_visual"))
-        if scene_type == "custom_manim_scene" and not body and not is_essential:
-            scene["type"] = "concept_scene"
-            if visual_mode not in {"diagram", "comparison", "process", "text"}:
-                scene["visual_mode"] = "diagram"
-            scene.pop("manim_body", None)
-            scene.pop("manim_body_ref", None)
-            scene.pop("code_goal", None)
-            fixes.append(
-                f"Scene {index}: converted a code-less optional custom scene to a deterministic concept scene."
-            )
+        # Custom body completeness is handled together by the batch body validator/repairer.
+        # Keep optional custom scenes intact here so the model gets one chance to repair all
+        # invalid bodies before deterministic fallback is used.
 
         formula = str(scene.get("formula") or "").strip()
         steps = [str(value) for value in (scene.get("steps") or scene.get("calculation_steps") or []) if str(value).strip()]
@@ -1149,6 +1174,92 @@ def _extract_body(raw: Any) -> str:
     return _clean_body_block(_coerce_llm_text(raw))
 
 
+_BARE_MANIM_CALLS = {
+    # Mobjects and structures.
+    "Text", "Circle", "Square", "Rectangle", "RoundedRectangle", "Dot", "Line",
+    "DashedLine", "Arrow", "DoubleArrow", "Arc", "Polygon", "Triangle", "VGroup",
+    "NumberLine", "Axes", "NumberPlane", "BarChart", "Brace", "DecimalNumber",
+    "ParametricFunction", "FunctionGraph", "SurroundingRectangle",
+    # Animations.
+    "FadeIn", "FadeOut", "Write", "Create", "Uncreate", "Transform",
+    "ReplacementTransform", "MoveAlongPath", "GrowArrow", "GrowFromCenter", "Indicate",
+    "Rotate", "LaggedStart", "AnimationGroup",
+}
+_SCENE_METHOD_NAMES = {"play", "add", "remove", "wait", "voiceover"}
+_TOPIC_VISUAL_CONSTRUCTORS = (
+    "mn.Circle(", "mn.Square(", "mn.Rectangle(", "mn.RoundedRectangle(",
+    "mn.Dot(", "mn.Line(", "mn.DashedLine(", "mn.Arrow(", "mn.DoubleArrow(",
+    "mn.Arc(", "mn.Polygon(", "mn.Triangle(", "mn.NumberLine(", "mn.Axes(",
+    "mn.NumberPlane(", "mn.BarChart(", "mn.Brace(", "mn.DecimalNumber(",
+    "mn.ParametricFunction(", "mn.FunctionGraph(",
+)
+_SUBSTANTIAL_VISUAL_CONSTRUCTORS = (
+    "mn.Axes(", "mn.NumberPlane(", "mn.NumberLine(", "mn.BarChart(",
+    "mn.ParametricFunction(", "mn.FunctionGraph(",
+)
+
+
+def _normalize_custom_body_locally(body: str) -> tuple[str, list[str]]:
+    """Correct unambiguous wrapper mistakes without another model call.
+
+    The transformation is AST-based so identifiers inside learner-facing strings are untouched.
+    It corrects `scene.play(...)` to `self.play(...)` and prefixes known bare Manim calls.
+    """
+    cleaned = _clean_body_block(body)
+    if not cleaned:
+        return "", []
+
+    wrapper = "def _scene_body():\n" + "\n".join(
+        "    " + line for line in cleaned.splitlines()
+    )
+    try:
+        module = ast.parse(wrapper)
+    except SyntaxError:
+        return cleaned, []
+
+    fixes: list[str] = []
+
+    class _WrapperContractTransformer(ast.NodeTransformer):
+        def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+            self.generic_visit(node)
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id == "scene"
+                and node.attr in _SCENE_METHOD_NAMES
+            ):
+                fixes.append(f"scene.{node.attr} -> self.{node.attr}")
+                node.value = ast.copy_location(ast.Name(id="self", ctx=ast.Load()), node.value)
+            return node
+
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            if isinstance(node.func, ast.Name) and node.func.id in _BARE_MANIM_CALLS:
+                name = node.func.id
+                fixes.append(f"{name}(...) -> mn.{name}(...)")
+                node.func = ast.copy_location(
+                    ast.Attribute(
+                        value=ast.Name(id="mn", ctx=ast.Load()),
+                        attr=name,
+                        ctx=ast.Load(),
+                    ),
+                    node.func,
+                )
+            return node
+
+    transformed = _WrapperContractTransformer().visit(module)
+    ast.fix_missing_locations(transformed)
+    function = transformed.body[0] if transformed.body else None
+    if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return cleaned, []
+    normalized = "\n".join(ast.unparse(statement) for statement in function.body).strip()
+    unique_fixes = list(dict.fromkeys(fixes))
+    return normalized or cleaned, unique_fixes
+
+
+def _custom_body_preview(body: str, limit: int = 420) -> str:
+    return _short_text(str(body or "").replace("\n", " | "), limit, "(empty)")
+
+
 def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     cleaned = _clean_body_block(body)
@@ -1159,42 +1270,80 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
         if re.search(pattern, cleaned, flags=re.IGNORECASE | re.MULTILINE):
             errors.append(f"Forbidden custom-code pattern: {pattern}")
 
+    wrong_scene_methods = sorted(set(re.findall(
+        r"\bscene\.(play|add|remove|wait|voiceover)\s*\(", cleaned
+    )))
+    if wrong_scene_methods:
+        errors.append(
+            "`scene` is metadata, not the Manim scene. Replace "
+            + ", ".join(f"scene.{name}(...)" for name in wrong_scene_methods)
+            + " with self methods."
+        )
+
+    bare_calls = sorted({
+        name
+        for name in _BARE_MANIM_CALLS
+        if re.search(rf"(?<![\w.]){re.escape(name)}\s*\(", cleaned)
+    })
+    if bare_calls:
+        errors.append(
+            "Manim calls must use the mn. prefix: "
+            + ", ".join(f"mn.{name}(...)" for name in bare_calls[:8])
+            + "."
+        )
+
     if cleaned.count("self.voiceover") < 1:
-        errors.append("Custom scene needs at least 1 self.voiceover block.")
-    animation_actions = (
-        cleaned.count("self.play")
-        + cleaned.count("next_calculation_step(")
+        errors.append(
+            "Custom scene needs at least one `with self.voiceover(text=...) as tracker:` block."
+        )
+
+    play_calls = cleaned.count("self.play(")
+    helper_animation_calls = (
+        cleaned.count("next_calculation_step(")
         + cleaned.count("add_instruction_step(")
     )
-    if animation_actions < 3:
-        errors.append("Custom scene needs at least 3 visible animation actions.")
+    if play_calls + helper_animation_calls < 3:
+        errors.append(
+            "Custom scene needs at least three self.play(...) calls or instructional-step animation calls."
+        )
+
+    substantial_visual = any(marker in cleaned for marker in _SUBSTANTIAL_VISUAL_CONSTRUCTORS)
+    topic_object_count = sum(cleaned.count(marker) for marker in _TOPIC_VISUAL_CONSTRUCTORS)
+    if not substantial_visual and topic_object_count < 2:
+        errors.append(
+            "Custom scene needs at least two topic-specific visual objects, or one substantial "
+            "structure such as mn.Axes, mn.NumberPlane, mn.NumberLine, or mn.BarChart. "
+            "Title text alone does not count."
+        )
 
     motion_markers = (
-        ".animate",
-        "mn.Transform(",
-        "mn.ReplacementTransform(",
-        "mn.MoveAlongPath(",
-        "mn.GrowArrow(",
-        "mn.Rotate(",
-        "mn.GrowFromCenter(",
-        "mn.Create(",
-        "mn.Indicate(",
-        "next_calculation_step(",
+        ".animate", "mn.Transform(", "mn.ReplacementTransform(", "mn.MoveAlongPath(",
+        "mn.GrowArrow(", "mn.Rotate(", "mn.GrowFromCenter(", "mn.Create(",
+        "mn.Indicate(", "mn.FadeIn(", "next_calculation_step(",
+        "add_instruction_step(",
     )
     if not any(marker in cleaned for marker in motion_markers):
         errors.append("Custom scene needs meaningful movement or transformation.")
 
     formula = str(scene.get("formula") or "").strip()
     if formula and "formula" not in cleaned and formula not in cleaned:
-        errors.append("The formula field is not displayed. Use formula_label(formula) or mn.Text(formula).")
+        errors.append(
+            "The formula field is not displayed. Use formula_label(formula) or mn.Text(formula)."
+        )
 
     if str(scene.get("visual_mode") or "") == "graph":
         if "mn.Axes(" not in cleaned and "mn.NumberPlane(" not in cleaned:
             errors.append("Graph scene must create mn.Axes or mn.NumberPlane.")
-        graph_markers = (".plot(", ".plot_line_graph(", ".c2p(", "mn.ParametricFunction(", "mn.FunctionGraph(")
+        graph_markers = (
+            ".plot(", ".plot_line_graph(", ".c2p(",
+            "mn.ParametricFunction(", "mn.FunctionGraph(",
+        )
         if not any(marker in cleaned for marker in graph_markers):
             errors.append("Graph scene must plot or draw a coordinate-based relationship.")
-        feature_markers = ("mn.Dot(", "mn.DashedLine(", "mn.Line(", "mn.Arrow(", "label(", "formula_label(")
+        feature_markers = (
+            "mn.Dot(", "mn.DashedLine(", "mn.Line(", "mn.Arrow(",
+            "label(", "formula_label(",
+        )
         if not any(marker in cleaned for marker in feature_markers):
             errors.append("Graph scene must visibly mark the graph feature discussed in narration.")
 
@@ -1211,11 +1360,151 @@ def _validate_custom_body(body: str, scene: dict[str, Any]) -> list[str]:
             errors.append("Worked example must visibly animate its instructional steps.")
 
     try:
-        ast.parse("def _scene_body():\n" + "\n".join("    " + line for line in cleaned.splitlines()))
+        ast.parse("def _scene_body():\n" + "\n".join(
+            "    " + line for line in cleaned.splitlines()
+        ))
     except SyntaxError as exc:
         errors.append(f"Python syntax error: {exc.msg} at line {exc.lineno}.")
 
-    return errors
+    return list(dict.fromkeys(errors))
+
+
+def _repair_custom_bodies_in_batch(
+    plan: dict[str, Any],
+    *,
+    provider_name: str,
+    api_key: str,
+    model: str | None,
+    logs_dir: pathlib.Path,
+) -> dict[str, Any]:
+    """Normalize and repair all statically invalid custom bodies with at most one LLM call."""
+    scenes = plan.get("scenes")
+    if not isinstance(scenes, list):
+        return {"requested": 0, "repaired": 0, "unresolved": 0, "used_call": False}
+
+    failures: list[dict[str, Any]] = []
+    local_fixes: list[dict[str, Any]] = []
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict) or scene.get("type") != "custom_manim_scene":
+            continue
+        original_body = _clean_body_block(scene.get("manim_body") or "")
+        normalized_body, fixes = _normalize_custom_body_locally(original_body)
+        if fixes:
+            scene["manim_body"] = normalized_body
+            local_fixes.append({
+                "scene_index": index,
+                "ref": _body_ref_for_scene(scene, index),
+                "fixes": fixes,
+            })
+        else:
+            scene["manim_body"] = original_body
+
+        errors = _validate_custom_body(scene.get("manim_body") or "", scene)
+        if not errors:
+            continue
+        scene_for_prompt = dict(scene)
+        scene_for_prompt.pop("manim_body", None)
+        failures.append({
+            "scene_index": index,
+            "ref": _body_ref_for_scene(scene, index),
+            "scene": scene_for_prompt,
+            "errors": errors,
+            "original_body": str(scene.get("manim_body") or ""),
+            "preview": _custom_body_preview(scene.get("manim_body") or ""),
+        })
+
+    if local_fixes:
+        (logs_dir / "custom_body_local_fixes.json").write_text(
+            _safe_json(local_fixes), encoding="utf-8"
+        )
+        logger.info("custom_body_local_fixes fixes=%s", local_fixes)
+
+    preflight = [
+        {
+            "scene_index": item["scene_index"],
+            "ref": item["ref"],
+            "errors": item["errors"],
+            "preview": item["preview"],
+        }
+        for item in failures
+    ]
+    (logs_dir / "custom_body_preflight.json").write_text(
+        _safe_json(preflight), encoding="utf-8"
+    )
+    if not failures:
+        return {
+            "requested": 0,
+            "repaired": 0,
+            "unresolved": 0,
+            "used_call": False,
+            "local_fixes": len(local_fixes),
+        }
+
+    logger.warning(
+        "custom_body_batch_repair_start count=%s scenes=%s",
+        len(failures),
+        [item["scene_index"] for item in failures],
+    )
+    raw = call_llm(
+        provider=provider_name,
+        api_key=api_key,
+        model=model,
+        system=STRUCTURED_VIDEO_BATCH_CREATIVE_REPAIR_SYSTEM,
+        user=build_structured_video_batch_creative_repair_prompt(failures=failures),
+        temperature=0.1,
+        max_tokens=6200,
+    )
+    raw_text = _coerce_llm_text(raw)
+    (logs_dir / "custom_body_batch_repair_raw.txt").write_text(
+        raw_text, encoding="utf-8"
+    )
+    repaired_sections = _extract_manim_body_sections(raw_text)
+
+    repaired_count = 0
+    unresolved: list[dict[str, Any]] = []
+    for failure in failures:
+        index = int(failure["scene_index"])
+        scene = scenes[index - 1]
+        ref = str(failure["ref"])
+        scene_id = str(scene.get("id") or "").strip()
+        candidates = [ref, f"scene_{scene_id}" if scene_id else "", scene_id, f"scene_{index}"]
+        matched = next(
+            (candidate for candidate in candidates if candidate and candidate in repaired_sections),
+            None,
+        )
+        repaired_body = repaired_sections.get(matched, "") if matched else ""
+        repaired_body, fixes = _normalize_custom_body_locally(repaired_body)
+        repaired_errors = _validate_custom_body(repaired_body, scene)
+        safe_ref = re.sub(r"[^A-Za-z0-9_.-]+", "_", ref).strip("_") or f"scene_{index}"
+        (logs_dir / f"batch_repair_{safe_ref}.py").write_text(
+            repaired_body + ("\n" if repaired_body else ""), encoding="utf-8"
+        )
+        if repaired_body and not repaired_errors:
+            scene["manim_body"] = repaired_body
+            repaired_count += 1
+            continue
+        unresolved.append({
+            "scene_index": index,
+            "ref": ref,
+            "matched_ref": matched,
+            "errors": repaired_errors or ["No matching repaired MANIM_BODY block returned."],
+            "local_fixes": fixes,
+            "preview": _custom_body_preview(repaired_body),
+        })
+
+    summary = {
+        "requested": len(failures),
+        "repaired": repaired_count,
+        "unresolved": len(unresolved),
+        "used_call": True,
+        "local_fixes": len(local_fixes),
+        "unresolved_details": unresolved,
+    }
+    (logs_dir / "custom_body_batch_repair_summary.json").write_text(
+        _safe_json(summary), encoding="utf-8"
+    )
+    logger.info("custom_body_batch_repair_complete summary=%s", summary)
+    return summary
 
 
 def _video_url_to_path(video_url: str) -> pathlib.Path:
@@ -1280,13 +1569,26 @@ def _render_scene_clip(
             "job_id": result.get("job_id"),
         }, code
 
-    original_body = _clean_body_block(scene.get("manim_body") or "")
+    original_body, local_fixes = _normalize_custom_body_locally(
+        scene.get("manim_body") or ""
+    )
+    scene["manim_body"] = original_body
+    if local_fixes:
+        (logs_dir / f"scene_{scene_index:02d}_local_fixes.json").write_text(
+            _safe_json(local_fixes), encoding="utf-8"
+        )
+
     validation_errors = _validate_custom_body(original_body, scene)
     initial_detail = "; ".join(validation_errors)
+    failure_stage = "static_validation"
     if not validation_errors:
         initial_code = build_custom_scene_code(scene, original_body)
-        (logs_dir / f"scene_{scene_index:02d}_initial.py").write_text(initial_code, encoding="utf-8")
-        clip, result, render_detail = _render_code_once(code=initial_code, scene_job_id=scene_job_id)
+        (logs_dir / f"scene_{scene_index:02d}_initial.py").write_text(
+            initial_code, encoding="utf-8"
+        )
+        clip, result, render_detail = _render_code_once(
+            code=initial_code, scene_job_id=scene_job_id
+        )
         if clip is not None:
             return clip, {
                 "scene_index": scene_index,
@@ -1294,23 +1596,25 @@ def _render_scene_clip(
                 "render_source": "custom_initial",
                 "used_fallback": False,
                 "job_id": result.get("job_id"),
+                "local_contract_fixes": local_fixes,
             }, initial_code
         initial_detail = render_detail
         failure_stage = "render"
-    else:
-        failure_stage = "static_validation"
 
-    should_repair = (
-        str(scene.get("visual_mode") or "") == "graph"
-        or _coerce_bool(scene.get("essential_visual"))
+    should_repair_render_failure = (
+        failure_stage == "render"
+        and (
+            str(scene.get("visual_mode") or "") == "graph"
+            or _coerce_bool(scene.get("essential_visual"))
+        )
     )
-    repair_detail = "LLM repair skipped for optional custom scene."
-    if should_repair:
+    repair_detail = "Static invalid body already received the shared batch repair attempt."
+    if should_repair_render_failure:
         logger.warning(
-            "custom_scene_repair_start scene=%s stage=%s detail=%s",
+            "custom_scene_runtime_repair_start scene=%s detail=%s preview=%s",
             scene_index,
-            failure_stage,
             initial_detail,
+            _custom_body_preview(original_body),
         )
         repair_raw = call_llm(
             provider=provider_name,
@@ -1327,44 +1631,57 @@ def _render_scene_clip(
             max_tokens=4200,
         )
         repaired_body = _extract_body(repair_raw)
-        (logs_dir / f"scene_{scene_index:02d}_repair_raw.py").write_text(repaired_body, encoding="utf-8")
+        repaired_body, repair_fixes = _normalize_custom_body_locally(repaired_body)
+        (logs_dir / f"scene_{scene_index:02d}_repair_raw.py").write_text(
+            repaired_body, encoding="utf-8"
+        )
         repaired_errors = _validate_custom_body(repaired_body, scene)
         repair_detail = "; ".join(repaired_errors)
         if not repaired_errors:
             repaired_code = build_custom_scene_code(scene, repaired_body)
-            (logs_dir / f"scene_{scene_index:02d}_repaired.py").write_text(repaired_code, encoding="utf-8")
+            (logs_dir / f"scene_{scene_index:02d}_repaired.py").write_text(
+                repaired_code, encoding="utf-8"
+            )
             repaired_job_id = f"{scene_job_id}-repair"
-            clip, result, render_detail = _render_code_once(code=repaired_code, scene_job_id=repaired_job_id)
+            clip, result, render_detail = _render_code_once(
+                code=repaired_code, scene_job_id=repaired_job_id
+            )
             if clip is not None:
                 scene["manim_body"] = repaired_body
                 return clip, {
                     "scene_index": scene_index,
                     "scene_type": scene.get("type"),
-                    "render_source": "custom_repaired",
+                    "render_source": "custom_runtime_repaired",
                     "used_fallback": False,
                     "job_id": result.get("job_id"),
                     "initial_failure": initial_detail[:1200],
+                    "local_contract_fixes": repair_fixes,
                 }, repaired_code
             repair_detail = render_detail
     else:
         logger.warning(
-            "custom_scene_optional_fallback scene=%s stage=%s detail=%s",
+            "custom_scene_fallback scene=%s stage=%s detail=%s preview=%s",
             scene_index,
             failure_stage,
             initial_detail,
+            _custom_body_preview(original_body),
         )
 
-    # A graph is an essential teaching visual. Never replace it with a generic card.
+    # A required graph cannot be truthfully replaced by generic cards.
     if str(scene.get("visual_mode") or "") == "graph":
         raise RuntimeError(
-            f"Required graph scene {scene_index} could not be rendered after one repair. "
+            f"Required graph scene {scene_index} could not be rendered after repair. "
             f"Initial failure: {initial_detail}. Repair failure: {repair_detail}"
         )
 
     fallback_code = build_concept_fallback_scene_code(scene)
-    (logs_dir / f"scene_{scene_index:02d}_fallback.py").write_text(fallback_code, encoding="utf-8")
+    (logs_dir / f"scene_{scene_index:02d}_fallback.py").write_text(
+        fallback_code, encoding="utf-8"
+    )
     fallback_job_id = f"{scene_job_id}-fallback"
-    clip, result, fallback_detail = _render_code_once(code=fallback_code, scene_job_id=fallback_job_id)
+    clip, result, fallback_detail = _render_code_once(
+        code=fallback_code, scene_job_id=fallback_job_id
+    )
     if clip is None:
         raise RuntimeError(
             f"Scene {scene_index} custom render and fallback both failed. "
@@ -1376,6 +1693,7 @@ def _render_scene_clip(
         "render_source": "concept_fallback",
         "used_fallback": True,
         "job_id": result.get("job_id"),
+        "failure_stage": failure_stage,
         "initial_failure": initial_detail[:1200],
         "repair_failure": repair_detail[:1200],
     }, fallback_code
@@ -1624,6 +1942,14 @@ def _render_structured_plan(
     logs_dir = job_dir / "logs"
     job_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
+
+    custom_body_repair = _repair_custom_bodies_in_batch(
+        plan,
+        provider_name=provider_name,
+        api_key=api_key,
+        model=model,
+        logs_dir=logs_dir,
+    )
     (job_dir / "structured_plan.json").write_text(_safe_json(plan), encoding="utf-8")
 
     clips: list[pathlib.Path] = []
@@ -1668,6 +1994,7 @@ def _render_structured_plan(
         "scene_results": scene_results,
         "used_fallback": used_fallback,
         "plan_repaired": plan_repaired,
+        "custom_body_repair": custom_body_repair,
     }
 
 
@@ -1698,7 +2025,7 @@ def generate_structured_manim_video(
         system=STRUCTURED_VIDEO_SYSTEM,
         user=build_structured_video_user_prompt(prompt),
         temperature=0.28,
-        max_tokens=7000,
+        max_tokens=7800,
     )
     raw_text = _coerce_llm_text(raw)
     (logs_dir / "structured_response_raw.txt").write_text(raw_text, encoding="utf-8")

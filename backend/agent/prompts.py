@@ -258,9 +258,10 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     - Use custom scenes whenever moving objects, changing quantities, spatial relationships,
       measurements, transformations, concrete everyday examples, diagrams, timelines, graphs,
       or simulations would make the explanation clearer.
-    - A broad four-to-seven-scene educational video should normally contain two to four simple
+    - A broad four-to-seven-scene educational video should normally contain two or three simple
       custom_manim_scene visuals. Other scenes may use stable components with KEY_POINT, LABEL,
-      FORMULA, or STEP_TEXT content.
+      FORMULA, or STEP_TEXT content. Do not spend the response budget on custom code where a
+      stable component already teaches the idea clearly.
     - Keep each custom visual focused and reliable: use roughly two to five main visual objects,
       animate the central relationship, and keep important objects visible while narrated.
       A small clear animation is better than a complex fragile one.
@@ -268,30 +269,67 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
       explicitly required by the user. Otherwise use false or omit it.
     - Do not display internal scene-type names.
 
-    Every custom scene needs a unique MANIM_BODY_REF and matching MANIM_BODY block. The wrapper
-    provides: scene, title, narration, labels, visual, formula, steps, step_narrations,
-    calculation_steps as a legacy alias, key_points, learning_role, learner_question,
-    visual_mode, required_visual_elements, essential_visual, bg, label(...), formula_label(...), instruction_step_label(...),
-    calculation_step_label(...), add_instruction_step(...), next_calculation_step(...), and
-    wait_for_voiceover(...).
+    Every custom scene needs a unique MANIM_BODY_REF and matching MANIM_BODY block. The body is
+    inserted directly inside GeneratedScene.construct(). The runtime contract is exact:
+    - self is the active VoiceoverScene. Use self.play(...), self.add(...), self.wait(...), and
+      with self.voiceover(text=...) as tracker.
+    - scene is only a Python metadata dictionary. Never call scene.play(...), scene.add(...),
+      scene.wait(...), or scene.voiceover(...).
+    - Manim is already imported as mn. VoiceoverScene and GTTSService are already configured.
+      Do not write import statements. Use mn.Circle(...), mn.FadeIn(...), and other mn-prefixed
+      constructors and animations.
+    - The wrapper already provides: title, narration, labels, visual, formula, steps,
+      step_narrations, calculation_steps as a legacy alias, key_points, learning_role,
+      learner_question, visual_mode, required_visual_elements, essential_visual, bg, label(...),
+      formula_label(...), instruction_step_label(...), calculation_step_label(...),
+      add_instruction_step(...), next_calculation_step(...), and wait_for_voiceover(...).
+
+    Canonical valid MANIM_BODY pattern. Follow this structure with topic-specific objects:
+    <MANIM_BODY id="scene_example">
+    title_mob = label(title, size=34).to_edge(mn.UP)
+    left_object = mn.Circle(radius=0.8, color=mn.BLUE_C).shift(mn.LEFT * 2)
+    right_object = mn.Square(side_length=1.5, color=mn.GREEN_C).shift(mn.RIGHT * 2)
+    relationship = mn.Arrow(left_object.get_right(), right_object.get_left(), buff=0.2)
+    with self.voiceover(text=narration) as tracker:
+        self.play(mn.FadeIn(title_mob), run_time=0.5)
+        self.play(mn.GrowFromCenter(left_object), run_time=0.7)
+        self.play(mn.GrowArrow(relationship), mn.GrowFromCenter(right_object), run_time=0.9)
+        wait_for_voiceover(tracker, 2.1)
+    self.wait(1.0)
+    </MANIM_BODY>
 
     Custom-body rules:
-    - Body statements only. No imports, class, def, files, images, SVG, Tex, MathTex, network,
-      random, external libraries, eval, exec, or system access. Use mn. prefixes.
+    - Body statements only. No imports, class, def, construct method, files, images, SVG, Tex,
+      MathTex, network, random, external libraries, eval, exec, or system access.
     - Begin every MANIM_BODY at column 1. Indent only statements nested inside with, if, for,
-      or while.
-    - Use simple primitives such as Text, Circle, Rectangle, RoundedRectangle, Dot, Line,
-      DashedLine, Arrow, Arc, VGroup, NumberLine, Axes, and NumberPlane.
-    - Include at least one voiceover block, three visible animation actions, and meaningful
-      topic-specific motion. Graph bodies must create Axes or NumberPlane, draw the relationship,
-      and mark the listed visual features.
-    - Do not animate decorative motion alone. The movement must show the relationship described
-      by the narration. Keep two to five main objects on screen instead of building a dense scene.
-    - When a custom scene truly needs instructional steps, keep earlier steps visible, add
-      each new step beneath the previous ones, narrate each step, and hold the completed
-      sequence for at least 2.5 seconds. Prefer add_instruction_step(...).
+      or while. Return executable Python statements, never pseudocode or planning notes.
+    - Use simple mn-prefixed primitives such as mn.Text, mn.Circle, mn.Square, mn.Rectangle,
+      mn.RoundedRectangle, mn.Dot, mn.Line, mn.DashedLine, mn.Arrow, mn.Arc, mn.VGroup,
+      mn.NumberLine, mn.Axes, and mn.NumberPlane.
+    - Create at least two visible topic-specific objects, or one substantial explanatory
+      structure such as axes, a number line, a geometric construction, or a graph. A title or
+      heading does not count as a topic-specific object.
+    - Include at least one self.voiceover block and at least three self.play calls. Animate
+      every important object with self.play(...) or add it with self.add(...).
+    - Include meaningful topic-specific motion. Graph bodies must create mn.Axes or
+      mn.NumberPlane, draw the relationship, and mark the listed visual features.
+    - Do not animate decorative motion alone. Movement must show the relationship described by
+      the narration. Keep two to five main objects visible while they are discussed.
+    - When a custom scene truly needs instructional steps, keep earlier steps visible, add each
+      new step beneath the previous ones, narrate each step, and hold the completed sequence for
+      at least 2.5 seconds. Prefer add_instruction_step(...).
     - Display FORMULA when present. Keep strings on one line and close every quote, bracket,
       and parenthesis.
+
+    Before emitting each MANIM_BODY, silently verify all seven checks:
+    1. No import, class, def, or construct wrapper.
+    2. self is used for scene methods; scene is never used as the active scene.
+    3. All Manim constructors and animations use the mn. prefix.
+    4. At least one self.voiceover block exists.
+    5. At least two topic-specific objects or one substantial structure exists.
+    6. At least three self.play calls exist, and every important object is added or animated.
+    7. The body is complete executable Python, not pseudocode.
+
 """)
 
 
@@ -316,8 +354,11 @@ STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety("""\
     features. Preserve KEY_POINT values and STEP_TEXT/STEP_NARRATION pairs. Every non-title
     scene must retain visible learner-facing content beyond its heading. A worked mathematics
     example must show completed substitution, simplification, and final
-    answer. Keep earlier steps visible and hold the completed sequence. Begin each MANIM_BODY
-    at column 1 and indent only statements nested inside with, if, for, or while.
+    answer. Keep earlier steps visible and hold the completed sequence. Every MANIM_BODY is
+    inserted inside GeneratedScene.construct(): self is the active VoiceoverScene, scene is
+    metadata only, Manim is already imported as mn, and no imports/classes/functions are
+    allowed. Use self.voiceover plus at least three self.play calls and at least two
+    topic-specific visual objects. Begin each body at column 1 and indent only nested statements.
 """)
 
 
@@ -357,8 +398,11 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety("""\
     substitution, simplification, and final answer.
 
     Use the exact field tags shown in the original plan. Close every field and SCENE_PLAN tag.
-    Custom code follows the generation rules. Keep earlier instructional steps visible, narrate
-    each step, and hold the completed sequence. Prefer a standard scene for step-based teaching.
+    Custom code follows the generation rules. In every MANIM_BODY, self is the active
+    VoiceoverScene, scene is metadata only, and Manim is already imported as mn. Do not add
+    imports/classes/functions. Use self.voiceover, at least three self.play calls, and at least
+    two topic-specific visual objects. Keep earlier instructional steps visible, narrate each
+    step, and hold the completed sequence. Prefer a standard scene for step-based teaching.
 """)
 
 
@@ -385,21 +429,92 @@ STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
     Repair one Manim construct-body. Return corrected Python body statements only.
     Preserve the teaching goal and make the smallest useful correction.
 
-    The wrapper provides: scene, title, narration, labels, key_points, visual, formula, steps,
-    step_narrations, calculation_steps as a legacy alias, learning_role, learner_question,
-    visual_mode, required_visual_elements, essential_visual, bg, label(...), formula_label(...),
-    instruction_step_label(...), calculation_step_label(...), add_instruction_step(...),
-    next_calculation_step(...), and wait_for_voiceover(...).
+    Runtime contract:
+    - The body is inserted inside GeneratedScene.construct().
+    - self is the active VoiceoverScene. scene is only a metadata dictionary.
+    - Use self.play, self.add, self.wait, and self.voiceover. Never use scene.play or similar.
+    - Manim is already imported as mn. Do not include imports. Use mn. prefixes everywhere.
+    - The wrapper provides title, narration, labels, visual, formula, steps, step_narrations,
+      calculation_steps, key_points, learning_role, learner_question, visual_mode,
+      required_visual_elements, essential_visual, bg, label(...), formula_label(...),
+      instruction_step_label(...), calculation_step_label(...), add_instruction_step(...),
+      next_calculation_step(...), and wait_for_voiceover(...).
 
-    Use mn. prefixes and simple primitives. No imports, class, def, files, images, SVG, Tex,
-    MathTex, network, random, external libraries, eval, exec, or system access. Begin the body
-    at column 1 and indent only statements nested inside with, if, for, or while. Include at
-    least one voiceover block, three visible animation actions, and meaningful motion. A graph
-    must create Axes or NumberPlane, draw the relationship, and mark the required features.
-    When steps are present, keep earlier steps visible, narrate each step, and hold the complete
-    sequence for at least 2.5 seconds. Prefer add_instruction_step(...). Display formula when
-    present and close every quote, bracket, and parenthesis.
+    Minimum valid shape:
+    title_mob = label(title, size=34).to_edge(mn.UP)
+    left_object = mn.Circle(radius=0.8, color=mn.BLUE_C).shift(mn.LEFT * 2)
+    right_object = mn.Square(side_length=1.5, color=mn.GREEN_C).shift(mn.RIGHT * 2)
+    arrow = mn.Arrow(left_object.get_right(), right_object.get_left(), buff=0.2)
+    with self.voiceover(text=narration) as tracker:
+        self.play(mn.FadeIn(title_mob), run_time=0.5)
+        self.play(mn.GrowFromCenter(left_object), run_time=0.7)
+        self.play(mn.GrowArrow(arrow), mn.GrowFromCenter(right_object), run_time=0.9)
+        wait_for_voiceover(tracker, 2.1)
+    self.wait(1.0)
+
+    Return body statements only: no imports, class, def, construct wrapper, files, images, SVG,
+    Tex, MathTex, network, random, external libraries, eval, exec, or system access. Begin at
+    column 1 and indent only nested statements. Create at least two topic-specific visible
+    objects or one substantial graph/construction, use at least one self.voiceover block and
+    three self.play calls, and animate every important object. A graph must create mn.Axes or
+    mn.NumberPlane, draw the relationship, and mark the required features. Keep important
+    objects visible during narration. Display formula when present and close every quote,
+    bracket, and parenthesis.
 """)
+
+
+STRUCTURED_VIDEO_BATCH_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
+    Repair several invalid Manim construct-bodies in one response. Return only one complete
+    MANIM_BODY block for every requested id, in the same order. Do not return JSON, markdown,
+    commentary, imports, classes, functions, or prose outside the blocks.
+
+    Each body is inserted inside GeneratedScene.construct(). self is the active
+    VoiceoverScene; scene is only metadata. Use self.play, self.add, self.wait, and
+    self.voiceover. Manim is already imported as mn, so every Manim constructor and animation
+    must use the mn. prefix and no imports are allowed.
+
+    Each repaired body must create at least two topic-specific visible objects or one
+    substantial explanatory structure, contain at least one self.voiceover block and three
+    self.play calls, animate or add every important object, and keep the educational objects
+    visible while narrated. Return executable body statements, not pseudocode.
+
+    Canonical shape:
+    <MANIM_BODY id="requested_id">
+    title_mob = label(title, size=34).to_edge(mn.UP)
+    left_object = mn.Circle(radius=0.8, color=mn.BLUE_C).shift(mn.LEFT * 2)
+    right_object = mn.Square(side_length=1.5, color=mn.GREEN_C).shift(mn.RIGHT * 2)
+    arrow = mn.Arrow(left_object.get_right(), right_object.get_left(), buff=0.2)
+    with self.voiceover(text=narration) as tracker:
+        self.play(mn.FadeIn(title_mob), run_time=0.5)
+        self.play(mn.GrowFromCenter(left_object), run_time=0.7)
+        self.play(mn.GrowArrow(arrow), mn.GrowFromCenter(right_object), run_time=0.9)
+        wait_for_voiceover(tracker, 2.1)
+    self.wait(1.0)
+    </MANIM_BODY>
+""")
+
+
+def build_structured_video_batch_creative_repair_prompt(
+    *,
+    failures: list[dict[str, Any]],
+) -> str:
+    blocks: list[str] = []
+    for failure in failures:
+        ref = str(failure.get("ref") or "scene").strip()
+        scene = failure.get("scene") if isinstance(failure.get("scene"), dict) else {}
+        errors = failure.get("errors") if isinstance(failure.get("errors"), list) else []
+        original_body = str(failure.get("original_body") or "").strip()
+        blocks.extend([
+            f'<REPAIR_REQUEST id="{html.escape(ref, quote=True)}">',
+            f'<SCENE_DATA>{html.escape(json.dumps(scene, ensure_ascii=True, separators=(",", ":")), quote=False)}</SCENE_DATA>',
+            f'<VALIDATION_ERRORS>{html.escape("; ".join(str(error) for error in errors), quote=False)}</VALIDATION_ERRORS>',
+            '<ORIGINAL_BODY>',
+            original_body or '(empty)',
+            '</ORIGINAL_BODY>',
+            '</REPAIR_REQUEST>',
+            '',
+        ])
+    return "\n".join(blocks).strip()
 
 
 def build_structured_video_creative_repair_prompt(

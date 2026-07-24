@@ -1,4 +1,3 @@
-# backend/agent/video_components.py
 """Reusable Manim scene components for structured UpcurvEd videos.
 
 Standard scenes use deterministic layouts. Model-authored custom scenes run inside a
@@ -97,10 +96,46 @@ def _fallback_step_narration(step: str, index: int, total: int) -> str:
     return f"{prefix}: {spoken}."
 
 
+def _derive_display_points(value: Any, *, limit: int = 3) -> list[str]:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+|[;•]+", text)
+    points: list[str] = []
+    for raw in parts:
+        point = re.sub(r"^[\s\-–—•]+", "", raw).strip().rstrip(" .")
+        if not point:
+            continue
+        if len(point) > 112:
+            point = point[:109].rstrip() + "..."
+        if point.lower() not in {existing.lower() for existing in points}:
+            points.append(point)
+        if len(points) >= limit:
+            break
+    return points
+
+
+def _has_visible_component_content(scene: dict[str, Any]) -> bool:
+    return bool(
+        str(scene.get("subtitle") or "").strip()
+        or str(scene.get("learner_question") or "").strip()
+        or str(scene.get("formula") or "").strip()
+        or [x for x in (scene.get("key_points") or []) if str(x).strip()]
+        or [x for x in (scene.get("labels") or []) if str(x).strip()]
+        or [x for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
+    )
+
+
 def _scene_for_render(scene: dict[str, Any]) -> dict[str, Any]:
     rendered = dict(scene)
     if rendered.get("formula"):
         rendered["formula"] = portable_math_text(rendered["formula"])
+
+    rendered["key_points"] = [
+        str(value).strip()
+        for value in (rendered.get("key_points") or [])
+        if str(value).strip()
+    ][:5]
 
     raw_steps = rendered.get("steps") or rendered.get("calculation_steps") or []
     steps = [
@@ -124,15 +159,16 @@ def _scene_for_render(scene: dict[str, Any]) -> dict[str, Any]:
         rendered["step_narrations"] = narrations
         # Keep the old name in the generated wrapper so saved custom bodies continue to work.
         rendered["calculation_steps"] = steps
+
+    if str(rendered.get("type") or "") != "title_scene" and not _has_visible_component_content(rendered):
+        rendered["key_points"] = _derive_display_points(rendered.get("narration"), limit=3)
+        if not rendered["key_points"]:
+            rendered["key_points"] = ["Focus on the key relationship in this idea"]
     return rendered
 
 
 def _safe_python_literal(value: Any) -> str:
-    """Return data as valid Python source for generated Manim scene files.
-
-    The generated artifact is Python, not JSON. Using repr preserves Python spellings
-    such as True, False, and None instead of JSON true, false, and null.
-    """
+    """Return data as valid Python source for generated Manim scene files."""
     return repr(value)
 
 
@@ -158,6 +194,7 @@ class GeneratedScene(VoiceoverScene):
         narration = str(scene.get("narration") or title_text)
         learner_question = str(scene.get("learner_question") or "")
         labels = [str(x) for x in (scene.get("labels") or []) if str(x).strip()][:5]
+        key_points = [str(x) for x in (scene.get("key_points") or []) if str(x).strip()][:5]
         formula_text = str(scene.get("formula") or "").replace("\n", " ").strip()
         steps = [
             str(x).replace("\n", " ").strip()
@@ -356,33 +393,76 @@ class GeneratedScene(VoiceoverScene):
                 hold_voiceover(tracker, 3.0)
 
         else:
-            # Simple concept layout. Do not show the internal visual planning sentence as a title.
+            # Simple concept layout. Internal production directions are never displayed.
             main_text = subtitle_text or learner_question
-            main = fit_text(main_text, 29, mn.BLUE_B, 10.2).next_to(content_top, mn.DOWN, buff=0.55) if main_text else None
-            label_mobs = mn.VGroup(*[
-                fit_text(item, 22, mn.WHITE, 3.0).set_z_index(2)
-                for item in labels[:3]
-            ])
-            pills = mn.VGroup()
-            for mob in label_mobs:
-                pill = mn.RoundedRectangle(width=max(2.2, mob.width + 0.45), height=0.72, corner_radius=0.16, color=mn.BLUE_C)
-                pill.set_fill("#1e293b", opacity=0.9).move_to(mob)
-                pills.add(pill)
-            if len(label_mobs):
-                groups = mn.VGroup(*[mn.VGroup(pills[i], label_mobs[i]) for i in range(len(label_mobs))])
-                groups.arrange(mn.RIGHT, buff=0.35).move_to(mn.DOWN * 0.45)
-            with self.voiceover(text=narration) as tracker:
-                used = 0.4
-                if main is not None:
-                    self.play(mn.FadeIn(main, shift=mn.UP * 0.12), run_time=0.7)
-                    used += 0.7
+            main = fit_text(main_text, 29, mn.BLUE_B, 10.2).next_to(content_top, mn.DOWN, buff=0.42) if main_text else None
+
+            if key_points:
+                anchor = main if main is not None else content_top
+                point_font = 24 if len(key_points) <= 3 else 21
+                cards = mn.VGroup()
+                colors = [mn.BLUE_C, mn.GREEN_C, mn.ORANGE, mn.PURPLE_C, mn.TEAL_C]
+                for index, point in enumerate(key_points[:5]):
+                    card = mn.RoundedRectangle(
+                        width=10.4,
+                        height=0.82,
+                        corner_radius=0.16,
+                        color=colors[index % len(colors)],
+                    )
+                    card.set_fill("#1e293b", opacity=0.92)
+                    dot = mn.Dot(radius=0.075, color=colors[index % len(colors)])
+                    text_mob = fit_text(point, point_font, mn.WHITE, 8.9)
+                    content = mn.VGroup(dot, text_mob).arrange(mn.RIGHT, buff=0.24)
+                    content.move_to(card.get_center()).align_to(card, mn.LEFT).shift(mn.RIGHT * 0.35)
+                    cards.add(mn.VGroup(card, content))
+                cards.arrange(mn.DOWN, buff=0.18).next_to(anchor, mn.DOWN, buff=0.38)
+                if cards.height > 4.45:
+                    cards.scale_to_fit_height(4.45)
+                if cards.get_bottom()[1] < -3.2:
+                    cards.shift(mn.UP * (-3.2 - cards.get_bottom()[1]))
+
+                with self.voiceover(text=narration) as tracker:
+                    used = 0.4
+                    if main is not None:
+                        self.play(mn.FadeIn(main, shift=mn.UP * 0.12), run_time=0.65)
+                        used += 0.65
+                    self.play(
+                        mn.LaggedStart(
+                            *[mn.FadeIn(card, shift=mn.RIGHT * 0.18) for card in cards],
+                            lag_ratio=0.16,
+                        ),
+                        run_time=max(1.0, 0.42 * len(cards)),
+                    )
+                    used += max(1.0, 0.42 * len(cards))
+                    for card in cards:
+                        self.play(mn.Indicate(card[0], scale_factor=1.015), run_time=0.35)
+                        used += 0.35
+                    hold_voiceover(tracker, used)
+            else:
+                label_mobs = mn.VGroup(*[
+                    fit_text(item, 22, mn.WHITE, 3.0).set_z_index(2)
+                    for item in labels[:3]
+                ])
+                pills = mn.VGroup()
+                for mob in label_mobs:
+                    pill = mn.RoundedRectangle(width=max(2.2, mob.width + 0.45), height=0.72, corner_radius=0.16, color=mn.BLUE_C)
+                    pill.set_fill("#1e293b", opacity=0.9).move_to(mob)
+                    pills.add(pill)
                 if len(label_mobs):
-                    self.play(mn.LaggedStart(*[mn.FadeIn(group) for group in groups], lag_ratio=0.14), run_time=1.05)
-                    used += 1.05
-                target = formula if formula is not None else (main if main is not None else header)
-                self.play(mn.Indicate(target), run_time=0.65)
-                used += 0.65
-                hold_voiceover(tracker, used)
+                    groups = mn.VGroup(*[mn.VGroup(pills[i], label_mobs[i]) for i in range(len(label_mobs))])
+                    groups.arrange(mn.RIGHT, buff=0.35).move_to(mn.DOWN * 0.45)
+                with self.voiceover(text=narration) as tracker:
+                    used = 0.4
+                    if main is not None:
+                        self.play(mn.FadeIn(main, shift=mn.UP * 0.12), run_time=0.7)
+                        used += 0.7
+                    if len(label_mobs):
+                        self.play(mn.LaggedStart(*[mn.FadeIn(group) for group in groups], lag_ratio=0.14), run_time=1.05)
+                        used += 1.05
+                    target = formula if formula is not None else (main if main is not None else header)
+                    self.play(mn.Indicate(target), run_time=0.65)
+                    used += 0.65
+                    hold_voiceover(tracker, used)
 
         clean_out(bg)
 '''.strip() + "\n"
@@ -390,11 +470,47 @@ class GeneratedScene(VoiceoverScene):
 
 
 def build_concept_fallback_scene_code(scene: dict[str, Any]) -> str:
-    """Create a deterministic fallback for nonessential creative scenes."""
+    """Create a deterministic animated fallback for a failed optional custom scene.
+
+    A failed creative visual must never collapse into a heading-only slide. Existing learner
+    content is preserved, then concise cards are added until at least two visible ideas exist.
+    """
     safe_scene = dict(scene)
     safe_scene["type"] = "concept_scene"
-    safe_scene["visual_mode"] = "text"
+    safe_scene["visual_mode"] = "diagram"
     safe_scene.pop("manim_body", None)
+    safe_scene.pop("manim_body_ref", None)
+    safe_scene.pop("code_goal", None)
+
+    # Ordered steps and formulas already have strong deterministic renderers. Otherwise force
+    # at least two animated key-point cards, using only content the model already supplied.
+    has_steps = bool([
+        value
+        for value in (safe_scene.get("steps") or safe_scene.get("calculation_steps") or [])
+        if str(value).strip()
+    ])
+    has_formula = bool(str(safe_scene.get("formula") or "").strip())
+    if not has_steps and not has_formula:
+        points: list[str] = []
+        for source in (safe_scene.get("key_points") or [], safe_scene.get("labels") or []):
+            for value in source:
+                text = str(value or "").strip()
+                if text and text.lower() not in {item.lower() for item in points}:
+                    points.append(text)
+        for value in _derive_display_points(safe_scene.get("narration"), limit=4):
+            if value.lower() not in {item.lower() for item in points}:
+                points.append(value)
+            if len(points) >= 3:
+                break
+        if len(points) < 2:
+            question = str(safe_scene.get("learner_question") or safe_scene.get("subtitle") or "").strip()
+            if question and question.lower() not in {item.lower() for item in points}:
+                points.append(question)
+        if len(points) < 2:
+            topic = str(safe_scene.get("title") or "this idea").strip()
+            points.append(f"See how the parts of {topic} connect")
+        safe_scene["key_points"] = points[:4]
+
     return build_component_scene_code(safe_scene)
 
 
@@ -417,6 +533,7 @@ class GeneratedScene(VoiceoverScene):
         title = str(scene.get("title") or scene.get("heading") or "")
         narration = str(scene.get("narration") or title or "")
         labels = [str(x) for x in (scene.get("labels") or []) if str(x).strip()][:5]
+        key_points = [str(x) for x in (scene.get("key_points") or []) if str(x).strip()][:5]
         visual = str(scene.get("visual") or scene.get("visual_goal") or scene.get("code_goal") or "")
         formula = str(scene.get("formula") or "").replace("\n", " ").strip()
         steps = [str(x).replace("\n", " ").strip() for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()][:6]
@@ -426,6 +543,7 @@ class GeneratedScene(VoiceoverScene):
         learner_question = str(scene.get("learner_question") or "")
         visual_mode = str(scene.get("visual_mode") or "").lower()
         required_visual_elements = [str(x) for x in (scene.get("required_visual_elements") or []) if str(x).strip()][:6]
+        essential_visual = bool(scene.get("essential_visual"))
 
         def clean_text(text):
             value = str(text or "").replace("\n", " ").strip()
