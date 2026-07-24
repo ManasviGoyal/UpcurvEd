@@ -419,6 +419,7 @@ class MessageMedia(BaseModel):
     widgetCode: str | None = None
     artifactKind: str | None = None
     downloadFilename: str | None = None
+    generationDiagnostics: dict | None = None
 
 
 class MessageCreateIn(BaseModel):
@@ -849,6 +850,10 @@ def _publish_structured_video_result(
                 "video_url": None,
                 "debug_detail": detail[:500],
                 "scene_results": result.get("scene_results"),
+                "used_fallback": result.get("used_fallback"),
+                "generation_diagnostics": result.get(
+                    "generation_diagnostics"
+                ),
             }
         )
         return payload
@@ -950,6 +955,9 @@ def _publish_structured_video_result(
                 model=model,
             )
             payload["video_url"] = None
+            payload["generation_diagnostics"] = result.get(
+                "generation_diagnostics"
+            )
             return payload
 
         final_video_url = signed_video_url
@@ -970,6 +978,7 @@ def _publish_structured_video_result(
         "scene_plan": result.get("scene_plan"),
         "scene_results": result.get("scene_results"),
         "used_fallback": result.get("used_fallback"),
+        "generation_diagnostics": result.get("generation_diagnostics"),
         "message": message,
     }
     if generation_mode is not None:

@@ -24,36 +24,58 @@ def _with_artifact_safety(prompt: str) -> str:
 # -------- STRUCTURED VIDEO PROMPTS --------
 
 
-def _scene_body_ref(scene: dict[str, Any], index: int) -> str:
-    existing = str(scene.get("manim_body_ref") or "").strip()
+def _scene_script_ref(scene: dict[str, Any], index: int) -> str:
+    existing = str(
+        scene.get("manim_script_ref")
+        or scene.get("manim_body_ref")
+        or ""
+    ).strip()
     if existing:
         return existing
     scene_id = str(scene.get("id") or index).strip()
     return f"scene_{scene_id}"
 
 
-def _split_plan_and_bodies(plan: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-    """Prepare a normalized plan for an LLM prompt without embedding Python in fields."""
+def _split_plan_and_code(
+    plan: dict[str, Any],
+) -> tuple[dict[str, Any], list[tuple[str, str]], list[tuple[str, str]]]:
+    """Prepare a normalized plan for prompts without embedding Python inside fields.
+
+    New generations use complete MANIM_SCRIPT blocks. MANIM_BODY blocks are retained only
+    so existing saved bundles can still be edited without losing their legacy code.
+    """
     cloned = json.loads(json.dumps(plan or {}, ensure_ascii=False))
-    bodies: list[tuple[str, str]] = []
+    scripts: list[tuple[str, str]] = []
+    legacy_bodies: list[tuple[str, str]] = []
     scenes = cloned.get("scenes")
     if not isinstance(scenes, list):
-        return cloned, bodies
+        return cloned, scripts, legacy_bodies
 
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, dict):
             continue
+        script = str(scene.pop("manim_script", "") or "").strip()
         body = str(scene.pop("manim_body", "") or "").strip()
-        if scene.get("type") == "custom_manim_scene" or body:
-            ref = _scene_body_ref(scene, index)
-            scene["manim_body_ref"] = ref
-            if body:
-                bodies.append((ref, body))
-    return cloned, bodies
+        custom_like = (
+            scene.get("type") == "custom_manim_scene"
+            or bool(script)
+            or bool(body)
+            or bool(scene.get("manim_script_ref"))
+            or bool(scene.get("manim_body_ref"))
+        )
+        if not custom_like:
+            continue
+        ref = _scene_script_ref(scene, index)
+        scene["manim_script_ref"] = ref
+        scene.pop("manim_body_ref", None)
+        if script:
+            scripts.append((ref, script))
+        elif body:
+            legacy_bodies.append((ref, body))
+    return cloned, scripts, legacy_bodies
 
 
 def _tag_value(value: Any) -> str:
-    """Escape only transport-significant characters in prompt examples/current plans."""
     return html.escape(str(value or "").strip(), quote=False)
 
 
@@ -62,8 +84,7 @@ def _tag(tag: str, value: Any) -> str:
 
 
 def _format_structured_plan(plan: dict[str, Any]) -> str:
-    """Serialize a plan into the same low-fragility tagged format requested from the model."""
-    transport_plan, _bodies = _split_plan_and_bodies(plan)
+    transport_plan, _scripts, _legacy_bodies = _split_plan_and_code(plan)
     lines = [
         "<VIDEO_META>",
         _tag("TITLE", transport_plan.get("title") or "Educational video"),
@@ -90,8 +111,9 @@ def _format_structured_plan(plan: dict[str, Any]) -> str:
         ("FORMULA", "formula"),
         ("DURATION_SEC", "duration_sec"),
         ("ESSENTIAL_VISUAL", "essential_visual"),
+        ("REQUIRES_3D", "requires_3d"),
         ("CODE_GOAL", "code_goal"),
-        ("MANIM_BODY_REF", "manim_body_ref"),
+        ("MANIM_SCRIPT_REF", "manim_script_ref"),
     )
     list_fields = (
         ("REQUIRED_VISUAL_ELEMENT", "required_visual_elements"),
@@ -130,23 +152,84 @@ def _format_structured_plan(plan: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _format_body_blocks(bodies: list[tuple[str, str]], tag: str = "MANIM_BODY") -> str:
-    if not bodies:
+def _format_code_blocks(
+    blocks: list[tuple[str, str]],
+    *,
+    tag: str,
+) -> str:
+    if not blocks:
         return "(none)"
     return "\n\n".join(
-        f'<{tag} id="{html.escape(ref, quote=True)}">\n{body}\n</{tag}>'
-        for ref, body in bodies
+        f'<{tag} id="{html.escape(ref, quote=True)}">\n{source}\n</{tag}>'
+        for ref, source in blocks
     )
 
 
-STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
+_COMPLETE_SCRIPT_CONTRACT = """\
+For every custom_manim_scene, return exactly one matching complete MANIM_SCRIPT.
+A MANIM_SCRIPT is a complete runnable Python file, not a fragment.
+
+Allowed imports only:
+from manim import *
+from manim_voiceover import VoiceoverScene
+from manim_voiceover.services.gtts import GTTSService
+import numpy as np
+
+Import numpy as np only when it is actually needed. Import nothing else. Do not use files,
+images, SVG, network calls, browser APIs, subprocesses, environment access, eval, exec, open,
+__import__, external libraries, or external assets.
+
+Script structure:
+- Define exactly one class named GeneratedScene.
+- Use class GeneratedScene(VoiceoverScene) for ordinary 2D scenes.
+- Use class GeneratedScene(VoiceoverScene, ThreeDScene) whenever the script uses 3D objects,
+  ThreeDAxes, Surface, Polyhedron, Cube, Sphere, Prism, Cone, Cylinder, Dot3D, Line3D,
+  Arrow3D, or 3D camera methods.
+- Define exactly one construct(self) method.
+- Inside construct(), call self.set_speech_service(GTTSService(lang="en")).
+- Include at least one with self.voiceover(text=...) as tracker block.
+- Use stable Manim 0.19 APIs and complete executable Python.
+- Do not use Tex or MathTex. Use Text and portable plain-text formulas instead.
+- Keep every important object inside the frame and remove or transform old objects before
+  introducing a new dense layout.
+- Use self.wait(max(0.1, ...)) when waiting on computed durations.
+
+Creative quality:
+- A custom scene must visibly teach the specific concept, not just display a heading or cards.
+- Use meaningful spatial relationships, motion, measurements, axes, paths, state changes,
+  diagrams, grids, networks, code panels, or 3D geometry when they improve understanding.
+- Graph scenes must use real axes or a number plane, draw the relationship, and mark the
+  feature discussed in narration.
+- Network scenes should use simple Circle/Dot nodes, Line/Arrow edges, and labels rather than
+  external graph libraries.
+- Grid-world scenes should build the grid from Rectangles/Squares and visibly animate values,
+  actions, transitions, or policy updates.
+- Code scenes should use Code(code_string=..., language="python", add_line_numbers=True) or
+  plain Text/VGroup when a Code object is unnecessary. Do not inspect Code internals.
+- Prefer two or three focused creative scenes in a normal video, and never more than three.
+
+Before returning each script, silently verify:
+1. Only the allowed imports appear.
+2. Exactly one GeneratedScene class exists with correct 2D or 3D inheritance.
+3. construct() configures GTTSService and contains voiceover.
+4. The script is complete and syntactically valid.
+5. The visual is topic-specific and materially explains the narration.
+6. No external assets, filesystem, network, subprocess, Tex, or MathTex are used.
+"""
+
+
+STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     Create one concise educational Manim video in one response. Do not use markdown fences,
     JSON, or commentary. Use only the tagged transport below.
+
+    The model has exactly two scene choices:
+    1. A standard structured scene rendered by reliable backend components.
+    2. custom_manim_scene with one complete runnable MANIM_SCRIPT.
 
     Output order:
     1. One VIDEO_META block.
     2. Four to seven complete SCENE_PLAN blocks.
-    3. One MANIM_BODY block for each custom_manim_scene.
+    3. One MANIM_SCRIPT block for every custom_manim_scene.
 
     Exact transport pattern:
     <VIDEO_META>
@@ -162,7 +245,7 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     <TITLE>Short scene title</TITLE>
     <SUBTITLE>Optional educational subtitle</SUBTITLE>
     <NARRATION>Student-facing narration.</NARRATION>
-    <VISUAL>Internal production direction describing the visible action.</VISUAL>
+    <VISUAL>Internal production direction.</VISUAL>
     <DURATION_SEC>8</DURATION_SEC>
     </SCENE_PLAN>
 
@@ -173,163 +256,106 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety("""\
     <VISUAL_MODE>process</VISUAL_MODE>
     <TITLE>Short scene title</TITLE>
     <NARRATION>Brief introduction to the sequence.</NARRATION>
-    <VISUAL>Internal production direction for the supporting visual.</VISUAL>
     <FORMULA>portable plain-text formula when needed</FORMULA>
     <STEP_TEXT>First visible instructional step</STEP_TEXT>
-    <STEP_NARRATION>Natural spoken explanation of that first step.</STEP_NARRATION>
+    <STEP_NARRATION>Natural spoken explanation of that step.</STEP_NARRATION>
     <STEP_TEXT>Second visible instructional step</STEP_TEXT>
-    <STEP_NARRATION>Natural spoken explanation of that second step.</STEP_NARRATION>
-    <STEP_TEXT>Final visible step or conclusion</STEP_TEXT>
-    <STEP_NARRATION>Natural spoken explanation of the final step.</STEP_NARRATION>
+    <STEP_NARRATION>Natural spoken explanation of that step.</STEP_NARRATION>
     <DURATION_SEC>18</DURATION_SEC>
     </SCENE_PLAN>
 
-    For a custom scene only:
+    For a creative scene:
     <SCENE_PLAN id="3">
     <TYPE>custom_manim_scene</TYPE>
     <LEARNING_ROLE>interpretation</LEARNING_ROLE>
-    <VISUAL_MODE>motion</VISUAL_MODE>
-    <TITLE>Topic-specific motion</TITLE>
+    <VISUAL_MODE>graph</VISUAL_MODE>
+    <TITLE>Topic-specific visual explanation</TITLE>
     <NARRATION>Student-facing explanation.</NARRATION>
     <VISUAL>Internal production direction for the animation.</VISUAL>
     <REQUIRED_VISUAL_ELEMENT>first concrete element</REQUIRED_VISUAL_ELEMENT>
     <REQUIRED_VISUAL_ELEMENT>second concrete element</REQUIRED_VISUAL_ELEMENT>
-    <ESSENTIAL_VISUAL>false</ESSENTIAL_VISUAL>
-    <CODE_GOAL>Internal instruction describing what the code must demonstrate.</CODE_GOAL>
-    <MANIM_BODY_REF>scene_3</MANIM_BODY_REF>
+    <ESSENTIAL_VISUAL>true</ESSENTIAL_VISUAL>
+    <REQUIRES_3D>false</REQUIRES_3D>
+    <CODE_GOAL>What the script must visibly demonstrate.</CODE_GOAL>
+    <MANIM_SCRIPT_REF>scene_3</MANIM_SCRIPT_REF>
     </SCENE_PLAN>
 
-    <MANIM_BODY id="scene_3">
-    body statements only
-    </MANIM_BODY>
+    <MANIM_SCRIPT id="scene_3">
+    complete runnable Python file
+    </MANIM_SCRIPT>
 
     Transport rules:
-    - Never output JSON, Python dictionaries, markdown fences, or prose outside the tags.
-    - Put each field in its own opening and closing tag. Close each SCENE_PLAN before starting
-      the next one. Omit optional fields rather than returning empty tags.
-    - Repeat REQUIRED_VISUAL_ELEMENT, LABEL, and KEY_POINT tags for multiple values.
-    - For a sequence, repeat STEP_TEXT and immediately follow each one with its matching
-      STEP_NARRATION. CALCULATION_STEP may be read for legacy compatibility, but new output
-      must use STEP_TEXT.
-    - Keep each field compact. Do not place structural closing tags inside field values.
-    - Output all SCENE_PLAN blocks before any MANIM_BODY blocks.
+    - Never output JSON, dictionaries, markdown fences, or prose outside tags.
+    - Put each field in its own opening and closing tag. Close every SCENE_PLAN.
+    - Repeat REQUIRED_VISUAL_ELEMENT, LABEL, KEY_POINT, STEP_TEXT, and STEP_NARRATION as needed.
+    - Output all SCENE_PLAN blocks before all MANIM_SCRIPT blocks.
+    - Omit optional fields rather than returning empty tags.
 
-    Field visibility rules:
-    - Learner-facing fields are TITLE, SUBTITLE, LEARNER_QUESTION, NARRATION, LABEL, KEY_POINT,
-      FORMULA, STEP_TEXT, and STEP_NARRATION. Write only educational content in these fields.
-    - VISUAL, ESSENTIAL_VISUAL, CODE_GOAL, MANIM_BODY_REF, and MANIM_BODY are internal production fields. They
-      may describe fades, movement, layout, camera behavior, or implementation, but they are
-      never shown to learners.
-    - Never place production directions such as how text enters, exits, moves, or transitions
-      inside learner-facing fields.
-
-    Allowed values:
-    - TYPE: title_scene, question_scene, concept_scene, process_scene, comparison_scene,
-      custom_manim_scene.
-    - LEARNING_ROLE: intuition, definition, problem, formula, example, interpretation.
-    - VISUAL_MODE: diagram, graph, motion, comparison, process, text.
+    Allowed TYPE values: title_scene, question_scene, concept_scene, process_scene,
+    comparison_scene, custom_manim_scene.
+    Allowed LEARNING_ROLE values: intuition, definition, problem, formula, example,
+    interpretation.
+    Allowed VISUAL_MODE values: diagram, graph, motion, comparison, process, text.
 
     Teaching rules:
-    - Scene 1 must be title_scene. Use only the scenes needed to teach clearly.
-    - Every non-title scene must show meaningful learner-facing visual content throughout the
-      narration. Never create a long scene that displays only its heading.
-    - Every non-title scene must include at least one of these: two or more KEY_POINT or LABEL
-      values, one or more STEP_TEXT values, a displayed FORMULA, or a topic-specific custom
-      Manim visual that visibly explains the idea.
-    - KEY_POINT is for concise learner-facing bullets or cards when a scene does not need an
-      ordered sequence. Use two to five topic-specific points rather than generic filler.
-    - Teach meaning before notation. Define unfamiliar ideas and the problem a formula solves.
-    - Graph ideas must show the relevant graph feature before algebra. Every graph scene must
-      be custom_manim_scene and must name concrete REQUIRED_VISUAL_ELEMENT fields.
-    - Use STEP_TEXT and STEP_NARRATION for any ordered instructional sequence: calculations,
-      scientific processes, historical developments, procedures, comparisons, coding logic,
-      cause-and-effect chains, or other staged explanations.
-    - Every STEP_TEXT must describe a visible learner-facing state, action, relationship, or
-      conclusion. Every matching STEP_NARRATION must explain that step naturally and clearly.
-    - For worked mathematics, steps must contain completed substitution, simplification, and
-      final answer. Never return instructions such as "compute the roots" as step text.
-    - Prefer a standard process_scene or concept_scene for text-based sequences so the stable
-      renderer can preserve every step and synchronize narration. Do not use a custom scene
-      merely to animate a list of steps.
-    - If narration uses a formula, include FORMULA and show it. Use portable text such as
-      x = (-b +/- sqrt(b^2 - 4ac)) / (2a), not LaTeX or special math glyphs.
-    - LABEL is optional and topic-specific. Do not use Concept, Equation, Step, Input, Output,
-      Result, or Example as filler labels.
-    - Use custom scenes whenever moving objects, changing quantities, spatial relationships,
-      measurements, transformations, concrete everyday examples, diagrams, timelines, graphs,
-      or simulations would make the explanation clearer.
-    - A broad four-to-seven-scene educational video should normally contain two or three simple
-      custom_manim_scene visuals. Other scenes may use stable components with KEY_POINT, LABEL,
-      FORMULA, or STEP_TEXT content. Do not spend the response budget on custom code where a
-      stable component already teaches the idea clearly.
-    - Keep each custom visual focused and reliable: use roughly two to five main visual objects,
-      animate the central relationship, and keep important objects visible while narrated.
-      A small clear animation is better than a complex fragile one.
-    - Set ESSENTIAL_VISUAL to true only for a graph or a geometric/construction visual that is
-      explicitly required by the user. Otherwise use false or omit it.
-    - Do not display internal scene-type names.
+    - Scene 1 must be title_scene.
+    - Every non-title scene must show meaningful learner-facing content throughout narration.
+    - Standard scenes should use KEY_POINT, LABEL, FORMULA, or STEP_TEXT content.
+    - Use STEP_TEXT immediately followed by matching STEP_NARRATION for ordered explanations.
+    - Worked mathematics must show completed substitution, simplification, and final answer.
+    - Teach meaning before notation and show graph meaning before algebra.
+    - Every graph scene must be custom_manim_scene with concrete REQUIRED_VISUAL_ELEMENT values.
+    - Use custom_manim_scene only when a concept benefits from actual spatial, graphical,
+      simulated, networked, coded, or 3D explanation. Standard scenes remain preferable for
+      titles, concise definitions, comparisons, formulas, and cumulative instructional steps.
+    - A normal four-to-seven-scene video should contain two or three creative scenes when the
+      topic benefits from them, never more than three.
+    - Set ESSENTIAL_VISUAL true only when the requested graph, construction, simulation, code
+      view, network, grid, or 3D visual is central to the user request.
+    - Set REQUIRES_3D true only when the complete script genuinely uses 3D objects or camera.
+    - Internal fields VISUAL, CODE_GOAL, ESSENTIAL_VISUAL, REQUIRES_3D, and MANIM_SCRIPT_REF
+      are never learner-facing.
 
-    Every custom scene needs a unique MANIM_BODY_REF and matching MANIM_BODY block. The body is
-    inserted directly inside GeneratedScene.construct(). The runtime contract is exact:
-    - self is the active VoiceoverScene. Use self.play(...), self.add(...), self.wait(...), and
-      with self.voiceover(text=...) as tracker.
-    - scene is only a Python metadata dictionary. Never call scene.play(...), scene.add(...),
-      scene.wait(...), or scene.voiceover(...).
-    - Manim is already imported as mn. VoiceoverScene and GTTSService are already configured.
-      Do not write import statements. Use mn.Circle(...), mn.FadeIn(...), and other mn-prefixed
-      constructors and animations.
-    - The wrapper already provides: title, narration, labels, visual, formula, steps,
-      step_narrations, calculation_steps as a legacy alias, key_points, learning_role,
-      learner_question, visual_mode, required_visual_elements, essential_visual, bg, label(...),
-      formula_label(...), instruction_step_label(...), calculation_step_label(...),
-      add_instruction_step(...), next_calculation_step(...), and wait_for_voiceover(...).
+    {_COMPLETE_SCRIPT_CONTRACT}
 
-    Canonical valid MANIM_BODY pattern. Follow this structure with topic-specific objects:
-    <MANIM_BODY id="scene_example">
-    title_mob = label(title, size=34).to_edge(mn.UP)
-    left_object = mn.Circle(radius=0.8, color=mn.BLUE_C).shift(mn.LEFT * 2)
-    right_object = mn.Square(side_length=1.5, color=mn.GREEN_C).shift(mn.RIGHT * 2)
-    relationship = mn.Arrow(left_object.get_right(), right_object.get_left(), buff=0.2)
-    with self.voiceover(text=narration) as tracker:
-        self.play(mn.FadeIn(title_mob), run_time=0.5)
-        self.play(mn.GrowFromCenter(left_object), run_time=0.7)
-        self.play(mn.GrowArrow(relationship), mn.GrowFromCenter(right_object), run_time=0.9)
-        wait_for_voiceover(tracker, 2.1)
-    self.wait(1.0)
-    </MANIM_BODY>
+    Minimal valid 2D example:
+    <MANIM_SCRIPT id="scene_example_2d">
+    from manim import *
+    from manim_voiceover import VoiceoverScene
+    from manim_voiceover.services.gtts import GTTSService
 
-    Custom-body rules:
-    - Body statements only. No imports, class, def, construct method, files, images, SVG, Tex,
-      MathTex, network, random, external libraries, eval, exec, or system access.
-    - Begin every MANIM_BODY at column 1. Indent only statements nested inside with, if, for,
-      or while. Return executable Python statements, never pseudocode or planning notes.
-    - Use simple mn-prefixed primitives such as mn.Text, mn.Circle, mn.Square, mn.Rectangle,
-      mn.RoundedRectangle, mn.Dot, mn.Line, mn.DashedLine, mn.Arrow, mn.Arc, mn.VGroup,
-      mn.NumberLine, mn.Axes, and mn.NumberPlane.
-    - Create at least two visible topic-specific objects, or one substantial explanatory
-      structure such as axes, a number line, a geometric construction, or a graph. A title or
-      heading does not count as a topic-specific object.
-    - Include at least one self.voiceover block and at least three self.play calls. Animate
-      every important object with self.play(...) or add it with self.add(...).
-    - Include meaningful topic-specific motion. Graph bodies must create mn.Axes or
-      mn.NumberPlane, draw the relationship, and mark the listed visual features.
-    - Do not animate decorative motion alone. Movement must show the relationship described by
-      the narration. Keep two to five main objects visible while they are discussed.
-    - When a custom scene truly needs instructional steps, keep earlier steps visible, add each
-      new step beneath the previous ones, narrate each step, and hold the completed sequence for
-      at least 2.5 seconds. Prefer add_instruction_step(...).
-    - Display FORMULA when present. Keep strings on one line and close every quote, bracket,
-      and parenthesis.
+    class GeneratedScene(VoiceoverScene):
+        def construct(self):
+            self.set_speech_service(GTTSService(lang="en"))
+            left = Circle(radius=0.8, color=BLUE_C).shift(LEFT * 2)
+            right = Square(side_length=1.4, color=GREEN_C).shift(RIGHT * 2)
+            arrow = Arrow(left.get_right(), right.get_left(), buff=0.2)
+            with self.voiceover(text="A transformation connects the starting state to the result.") as tracker:
+                self.play(GrowFromCenter(left), run_time=0.7)
+                self.play(GrowArrow(arrow), GrowFromCenter(right), run_time=0.9)
+                self.wait(max(0.1, tracker.duration - 1.6))
+            self.wait(1.0)
+    </MANIM_SCRIPT>
 
-    Before emitting each MANIM_BODY, silently verify all seven checks:
-    1. No import, class, def, or construct wrapper.
-    2. self is used for scene methods; scene is never used as the active scene.
-    3. All Manim constructors and animations use the mn. prefix.
-    4. At least one self.voiceover block exists.
-    5. At least two topic-specific objects or one substantial structure exists.
-    6. At least three self.play calls exist, and every important object is added or animated.
-    7. The body is complete executable Python, not pseudocode.
+    Minimal valid 3D inheritance example:
+    <MANIM_SCRIPT id="scene_example_3d">
+    from manim import *
+    from manim_voiceover import VoiceoverScene
+    from manim_voiceover.services.gtts import GTTSService
+    import numpy as np
 
+    class GeneratedScene(VoiceoverScene, ThreeDScene):
+        def construct(self):
+            self.set_speech_service(GTTSService(lang="en"))
+            self.set_camera_orientation(phi=65 * DEGREES, theta=-45 * DEGREES)
+            axes = ThreeDAxes()
+            surface = Surface(lambda u, v: axes.c2p(u, v, 0.18 * (u*u + v*v)),
+                              u_range=[-2, 2], v_range=[-2, 2], resolution=(16, 16))
+            with self.voiceover(text="The bowl shape has one lowest region.") as tracker:
+                self.play(Create(axes), FadeIn(surface), run_time=1.5)
+                self.wait(max(0.1, tracker.duration - 1.5))
+            self.wait(1.0)
+    </MANIM_SCRIPT>
 """)
 
 
@@ -338,32 +364,28 @@ def build_structured_video_user_prompt(goal: str) -> str:
         Create a concise educational video about:
         {goal}
 
-        Return VIDEO_META, complete SCENE_PLAN blocks, and matching raw MANIM_BODY blocks.
-        Do not return JSON.
+        Return VIDEO_META, complete SCENE_PLAN blocks, and one complete MANIM_SCRIPT for every
+        custom_manim_scene. Do not return JSON or body fragments.
     """).strip()
 
 
-STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety("""\
+STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety(f"""\
     Repair one educational-video plan. Do not use markdown fences or JSON. Return one complete
-    VIDEO_META block, complete SCENE_PLAN blocks, and MANIM_BODY blocks only for custom scenes
-    that are new or changed. Omitted existing bodies will be preserved.
+    VIDEO_META block, complete SCENE_PLAN blocks, and complete MANIM_SCRIPT blocks only for
+    custom scenes that are new or changed. Omitted existing scripts are preserved.
 
-    Use the exact field tags from the supplied current plan. Keep good material and make the
-    smallest changes needed. Close every field and SCENE_PLAN tag. A graph scene must use real
-    axes or a number plane, draw a coordinate-based relationship, and mark the required
-    features. Preserve KEY_POINT values and STEP_TEXT/STEP_NARRATION pairs. Every non-title
-    scene must retain visible learner-facing content beyond its heading. A worked mathematics
-    example must show completed substitution, simplification, and final
-    answer. Keep earlier steps visible and hold the completed sequence. Every MANIM_BODY is
-    inserted inside GeneratedScene.construct(): self is the active VoiceoverScene, scene is
-    metadata only, Manim is already imported as mn, and no imports/classes/functions are
-    allowed. Use self.voiceover plus at least three self.play calls and at least two
-    topic-specific visual objects. Begin each body at column 1 and indent only nested statements.
+    Keep good material and make the smallest changes needed. Scene 1 must remain title_scene.
+    Preserve KEY_POINT values and STEP_TEXT/STEP_NARRATION pairs. Every non-title scene must
+    retain meaningful learner-facing visual content. A graph scene must use custom_manim_scene,
+    real axes or a number plane, and marked graph features. A worked math example must contain
+    completed substitution, simplification, and final answer.
+
+    {_COMPLETE_SCRIPT_CONTRACT}
 """)
 
 
 def build_structured_video_plan_repair_prompt(*, plan: dict, errors: list[str]) -> str:
-    _transport_plan, bodies = _split_plan_and_bodies(plan)
+    _transport_plan, scripts, legacy_bodies = _split_plan_and_code(plan)
     error_lines = "\n".join(f"- {error}" for error in errors) or "- Improve the plan."
     return dedent(f"""\
         Current plan:
@@ -371,130 +393,70 @@ def build_structured_video_plan_repair_prompt(*, plan: dict, errors: list[str]) 
         {_format_structured_plan(plan)}
         </ORIGINAL_PLAN>
 
-        Current custom bodies:
-        {_format_body_blocks(bodies, tag="ORIGINAL_MANIM_BODY")}
+        Current complete scripts:
+        {_format_code_blocks(scripts, tag="ORIGINAL_MANIM_SCRIPT")}
+
+        Legacy body-only code from older saved videos, when present:
+        {_format_code_blocks(legacy_bodies, tag="LEGACY_MANIM_BODY")}
 
         Required corrections:
         {error_lines}
 
-        Return the complete repaired tagged plan and only changed or new MANIM_BODY blocks.
-        Do not return JSON.
+        Return the complete repaired tagged plan and only changed or new MANIM_SCRIPT blocks.
     """).strip()
 
 
-STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety("""\
+STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety(f"""\
     Edit one structured educational video. Do not use markdown fences or JSON. Return one
-    complete VIDEO_META block, complete SCENE_PLAN blocks, and MANIM_BODY blocks only for
-    custom scenes that are new or changed. Omitted existing bodies will be preserved.
+    complete VIDEO_META block, complete SCENE_PLAN blocks, and complete MANIM_SCRIPT blocks
+    only for custom scenes that are new or changed. Omitted existing scripts are preserved.
 
     You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
-    Preserve useful material and improve learning_role, learner_question, visual_mode,
-    required_visual_elements, essential_visual, formula, key_points, steps, step_narrations,
-    and optional labels as needed.
-    Teach meaning before notation. Graph explanations show the graph feature before algebra.
-    Use KEY_POINT for concise bullets/cards and STEP_TEXT with STEP_NARRATION for ordered
-    explanations in any subject. Every non-title scene must show meaningful visible content;
-    never leave a long narration over a heading-only slide. Worked math examples show completed
-    substitution, simplification, and final answer.
+    Preserve useful material and improve learning roles, questions, visible points, steps,
+    formulas, diagrams, graphs, networks, grids, code views, simulations, or 3D visuals as the
+    edit request requires. Prefer standard scenes for reliable text-based teaching and custom
+    scenes only when actual Manim visualization adds educational value.
 
-    Use the exact field tags shown in the original plan. Close every field and SCENE_PLAN tag.
-    Custom code follows the generation rules. In every MANIM_BODY, self is the active
-    VoiceoverScene, scene is metadata only, and Manim is already imported as mn. Do not add
-    imports/classes/functions. Use self.voiceover, at least three self.play calls, and at least
-    two topic-specific visual objects. Keep earlier instructional steps visible, narrate each
-    step, and hold the completed sequence. Prefer a standard scene for step-based teaching.
+    {_COMPLETE_SCRIPT_CONTRACT}
 """)
 
 
 def build_structured_video_edit_user_prompt(original_plan: dict, edit_instructions: str) -> str:
-    _transport_plan, bodies = _split_plan_and_bodies(original_plan)
+    _transport_plan, scripts, legacy_bodies = _split_plan_and_code(original_plan)
     return dedent(f"""\
         Original plan:
         <ORIGINAL_PLAN>
         {_format_structured_plan(original_plan)}
         </ORIGINAL_PLAN>
 
-        Original custom bodies:
-        {_format_body_blocks(bodies, tag="ORIGINAL_MANIM_BODY")}
+        Original complete scripts:
+        {_format_code_blocks(scripts, tag="ORIGINAL_MANIM_SCRIPT")}
+
+        Legacy body-only code from older saved videos, when present:
+        {_format_code_blocks(legacy_bodies, tag="LEGACY_MANIM_BODY")}
 
         Edit request:
         {edit_instructions}
 
-        Return the complete edited tagged plan and only changed or new MANIM_BODY blocks.
-        Do not return JSON.
+        Return the complete edited tagged plan and only changed or new MANIM_SCRIPT blocks.
     """).strip()
 
 
-STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
-    Repair one Manim construct-body. Return corrected Python body statements only.
-    Preserve the teaching goal and make the smallest useful correction.
+STRUCTURED_VIDEO_BATCH_SANITIZER_REPAIR_SYSTEM = _with_artifact_safety(f"""\
+    Repair every listed complete Manim script that failed sanitizer or Python preflight.
+    Inspect all scripts before editing because multiple scenes may share the same compatibility
+    mistake. Return only one complete MANIM_SCRIPT block for every requested id, in the same
+    order. Do not return JSON, markdown, commentary, or unchanged scene ids.
 
-    Runtime contract:
-    - The body is inserted inside GeneratedScene.construct().
-    - self is the active VoiceoverScene. scene is only a metadata dictionary.
-    - Use self.play, self.add, self.wait, and self.voiceover. Never use scene.play or similar.
-    - Manim is already imported as mn. Do not include imports. Use mn. prefixes everywhere.
-    - The wrapper provides title, narration, labels, visual, formula, steps, step_narrations,
-      calculation_steps, key_points, learning_role, learner_question, visual_mode,
-      required_visual_elements, essential_visual, bg, label(...), formula_label(...),
-      instruction_step_label(...), calculation_step_label(...), add_instruction_step(...),
-      next_calculation_step(...), and wait_for_voiceover(...).
+    Use the original teaching goal and preserve the intended visual ambition. Correct imports,
+    class structure, 2D/3D inheritance, syntax, unresolved references, blocked operations, and
+    static Manim compatibility issues. Return complete runnable files, never fragments.
 
-    Minimum valid shape:
-    title_mob = label(title, size=34).to_edge(mn.UP)
-    left_object = mn.Circle(radius=0.8, color=mn.BLUE_C).shift(mn.LEFT * 2)
-    right_object = mn.Square(side_length=1.5, color=mn.GREEN_C).shift(mn.RIGHT * 2)
-    arrow = mn.Arrow(left_object.get_right(), right_object.get_left(), buff=0.2)
-    with self.voiceover(text=narration) as tracker:
-        self.play(mn.FadeIn(title_mob), run_time=0.5)
-        self.play(mn.GrowFromCenter(left_object), run_time=0.7)
-        self.play(mn.GrowArrow(arrow), mn.GrowFromCenter(right_object), run_time=0.9)
-        wait_for_voiceover(tracker, 2.1)
-    self.wait(1.0)
-
-    Return body statements only: no imports, class, def, construct wrapper, files, images, SVG,
-    Tex, MathTex, network, random, external libraries, eval, exec, or system access. Begin at
-    column 1 and indent only nested statements. Create at least two topic-specific visible
-    objects or one substantial graph/construction, use at least one self.voiceover block and
-    three self.play calls, and animate every important object. A graph must create mn.Axes or
-    mn.NumberPlane, draw the relationship, and mark the required features. Keep important
-    objects visible during narration. Display formula when present and close every quote,
-    bracket, and parenthesis.
+    {_COMPLETE_SCRIPT_CONTRACT}
 """)
 
 
-STRUCTURED_VIDEO_BATCH_CREATIVE_REPAIR_SYSTEM = _with_artifact_safety("""\
-    Repair several invalid Manim construct-bodies in one response. Return only one complete
-    MANIM_BODY block for every requested id, in the same order. Do not return JSON, markdown,
-    commentary, imports, classes, functions, or prose outside the blocks.
-
-    Each body is inserted inside GeneratedScene.construct(). self is the active
-    VoiceoverScene; scene is only metadata. Use self.play, self.add, self.wait, and
-    self.voiceover. Manim is already imported as mn, so every Manim constructor and animation
-    must use the mn. prefix and no imports are allowed.
-
-    Each repaired body must create at least two topic-specific visible objects or one
-    substantial explanatory structure, contain at least one self.voiceover block and three
-    self.play calls, animate or add every important object, and keep the educational objects
-    visible while narrated. Return executable body statements, not pseudocode.
-
-    Canonical shape:
-    <MANIM_BODY id="requested_id">
-    title_mob = label(title, size=34).to_edge(mn.UP)
-    left_object = mn.Circle(radius=0.8, color=mn.BLUE_C).shift(mn.LEFT * 2)
-    right_object = mn.Square(side_length=1.5, color=mn.GREEN_C).shift(mn.RIGHT * 2)
-    arrow = mn.Arrow(left_object.get_right(), right_object.get_left(), buff=0.2)
-    with self.voiceover(text=narration) as tracker:
-        self.play(mn.FadeIn(title_mob), run_time=0.5)
-        self.play(mn.GrowFromCenter(left_object), run_time=0.7)
-        self.play(mn.GrowArrow(arrow), mn.GrowFromCenter(right_object), run_time=0.9)
-        wait_for_voiceover(tracker, 2.1)
-    self.wait(1.0)
-    </MANIM_BODY>
-""")
-
-
-def build_structured_video_batch_creative_repair_prompt(
+def build_structured_video_batch_sanitizer_repair_prompt(
     *,
     failures: list[dict[str, Any]],
 ) -> str:
@@ -503,18 +465,122 @@ def build_structured_video_batch_creative_repair_prompt(
         ref = str(failure.get("ref") or "scene").strip()
         scene = failure.get("scene") if isinstance(failure.get("scene"), dict) else {}
         errors = failure.get("errors") if isinstance(failure.get("errors"), list) else []
-        original_body = str(failure.get("original_body") or "").strip()
+        changes = failure.get("changes") if isinstance(failure.get("changes"), list) else []
+        removed = failure.get("removed_imports") if isinstance(failure.get("removed_imports"), list) else []
+        original = str(failure.get("original_script") or "").strip()
+        sanitized = str(failure.get("sanitized_script") or "").strip()
         blocks.extend([
-            f'<REPAIR_REQUEST id="{html.escape(ref, quote=True)}">',
+            f'<SANITIZER_REPAIR_REQUEST id="{html.escape(ref, quote=True)}">',
             f'<SCENE_DATA>{html.escape(json.dumps(scene, ensure_ascii=True, separators=(",", ":")), quote=False)}</SCENE_DATA>',
-            f'<VALIDATION_ERRORS>{html.escape("; ".join(str(error) for error in errors), quote=False)}</VALIDATION_ERRORS>',
-            '<ORIGINAL_BODY>',
-            original_body or '(empty)',
-            '</ORIGINAL_BODY>',
-            '</REPAIR_REQUEST>',
+            f'<SANITIZER_ERRORS>{html.escape("; ".join(str(x) for x in errors), quote=False)}</SANITIZER_ERRORS>',
+            f'<SANITIZER_CHANGES>{html.escape("; ".join(str(x) for x in changes), quote=False)}</SANITIZER_CHANGES>',
+            f'<REMOVED_IMPORTS>{html.escape("; ".join(str(x) for x in removed), quote=False)}</REMOVED_IMPORTS>',
+            '<ORIGINAL_SCRIPT>',
+            original or '(empty)',
+            '</ORIGINAL_SCRIPT>',
+            '<SANITIZED_SCRIPT>',
+            sanitized or '(empty)',
+            '</SANITIZED_SCRIPT>',
+            '</SANITIZER_REPAIR_REQUEST>',
             '',
         ])
     return "\n".join(blocks).strip()
+
+
+STRUCTURED_VIDEO_BATCH_RENDER_REPAIR_SYSTEM = _with_artifact_safety(f"""\
+    Repair every listed complete Manim scene that failed during actual Manim execution.
+    Inspect all scripts and tracebacks before correcting them because failures may share a root
+    cause. Return only one complete MANIM_SCRIPT block for every requested id, in the same order.
+    Do not return JSON, markdown, commentary, or scripts for scenes that already rendered.
+
+    Preserve each scene's teaching purpose and original visual ambition. Fix the actual runtime
+    or compatibility errors shown in the tracebacks. Return complete replacement files, never
+    fragments.
+
+    {_COMPLETE_SCRIPT_CONTRACT}
+""")
+
+
+def build_structured_video_batch_render_repair_prompt(
+    *,
+    failures: list[dict[str, Any]],
+) -> str:
+    blocks: list[str] = []
+    for failure in failures:
+        ref = str(failure.get("ref") or "scene").strip()
+        scene = failure.get("scene") if isinstance(failure.get("scene"), dict) else {}
+        original = str(failure.get("original_script") or "").strip()
+        executed = str(failure.get("executed_script") or "").strip()
+        traceback = str(failure.get("traceback") or "").strip()
+        stage = str(failure.get("render_stage") or "initial_render")
+        command = str(failure.get("render_command") or "").strip()
+        blocks.extend([
+            f'<RENDER_REPAIR_REQUEST id="{html.escape(ref, quote=True)}">',
+            f'<SCENE_DATA>{html.escape(json.dumps(scene, ensure_ascii=True, separators=(",", ":")), quote=False)}</SCENE_DATA>',
+            f'<RENDER_STAGE>{html.escape(stage, quote=False)}</RENDER_STAGE>',
+            f'<RENDER_COMMAND>{html.escape(command, quote=False)}</RENDER_COMMAND>',
+            '<ORIGINAL_SCRIPT>',
+            original or '(empty)',
+            '</ORIGINAL_SCRIPT>',
+            '<EXECUTED_SCRIPT>',
+            executed or '(empty)',
+            '</EXECUTED_SCRIPT>',
+            '<MANIM_TRACEBACK>',
+            traceback or '(no traceback returned)',
+            '</MANIM_TRACEBACK>',
+            '</RENDER_REPAIR_REQUEST>',
+            '',
+        ])
+    return "\n".join(blocks).strip()
+
+
+STRUCTURED_VIDEO_BATCH_SIMPLIFY_SYSTEM = _with_artifact_safety(f"""\
+    The listed scenes failed initially and after focused correction, or could not pass static
+    preflight. Create simpler, more reliable implementations of the same educational scenes.
+    Return only one complete MANIM_SCRIPT block for every requested id, in the same order.
+    Do not return JSON, markdown, commentary, or scripts for scenes that already rendered.
+
+    Preserve narration, core concept, and meaningful visual explanation. Deliberately reduce
+    technical fragility: use stable Manim primitives, fewer objects, simpler transformations,
+    and fewer delicate APIs. Do not replace a scene with only headings, bullet points, or
+    decorative motion. A graph must remain a real graph; a network must remain a visible state
+    network; a grid-world must remain a meaningful grid-world explanation.
+
+    {_COMPLETE_SCRIPT_CONTRACT}
+""")
+
+
+def build_structured_video_batch_simplify_prompt(
+    *,
+    failures: list[dict[str, Any]],
+) -> str:
+    blocks: list[str] = []
+    for failure in failures:
+        ref = str(failure.get("ref") or "scene").strip()
+        scene = failure.get("scene") if isinstance(failure.get("scene"), dict) else {}
+        history = failure.get("history") if isinstance(failure.get("history"), list) else []
+        original = str(failure.get("original_script") or "").strip()
+        latest = str(failure.get("latest_script") or "").strip()
+        blocks.extend([
+            f'<SIMPLIFY_REQUEST id="{html.escape(ref, quote=True)}">',
+            f'<SCENE_DATA>{html.escape(json.dumps(scene, ensure_ascii=True, separators=(",", ":")), quote=False)}</SCENE_DATA>',
+            f'<FAILURE_HISTORY>{html.escape(json.dumps(history, ensure_ascii=True, separators=(",", ":")), quote=False)}</FAILURE_HISTORY>',
+            '<ORIGINAL_SCRIPT>',
+            original or '(empty)',
+            '</ORIGINAL_SCRIPT>',
+            '<LATEST_SCRIPT>',
+            latest or '(empty)',
+            '</LATEST_SCRIPT>',
+            '</SIMPLIFY_REQUEST>',
+            '',
+        ])
+    return "\n".join(blocks).strip()
+
+
+# Backward-compatible aliases for imports in older tests or modules. New structured-video code
+# uses the batch complete-script prompts above.
+STRUCTURED_VIDEO_CREATIVE_REPAIR_SYSTEM = STRUCTURED_VIDEO_BATCH_RENDER_REPAIR_SYSTEM
+STRUCTURED_VIDEO_BATCH_CREATIVE_REPAIR_SYSTEM = STRUCTURED_VIDEO_BATCH_SANITIZER_REPAIR_SYSTEM
 
 
 def build_structured_video_creative_repair_prompt(
@@ -524,16 +590,34 @@ def build_structured_video_creative_repair_prompt(
     failure_stage: str,
     error_detail: str,
 ) -> str:
-    return dedent(f"""\
-        Scene: {json.dumps(scene, ensure_ascii=True, separators=(",", ":"))}
-        Failure stage: {failure_stage}
-        Error: {error_detail}
+    return build_structured_video_batch_render_repair_prompt(
+        failures=[{
+            "ref": str(scene.get("manim_script_ref") or scene.get("manim_body_ref") or "scene"),
+            "scene": scene,
+            "original_script": original_body,
+            "executed_script": original_body,
+            "traceback": error_detail,
+            "render_stage": failure_stage,
+        }]
+    )
 
-        Original body:
-        {original_body}
 
-        Return the repaired body statements only.
-    """).strip()
+def build_structured_video_batch_creative_repair_prompt(
+    *,
+    failures: list[dict[str, Any]],
+) -> str:
+    converted = []
+    for failure in failures:
+        converted.append({
+            "ref": failure.get("ref"),
+            "scene": failure.get("scene"),
+            "errors": failure.get("errors"),
+            "changes": [],
+            "removed_imports": [],
+            "original_script": failure.get("original_body"),
+            "sanitized_script": failure.get("original_body"),
+        })
+    return build_structured_video_batch_sanitizer_repair_prompt(failures=converted)
 
 
 # -------- WIDGET PROMPTS --------

@@ -1,12 +1,11 @@
-# backend/runner/job_runner.py
+"""Shared Manim job runner for local/cloud UpcurvEd rendering.
+
+The runner writes complete diagnostics under ``STORAGE/jobs/<job_id>`` and always returns a
+uniform dictionary instead of raising. Structured videos may disable per-scene watermarks and
+apply one continuous watermark after concatenation.
 """
-Shared job runner for Manim (fixed low quality):
-- writes scene.py
-- lints with pyflakes (best-effort)
-- renders with: manim -ql
-- stores logs/mp4 under storage/jobs/<job_id>/
-- ALWAYS returns a uniform dict (never raises)
-"""
+
+from __future__ import annotations
 
 import os
 import re
@@ -14,42 +13,34 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
+from typing import Any
 
-# Root for artifacts; FastAPI should mount this at /static.
-# In desktop mode this can be overridden to a user-data location so artifacts persist.
-STORAGE = Path(os.getenv("UPCURVED_STORAGE_DIR", "storage"))
-# Ensure storage/jobs exists early; prefer os.makedirs for robustness.
+STORAGE = Path(os.getenv("UPCURVED_STORAGE_DIR", "storage")).expanduser()
 try:
-    os.makedirs(str(STORAGE / "jobs"), exist_ok=True)
+    (STORAGE / "jobs").mkdir(parents=True, exist_ok=True)
 except Exception:
-    import tempfile
+    STORAGE = Path(tempfile.mkdtemp(prefix="upcurved_storage_"))
+    (STORAGE / "jobs").mkdir(parents=True, exist_ok=True)
 
-    tmp = Path(tempfile.mkdtemp(prefix="ac215_storage_"))
-    STORAGE = tmp
-    os.makedirs(str(STORAGE / "jobs"), exist_ok=True)
-
-# Track active processes by job_id for cancellation
-ACTIVE_PROCS: dict[str, subprocess.Popen] = {}
-
-# Log size cap to avoid huge payloads in memory/prompts
-MAX_LOG_BYTES = int(os.getenv("MAX_LOG_BYTES", "200000"))  # ~200 KB default
+ACTIVE_PROCS: dict[str, subprocess.Popen[str]] = {}
+_RUNTIME_PREFLIGHT_SUCCESS: dict[str, Any] | None = None
+MAX_LOG_BYTES = int(os.getenv("MAX_LOG_BYTES", "200000"))
 
 
-def to_static_url(p: Path) -> str:
-    """Map a filesystem path under storage/ to a /static/... URL."""
-    return f"/static/{p.relative_to(STORAGE)}"
+def to_static_url(path: Path) -> str:
+    return f"/static/{path.relative_to(STORAGE)}"
 
 
-def _truncate(s: str | None, limit: int = MAX_LOG_BYTES) -> str:
-    if not s:
+def _truncate(value: str | None, limit: int = MAX_LOG_BYTES) -> str:
+    if not value:
         return ""
-    return s if len(s) <= limit else s[:limit]
+    return value if len(value) <= limit else value[:limit]
 
 
-def _kill_proc_tree(proc: subprocess.Popen) -> None:
-    """Best-effort kill of a started Popen (entire group)."""
+def _kill_proc_tree(proc: subprocess.Popen[str]) -> None:
     try:
         os.killpg(proc.pid, signal.SIGTERM)
         try:
@@ -60,27 +51,78 @@ def _kill_proc_tree(proc: subprocess.Popen) -> None:
         pass
 
 
-def _inject_watermark(code: str) -> str:
-    """
-    Inject watermark code into Manim scene code.
-    Adds a Text watermark at the top-right corner that persists throughout the scene.
-    The watermark is added after each cleanup section to ensure it persists.
+def _runner_metadata(job_dir: Path, scene_py: Path | None = None) -> dict[str, str]:
+    return {
+        "job_dir": str(job_dir.resolve()),
+        "storage_dir": str(STORAGE.resolve()),
+        "scene_path": str(scene_py.resolve()) if scene_py is not None else "",
+        "interpreter": str(Path(sys.executable).resolve()),
+    }
 
-    Important: the injected block performs a local import of Text, Rectangle, and UR
-    so it does not rely on those names already being imported in the generated scene.
+
+def check_manim_runtime(timeout_seconds: int = 40) -> dict[str, Any]:
+    """Verify the exact interpreter used by the runner can load the render stack.
+
+    This is deliberately independent of generated scene code. A missing or broken Manim,
+    plugin, voiceover, or GTTS installation should be reported before an LLM call is spent.
     """
-    watermark_init = """        # Initialize watermark (only once) - stored as instance variables
+    global _RUNTIME_PREFLIGHT_SUCCESS
+    if _RUNTIME_PREFLIGHT_SUCCESS is not None:
+        return dict(_RUNTIME_PREFLIGHT_SUCCESS)
+
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import manim; import manim_voiceover; "
+            "from manim_voiceover.services.gtts import GTTSService; "
+            "print('Manim runtime OK')"
+        ),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=os.environ.copy(),
+        )
+        result = {
+            "ok": completed.returncode == 0,
+            "command": command,
+            "stdout": _truncate(completed.stdout),
+            "stderr": _truncate(completed.stderr),
+            "returncode": completed.returncode,
+            "interpreter": str(Path(sys.executable).resolve()),
+            "storage_dir": str(STORAGE.resolve()),
+        }
+        if result["ok"]:
+            _RUNTIME_PREFLIGHT_SUCCESS = dict(result)
+        return result
+    except Exception as exc:
+        return {
+            "ok": False,
+            "command": command,
+            "stdout": "",
+            "stderr": f"{type(exc).__name__}: {exc}",
+            "returncode": None,
+            "interpreter": str(Path(sys.executable).resolve()),
+            "storage_dir": str(STORAGE.resolve()),
+        }
+
+
+def _inject_watermark(code: str) -> str:
+    watermark_init = """        # Initialize watermark once
         if not hasattr(self, '_watermark_added'):
             from manim import Rectangle, Text, UR
 
             self._watermark_text = Text("Generated using UpcurvEd", font_size=24, color="white")
-            self._watermark_text.set_opacity(0.8)  # Make text translucent
+            self._watermark_text.set_opacity(0.8)
             self._watermark_text.to_corner(UR, buff=0.1)
-            # Add semi-transparent background box
             self._watermark_bg = Rectangle(
                 width=self._watermark_text.width + 0.3,
                 height=self._watermark_text.height + 0.2,
-                fill_opacity=0.6,  # More translucent background
+                fill_opacity=0.6,
                 fill_color="black",
                 stroke_width=0,
             )
@@ -89,8 +131,7 @@ def _inject_watermark(code: str) -> str:
             self._watermark_added = True
 
 """
-
-    watermark_readd = """        # Re-add watermark after cleanup (excluded from snapshot)
+    watermark_readd = """        # Re-add watermark after cleanup
         if hasattr(self, '_watermark_added') and self._watermark_added:
             if self._watermark_bg not in self.mobjects:
                 self.add(self._watermark_bg)
@@ -98,53 +139,70 @@ def _inject_watermark(code: str) -> str:
                 self.add(self._watermark_text)
 
 """
-
     cleanup_modify = """        # Modify cleanup to exclude watermark
         snapshot = [m for m in self.mobjects if not (
             hasattr(self, '_watermark_bg') and m in [self._watermark_bg, self._watermark_text]
         )]
 """
 
-    # First, add watermark initialization at the start of construct()
     pattern_start = r"(def\s+construct\s*\([^)]*\)\s*:\s*\n)"
-    modified_code = re.sub(
+    modified = re.sub(
         pattern_start,
-        lambda m: m.group(1) + watermark_init,
+        lambda match: match.group(1) + watermark_init,
         code,
         count=1,
         flags=re.MULTILINE,
     )
-
-    # If that didn't work, try fallback
-    if modified_code == code:
-        pattern_fallback = r"(def\s+construct\s*\([^)]*\)\s*:)"
-        modified_code = re.sub(
-            pattern_fallback,
+    if modified == code:
+        modified = re.sub(
+            r"(def\s+construct\s*\([^)]*\)\s*:)",
             r"\1\n" + watermark_init,
             code,
             count=1,
             flags=re.MULTILINE,
         )
-
-    # Modify cleanup code to exclude watermark from being faded out
-    snapshot_pattern = r"(snapshot\s*=\s*list\(self\.mobjects\))"
-    modified_code = re.sub(
-        snapshot_pattern,
+    modified = re.sub(
+        r"snapshot\s*=\s*list\(self\.mobjects\)",
         cleanup_modify.strip(),
-        modified_code,
+        modified,
         flags=re.MULTILINE,
     )
-
-    # Also re-add watermark after cleanup waits as a safeguard
-    cleanup_wait_pattern = r"(self\.wait\(0\.1\))"
-    modified_code = re.sub(
-        cleanup_wait_pattern,
+    modified = re.sub(
+        r"(self\.wait\(0\.1\))",
         r"\1\n" + watermark_readd,
-        modified_code,
+        modified,
         flags=re.MULTILINE,
     )
+    return modified
 
-    return modified_code
+
+def _base_result(
+    *,
+    ok: bool,
+    status: str,
+    error: str | None,
+    job_id: str,
+    job_dir: Path,
+    scene_py: Path,
+    video_url: str | None,
+    compile_log: str = "",
+    error_log: str = "",
+    logs: dict[str, str] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": ok,
+        "status": status,
+        "error": error,
+        "job_id": job_id,
+        "video_url": video_url,
+        "compile_log": _truncate(compile_log),
+        "error_log": _truncate(error_log),
+        "logs": logs or {"stdout_url": "", "stderr_url": "", "cmd_url": ""},
+        **_runner_metadata(job_dir, scene_py),
+    }
+    result.update(extra)
+    return result
 
 
 def run_job_from_code(
@@ -153,34 +211,8 @@ def run_job_from_code(
     timeout_seconds: int = 600,
     job_id: str | None = None,
     inject_watermark: bool = True,
-):
-    """
-    Execute a full render job from provided Manim code.
-    Always uses low quality (-ql).
-
-    Returns (uniform shape; NEVER raises):
-    {
-      "ok": bool,
-      "status": "ok" | "error",
-      "error": str | None,           # short error code on failure
-      "job_id": str,
-      "job_dir": str,                # filesystem path to the job directory
-      "video_url": str | None,
-      "compile_log": str,            # stdout text (possibly truncated)
-      "error_log": str,              # stderr text (possibly truncated)
-      "logs": {                      # URLs for deeper inspection
-        "stdout_url": str,
-        "stderr_url": str,
-        "cmd_url": str
-      },
-      # on failure, may also include:
-      # "listing_url": str,
-      # "returncode_url": str,
-      # "lint_url": str,
-      # "lint_timeout_url": str,
-      # "timeout_url": str,
-    }
-    """
+) -> dict[str, Any]:
+    """Compile, lint, and render one complete Manim script. Never raises."""
     job_id = job_id or str(uuid.uuid4())[:8]
     job_dir = STORAGE / "jobs" / job_id
     out_dir = job_dir / "out"
@@ -189,15 +221,35 @@ def run_job_from_code(
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Inject watermark into code ---
-    # Structured videos render multiple child scenes and apply one final
-    # continuous watermark after stitching, so child scene renders can disable it.
     if inject_watermark:
         code = _inject_watermark(code)
 
-    # --- Write scene.py ---
     scene_py = job_dir / "scene.py"
-    scene_py.write_text(code)
+    scene_py.write_text(code, encoding="utf-8")
+
+    # Distinguish Python syntax/compile failures from Manim runtime failures.
+    try:
+        compile(code, str(scene_py), "exec")
+        (logs_dir / "compile_ok.txt").write_text("ok\n", encoding="utf-8")
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        (logs_dir / "compile_error.txt").write_text(detail + "\n", encoding="utf-8")
+        return _base_result(
+            ok=False,
+            status="error",
+            error="compile_failed",
+            job_id=job_id,
+            job_dir=job_dir,
+            scene_py=scene_py,
+            video_url=None,
+            error_log=detail,
+            logs={
+                "stdout_url": "",
+                "stderr_url": to_static_url(logs_dir / "compile_error.txt"),
+                "cmd_url": "",
+            },
+            compile_error_url=to_static_url(logs_dir / "compile_error.txt"),
+        )
 
     runner_env = os.environ.copy()
     ffmpeg_path = runner_env.get("UPCURVED_FFMPEG_PATH", "").strip()
@@ -207,7 +259,6 @@ def run_job_from_code(
         runner_env["FFMPEG_BINARY"] = ffmpeg_path
         runner_env["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
 
-    # --- Lint (advisory only) ---
     lint_text = ""
     try:
         lint_proc = subprocess.run(
@@ -218,68 +269,64 @@ def run_job_from_code(
             env=runner_env,
         )
         lint_text = (lint_proc.stdout or "") + (lint_proc.stderr or "")
-        (logs_dir / "lint.txt").write_text(lint_text)
-
-        lint_strict = os.getenv("LINT_STRICT", "0") == "1"
-        if lint_proc.returncode != 0 and lint_strict:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "lint_failed",
-                "job_id": job_id,
-                "job_dir": str(job_dir),
-                "video_url": None,
-                "compile_log": _truncate(lint_text),
-                "error_log": "",
-                "logs": {
+        (logs_dir / "lint.txt").write_text(lint_text, encoding="utf-8")
+        if lint_proc.returncode != 0 and os.getenv("LINT_STRICT", "0") == "1":
+            return _base_result(
+                ok=False,
+                status="error",
+                error="lint_failed",
+                job_id=job_id,
+                job_dir=job_dir,
+                scene_py=scene_py,
+                video_url=None,
+                compile_log=lint_text,
+                logs={
                     "stdout_url": to_static_url(logs_dir / "lint.txt"),
                     "stderr_url": "",
                     "cmd_url": "",
                 },
-                "lint_url": to_static_url(logs_dir / "lint.txt"),
-            }
+                lint_url=to_static_url(logs_dir / "lint.txt"),
+            )
     except FileNotFoundError:
-        # pyflakes not installed -> skip linting
         pass
-    except subprocess.TimeoutExpired as e:
-        (logs_dir / "lint_timeout.txt").write_text(str(e))
+    except subprocess.TimeoutExpired as exc:
+        (logs_dir / "lint_timeout.txt").write_text(str(exc), encoding="utf-8")
         if os.getenv("LINT_STRICT", "0") == "1":
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "lint_timeout",
-                "job_id": job_id,
-                "job_dir": str(job_dir),
-                "video_url": None,
-                "compile_log": "",
-                "error_log": _truncate(str(e)),
-                "logs": {
+            return _base_result(
+                ok=False,
+                status="error",
+                error="lint_timeout",
+                job_id=job_id,
+                job_dir=job_dir,
+                scene_py=scene_py,
+                video_url=None,
+                error_log=str(exc),
+                logs={
                     "stdout_url": "",
                     "stderr_url": to_static_url(logs_dir / "lint_timeout.txt"),
                     "cmd_url": "",
                 },
-                "lint_timeout_url": to_static_url(logs_dir / "lint_timeout.txt"),
-            }
+                lint_timeout_url=to_static_url(logs_dir / "lint_timeout.txt"),
+            )
 
-    # --- Render with Manim (fixed low quality) ---
     stdout = ""
     stderr = ""
-    proc: subprocess.Popen | None = None
+    proc: subprocess.Popen[str] | None = None
+    cmd = [
+        sys.executable,
+        "-m",
+        "manim",
+        "-v",
+        "WARNING",
+        "-ql",
+        str(scene_py),
+        scene_name,
+        "-o",
+        "video.mp4",
+        "--media_dir",
+        str(out_dir),
+    ]
     try:
-        cmd = [
-            sys.executable,
-            "-m",
-            "manim",
-            "-v",
-            "WARNING",
-            "-ql",
-            str(scene_py),
-            scene_name,
-            "-o",
-            "video.mp4",
-            "--media_dir",
-            str(out_dir),
-        ]
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -289,67 +336,70 @@ def run_job_from_code(
             env=runner_env,
         )
         ACTIVE_PROCS[job_id] = proc
-
         try:
             stdout, stderr = proc.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired as exc:
             _kill_proc_tree(proc)
             try:
                 stdout, stderr = proc.communicate(timeout=2)
             except Exception:
                 pass
-            (logs_dir / "timeout.txt").write_text(str(e))
-            (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd))
-            (logs_dir / "manim_stdout.txt").write_text(stdout or "")
-            (logs_dir / "manim_stderr.txt").write_text(stderr or "")
-            (logs_dir / "returncode.txt").write_text("timeout")
-
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "render_timeout",
-                "job_id": job_id,
-                "job_dir": str(job_dir),
-                "video_url": None,
-                "compile_log": _truncate(stdout),
-                "error_log": _truncate(stderr or str(e)),
-                "logs": {
+            (logs_dir / "timeout.txt").write_text(str(exc), encoding="utf-8")
+            (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
+            (logs_dir / "manim_stdout.txt").write_text(stdout or "", encoding="utf-8")
+            (logs_dir / "manim_stderr.txt").write_text(stderr or "", encoding="utf-8")
+            (logs_dir / "returncode.txt").write_text("timeout", encoding="utf-8")
+            return _base_result(
+                ok=False,
+                status="error",
+                error="render_timeout",
+                job_id=job_id,
+                job_dir=job_dir,
+                scene_py=scene_py,
+                video_url=None,
+                compile_log=stdout,
+                error_log=stderr or str(exc),
+                logs={
                     "stdout_url": to_static_url(logs_dir / "manim_stdout.txt"),
                     "stderr_url": to_static_url(logs_dir / "manim_stderr.txt"),
                     "cmd_url": to_static_url(logs_dir / "manim_cmd.txt"),
                 },
-                "timeout_url": to_static_url(logs_dir / "timeout.txt"),
-            }
+                timeout_url=to_static_url(logs_dir / "timeout.txt"),
+                render_command=cmd,
+            )
 
-        (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd))
-        (logs_dir / "manim_stdout.txt").write_text(stdout or "")
-        (logs_dir / "manim_stderr.txt").write_text(stderr or "")
-        (logs_dir / "returncode.txt").write_text(str(proc.returncode))
+        (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
+        (logs_dir / "manim_stdout.txt").write_text(stdout or "", encoding="utf-8")
+        (logs_dir / "manim_stderr.txt").write_text(stderr or "", encoding="utf-8")
+        (logs_dir / "returncode.txt").write_text(str(proc.returncode), encoding="utf-8")
 
         mp4s = sorted(out_dir.rglob("*.mp4"))
         if proc.returncode != 0 or not mp4s:
             (logs_dir / "out_dir_listing.txt").write_text(
-                "\n".join(str(p) for p in out_dir.rglob("*"))
+                "\n".join(str(path) for path in out_dir.rglob("*")),
+                encoding="utf-8",
             )
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "render_failed",
-                "job_id": job_id,
-                "job_dir": str(job_dir),
-                "video_url": None,
-                "compile_log": _truncate(stdout),
-                "error_log": _truncate(stderr),
-                "logs": {
+            return _base_result(
+                ok=False,
+                status="error",
+                error="render_failed",
+                job_id=job_id,
+                job_dir=job_dir,
+                scene_py=scene_py,
+                video_url=None,
+                compile_log=stdout,
+                error_log=stderr,
+                logs={
                     "stdout_url": to_static_url(logs_dir / "manim_stdout.txt"),
                     "stderr_url": to_static_url(logs_dir / "manim_stderr.txt"),
                     "cmd_url": to_static_url(logs_dir / "manim_cmd.txt"),
                 },
-                "listing_url": to_static_url(logs_dir / "out_dir_listing.txt"),
-                "returncode_url": to_static_url(logs_dir / "returncode.txt"),
-            }
+                listing_url=to_static_url(logs_dir / "out_dir_listing.txt"),
+                returncode_url=to_static_url(logs_dir / "returncode.txt"),
+                render_command=cmd,
+            )
 
-        newest = max(mp4s, key=lambda p: p.stat().st_mtime)
+        newest = max(mp4s, key=lambda path: path.stat().st_mtime)
         final_video = job_dir / "video.mp4"
         shutil.copyfile(newest, final_video)
 
@@ -357,72 +407,83 @@ def run_job_from_code(
         if srt_file.exists():
             try:
                 srt_text = srt_file.read_text(encoding="utf-8", errors="ignore")
-
                 vtt_body = re.sub(
                     r"^(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})",
                     r"\1.\2 --> \3.\4",
                     srt_text,
                     flags=re.MULTILINE,
                 )
-                vtt_lines = []
-                for line in vtt_body.splitlines():
-                    if re.match(r"^\s*\d+\s*$", line):
-                        continue
-                    vtt_lines.append(line)
-                vtt_text = "WEBVTT\n\n" + "\n".join(vtt_lines).strip() + "\n"
+                vtt_lines = [
+                    line for line in vtt_body.splitlines() if not re.match(r"^\s*\d+\s*$", line)
+                ]
+                (job_dir / "video.vtt").write_text(
+                    "WEBVTT\n\n" + "\n".join(vtt_lines).strip() + "\n",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
 
-                final_vtt = job_dir / "video.vtt"
-                final_vtt.write_text(vtt_text, encoding="utf-8")
-            except Exception as e:
-                print(f"Warning: VTT conversion failed: {e}", file=sys.stderr)
-
-        return {
-            "ok": True,
-            "status": "ok",
-            "error": None,
-            "job_id": job_id,
-            "job_dir": str(job_dir),
-            "video_url": to_static_url(final_video),
-            "compile_log": _truncate(stdout),
-            "error_log": "",
-            "logs": {
+        return _base_result(
+            ok=True,
+            status="ok",
+            error=None,
+            job_id=job_id,
+            job_dir=job_dir,
+            scene_py=scene_py,
+            video_url=to_static_url(final_video),
+            compile_log=stdout,
+            logs={
                 "stdout_url": to_static_url(logs_dir / "manim_stdout.txt"),
                 "stderr_url": to_static_url(logs_dir / "manim_stderr.txt"),
                 "cmd_url": to_static_url(logs_dir / "manim_cmd.txt"),
             },
-        }
-
-    except FileNotFoundError:
-        return {
-            "ok": False,
-            "status": "error",
-            "error": "manim_not_found",
-            "job_id": job_id,
-            "job_dir": str(job_dir),
-            "video_url": None,
-            "compile_log": "",
-            "error_log": "manim runtime not found (FileNotFoundError)",
-            "logs": {"stdout_url": "", "stderr_url": "", "cmd_url": ""},
-        }
+            render_command=cmd,
+        )
+    except FileNotFoundError as exc:
+        return _base_result(
+            ok=False,
+            status="error",
+            error="manim_not_found",
+            job_id=job_id,
+            job_dir=job_dir,
+            scene_py=scene_py,
+            video_url=None,
+            error_log=f"{type(exc).__name__}: {exc}",
+            render_command=cmd,
+        )
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        (logs_dir / "runner_exception.txt").write_text(detail + "\n", encoding="utf-8")
+        return _base_result(
+            ok=False,
+            status="error",
+            error="runner_exception",
+            job_id=job_id,
+            job_dir=job_dir,
+            scene_py=scene_py,
+            video_url=None,
+            error_log=detail,
+            logs={
+                "stdout_url": "",
+                "stderr_url": to_static_url(logs_dir / "runner_exception.txt"),
+                "cmd_url": "",
+            },
+            render_command=cmd,
+        )
     finally:
-        proc_ref = ACTIVE_PROCS.get(job_id)
-        if proc_ref is not None and proc_ref.poll() is not None:
+        active = ACTIVE_PROCS.get(job_id)
+        if active is not None and active.poll() is not None:
             ACTIVE_PROCS.pop(job_id, None)
 
 
-def cancel_job(job_id: str):
-    """Attempt to terminate a running job by job_id. Never raises; returns a dict.
-
-    Structured videos render scene clips with child job ids such as
-    <job_id>_s01. If the exact id is not active, cancel the active child.
-    """
+def cancel_job(job_id: str) -> dict[str, str]:
+    """Cancel an exact render or any structured-video child render."""
     actual_job_id = job_id
     proc = ACTIVE_PROCS.get(job_id)
-
     if proc is None:
-        prefix = f"{job_id}_"
+        prefixes = (f"{job_id}_", f"{job_id}-")
         for active_id, active_proc in list(ACTIVE_PROCS.items()):
-            if active_id.startswith(prefix):
+            if active_id.startswith(prefixes):
                 actual_job_id = active_id
                 proc = active_proc
                 break
@@ -432,17 +493,18 @@ def cancel_job(job_id: str):
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     if proc is None:
-        (logs_dir / "cancel.txt").write_text("no active process")
+        (logs_dir / "cancel.txt").write_text("no active process", encoding="utf-8")
         return {"status": "not_found", "job_id": job_id}
-
     if proc.poll() is not None:
         ACTIVE_PROCS.pop(actual_job_id, None)
-        (logs_dir / "cancel.txt").write_text(f"already exited: {actual_job_id}")
+        (logs_dir / "cancel.txt").write_text(
+            f"already exited: {actual_job_id}", encoding="utf-8"
+        )
         return {"status": "already_finished", "job_id": job_id, "actual_job_id": actual_job_id}
 
     try:
         _kill_proc_tree(proc)
     finally:
         ACTIVE_PROCS.pop(actual_job_id, None)
-        (logs_dir / "cancel.txt").write_text(f"canceled: {actual_job_id}")
+        (logs_dir / "cancel.txt").write_text(f"canceled: {actual_job_id}", encoding="utf-8")
     return {"status": "canceled", "job_id": job_id, "actual_job_id": actual_job_id}

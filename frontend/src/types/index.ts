@@ -2,6 +2,33 @@
 
 export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'quiz';
 
+export type GenerationQualityStatus =
+  | 'standard'
+  | 'full_quality'
+  | 'recovered'
+  | 'simplified'
+  | 'completed_with_fallback'
+  | 'failed';
+
+export interface GenerationDiagnostics {
+  quality_status: GenerationQualityStatus;
+  provider?: string;
+  model?: string;
+  llm_calls?: number;
+  total_scenes?: number;
+  creative_scenes?: number;
+  rendered_initially?: number;
+  sanitizer_repaired?: number;
+  render_repaired?: number;
+  simplified_scenes?: number;
+  component_fallbacks?: number;
+  local_sanitizer_corrections?: number;
+  plan_repaired?: boolean;
+  recovery_stages?: string[];
+  failure_stage?: string | null;
+  summary?: string;
+}
+
 export interface MediaAttachment {
   type: 'video' | 'audio' | 'widget';
   artifactKind?: ArtifactKind;
@@ -14,6 +41,7 @@ export interface MediaAttachment {
   scriptGcsPath?: string;
   widgetCode?: string;
   downloadFilename?: string;
+  generationDiagnostics?: GenerationDiagnostics;
 }
 
 export interface QuizData {

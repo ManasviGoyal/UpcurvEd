@@ -49,7 +49,16 @@ import {
   Zap,
   ExternalLink,
 } from "lucide-react";
-import type { User, Chat, ColorTheme, Theme, ApiKeys, MediaAttachment } from "@/types";
+import type {
+  User,
+  Chat,
+  ColorTheme,
+  Theme,
+  ApiKeys,
+  MediaAttachment,
+  GenerationDiagnostics,
+  GenerationQualityStatus,
+} from "@/types";
 import {
   apiListChats,
   apiCreateChat,
@@ -122,6 +131,205 @@ const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, heigh
       title={title || "Interactive Widget"}
       loading="eager"
     />
+  );
+};
+
+const diagnosticCount = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0
+    ? Math.floor(count)
+    : undefined;
+};
+
+const diagnosticText = (value: unknown): string | undefined => {
+  const text = String(value ?? "").trim();
+  return text || undefined;
+};
+
+const normalizeGenerationDiagnostics = (
+  value: unknown,
+): GenerationDiagnostics | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const status = diagnosticText(raw.quality_status) as
+    | GenerationQualityStatus
+    | undefined;
+  if (!status) return undefined;
+
+  const recoveryStages = Array.isArray(raw.recovery_stages)
+    ? raw.recovery_stages
+        .map((stage) => diagnosticText(stage))
+        .filter((stage): stage is string => Boolean(stage))
+    : [];
+
+  return {
+    quality_status: status,
+    provider: diagnosticText(raw.provider),
+    model: diagnosticText(raw.model),
+    llm_calls: diagnosticCount(raw.llm_calls),
+    total_scenes: diagnosticCount(raw.total_scenes),
+    creative_scenes: diagnosticCount(raw.creative_scenes),
+    rendered_initially: diagnosticCount(raw.rendered_initially),
+    sanitizer_repaired: diagnosticCount(raw.sanitizer_repaired),
+    render_repaired: diagnosticCount(raw.render_repaired),
+    simplified_scenes: diagnosticCount(raw.simplified_scenes),
+    component_fallbacks: diagnosticCount(raw.component_fallbacks),
+    local_sanitizer_corrections: diagnosticCount(
+      raw.local_sanitizer_corrections,
+    ),
+    plan_repaired: Boolean(raw.plan_repaired),
+    recovery_stages: recoveryStages,
+    failure_stage: diagnosticText(raw.failure_stage) || null,
+    summary: diagnosticText(raw.summary),
+  };
+};
+
+const humanizeDiagnosticToken = (value: string): string =>
+  value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const compactModelLabel = (diagnostics: GenerationDiagnostics): string => {
+  const provider = diagnostics.provider
+    ? humanizeDiagnosticToken(diagnostics.provider)
+    : "";
+  const model = diagnostics.model || "";
+  return [provider, model].filter(Boolean).join(" · ");
+};
+
+const diagnosticStatusPresentation = (
+  status: GenerationQualityStatus,
+): { label: string; container: string; dot: string } => {
+  switch (status) {
+    case "full_quality":
+      return {
+        label: "Rendered from initial scripts",
+        container: "border-emerald-500/30 bg-emerald-500/5",
+        dot: "bg-emerald-500",
+      };
+    case "recovered":
+      return {
+        label: "Recovered successfully",
+        container: "border-sky-500/30 bg-sky-500/5",
+        dot: "bg-sky-500",
+      };
+    case "simplified":
+      return {
+        label: "Simplified for reliability",
+        container: "border-amber-500/30 bg-amber-500/5",
+        dot: "bg-amber-500",
+      };
+    case "completed_with_fallback":
+      return {
+        label: "Completed with fallback",
+        container: "border-amber-500/30 bg-amber-500/5",
+        dot: "bg-amber-500",
+      };
+    case "failed":
+      return {
+        label: "Generation failed",
+        container: "border-destructive/30 bg-destructive/5",
+        dot: "bg-destructive",
+      };
+    case "standard":
+    default:
+      return {
+        label: "Standard structured render",
+        container: "border-border bg-background/40",
+        dot: "bg-muted-foreground",
+      };
+  }
+};
+
+const GenerationDiagnosticsPanel: FC<{
+  diagnostics?: GenerationDiagnostics;
+}> = ({ diagnostics }) => {
+  if (!diagnostics) return null;
+
+  const presentation = diagnosticStatusPresentation(
+    diagnostics.quality_status,
+  );
+  const overview: string[] = [];
+  const recovery: string[] = [];
+  const modelLabel = compactModelLabel(diagnostics);
+
+  if (modelLabel) overview.push(modelLabel);
+  if (typeof diagnostics.llm_calls === "number") {
+    overview.push(
+      `${diagnostics.llm_calls} model ${diagnostics.llm_calls === 1 ? "call" : "calls"}`,
+    );
+  }
+  if (typeof diagnostics.total_scenes === "number") {
+    overview.push(
+      `${diagnostics.total_scenes} ${diagnostics.total_scenes === 1 ? "scene" : "scenes"}`,
+    );
+  }
+  if (diagnostics.creative_scenes) {
+    overview.push(`${diagnostics.creative_scenes} creative`);
+  }
+
+  if (diagnostics.plan_repaired) recovery.push("Plan repaired");
+  if (diagnostics.local_sanitizer_corrections) {
+    recovery.push(
+      `${diagnostics.local_sanitizer_corrections} local ${
+        diagnostics.local_sanitizer_corrections === 1 ? "fix" : "fixes"
+      }`,
+    );
+  }
+  if (diagnostics.sanitizer_repaired) {
+    recovery.push(
+      `${diagnostics.sanitizer_repaired} sanitizer ${
+        diagnostics.sanitizer_repaired === 1 ? "repair" : "repairs"
+      }`,
+    );
+  }
+  if (diagnostics.render_repaired) {
+    recovery.push(
+      `${diagnostics.render_repaired} render ${
+        diagnostics.render_repaired === 1 ? "repair" : "repairs"
+      }`,
+    );
+  }
+  if (diagnostics.simplified_scenes) {
+    recovery.push(`${diagnostics.simplified_scenes} simplified`);
+  }
+  if (diagnostics.component_fallbacks) {
+    recovery.push(
+      `${diagnostics.component_fallbacks} component ${
+        diagnostics.component_fallbacks === 1 ? "fallback" : "fallbacks"
+      }`,
+    );
+  }
+
+  return (
+    <div
+      className={`mt-3 rounded-md border px-3 py-2 text-xs ${presentation.container}`}
+      aria-label="Video generation diagnostics"
+    >
+      <div className="flex items-center gap-2 font-medium">
+        <span
+          className={`h-2 w-2 rounded-full ${presentation.dot}`}
+          aria-hidden="true"
+        />
+        <span>{presentation.label}</span>
+      </div>
+      {diagnostics.summary && (
+        <p className="mt-1 leading-relaxed text-muted-foreground">
+          {diagnostics.summary}
+        </p>
+      )}
+      {overview.length > 0 && (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {overview.join(" · ")}
+        </p>
+      )}
+      {recovery.length > 0 && (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Recovery: {recovery.join(" · ")}
+        </p>
+      )}
+    </div>
   );
 };
 
@@ -947,6 +1155,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
                   artifactKind: (m.media.artifactKind as ArtifactKind | undefined),
                   downloadFilename: m.media.downloadFilename as string | undefined,
+                  generationDiagnostics: normalizeGenerationDiagnostics(
+                    m.media.generationDiagnostics,
+                  ),
                 } : undefined;
                 // Preserve quiz data
                 const extras: any = {};
@@ -2072,6 +2283,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             widgetCode: media.widgetCode,        // BUG FIX: persist widget HTML
             artifactKind: (media as any).artifactKind,
             downloadFilename: media.downloadFilename,
+            generationDiagnostics: media.generationDiagnostics,
           };
         }
         // Persist quiz data if present in extras
@@ -3199,6 +3411,28 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       lines.push("", `Technical details: ${technicalDetails}`);
     }
 
+    const generationDiagnostics = normalizeGenerationDiagnostics(
+      errorBody?.generation_diagnostics,
+    );
+    if (generationDiagnostics?.recovery_stages?.length) {
+      lines.push(
+        "",
+        `Recovery attempted: ${generationDiagnostics.recovery_stages
+          .map(humanizeDiagnosticToken)
+          .join(" → ")}`,
+      );
+    }
+    if (generationDiagnostics?.failure_stage) {
+      lines.push(
+        `Final stage: ${humanizeDiagnosticToken(
+          generationDiagnostics.failure_stage,
+        )}`,
+      );
+    }
+    if (typeof generationDiagnostics?.llm_calls === "number") {
+      lines.push(`Model calls used: ${generationDiagnostics.llm_calls}`);
+    }
+
     return lines.join("\n").trimEnd();
   }
 
@@ -3341,6 +3575,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           sceneCode: data.scene_code,  // Store scene code for video editing
+          generationDiagnostics: normalizeGenerationDiagnostics(
+            data.generation_diagnostics,
+          ),
         };
 
         // Use the same chat ID we started with to ensure message goes to correct chat
@@ -3961,6 +4198,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           sceneCode: data.scene_code,
+          generationDiagnostics: normalizeGenerationDiagnostics(
+            data.generation_diagnostics,
+          ),
         };
 
         await processAndAddMessage("✅ Video edited successfully.", false, mediaAttachment, chatIdForGeneration);
@@ -4207,6 +4447,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
             widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
             downloadFilename: m.media.downloadFilename as string | undefined,
+            generationDiagnostics: normalizeGenerationDiagnostics(
+              m.media.generationDiagnostics,
+            ),
           } : undefined;
           // Ensure all messages have createdAt for proper ordering
           const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -4433,6 +4676,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
           artifactKind: (m.media.artifactKind as ArtifactKind | undefined),
           downloadFilename: m.media.downloadFilename as string | undefined,
+          generationDiagnostics: normalizeGenerationDiagnostics(
+            m.media.generationDiagnostics,
+          ),
         } : undefined;
         // Ensure all messages have createdAt for proper ordering
         const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
@@ -5088,6 +5334,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 }}
                               />
                             </div>
+                          )}
+                          {msg.media?.type === 'video' && (
+                            <GenerationDiagnosticsPanel
+                              diagnostics={msg.media.generationDiagnostics}
+                            />
                           )}
                           {/* Copy button - appears on hover */}
                           {msg.media && msg.media.type === 'widget' && msg.media.widgetCode && (

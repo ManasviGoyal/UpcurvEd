@@ -1,283 +1,564 @@
-# backend/agent/code_sanitize.py
+"""Manim code sanitization and preflight utilities.
+
+New model-authored creative scenes use complete Python scripts and pass through
+``sanitize_manim_script``. Existing deterministic and legacy code paths may continue using
+``sanitize_minimally`` for backward compatibility.
+"""
+
+from __future__ import annotations
+
+import ast
 import os
 import re
+from dataclasses import asdict, dataclass, field
 from textwrap import dedent
+from typing import Any
 
-RE_FENCE = re.compile(r"^\s*```[a-zA-Z0-9]*\s*|\s*```\s*$", re.MULTILINE)
-RE_FROM_MANIM_STAR = re.compile(r"^\s*from\s+manim\s+import\s+\*\s*(?:#.*)?$", re.MULTILINE)
+RE_FENCE = re.compile(r"^\s*```[a-zA-Z0-9_-]*\s*|\s*```\s*$", re.MULTILINE)
+RE_FROM_MANIM_STAR = re.compile(
+    r"^\s*from\s+manim\s+import\s+\*\s*(?:#.*)?$",
+    re.MULTILINE,
+)
 
-VOICEOVER_HEADER = dedent("""\
-from manim_voiceover import VoiceoverScene
-from manim_voiceover.services.gtts import GTTSService
-""")
+VOICEOVER_HEADER = dedent(
+    """\
+    from manim_voiceover import VoiceoverScene
+    from manim_voiceover.services.gtts import GTTSService
+    """
+)
+
+_CANONICAL_IMPORTS = (
+    "from manim import *  # noqa: F403,F405",
+    "from manim_voiceover import VoiceoverScene",
+    "from manim_voiceover.services.gtts import GTTSService",
+)
+_NUMPY_IMPORT = "import numpy as np"
+
+_3D_MARKERS = re.compile(
+    r"\b(?:"
+    r"ThreeDScene|ThreeDAxes|Surface|Polyhedron|Cube|Sphere|Prism|Cone|Cylinder|"
+    r"Dot3D|Line3D|Arrow3D|set_camera_orientation|move_camera|"
+    r"begin_ambient_camera_rotation|stop_ambient_camera_rotation"
+    r")\b"
+)
+
+_DANGEROUS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("exec", re.compile(r"\bexec\s*\(")),
+    ("eval", re.compile(r"\beval\s*\(")),
+    ("compile", re.compile(r"\bcompile\s*\(")),
+    ("__import__", re.compile(r"\b__import__\s*\(")),
+    ("open", re.compile(r"\bopen\s*\(")),
+    ("filesystem", re.compile(r"\b(?:pathlib|shutil)\b|\bos\.")),
+    ("subprocess", re.compile(r"\bsubprocess\b")),
+    ("network", re.compile(r"\b(?:requests|urllib|httpx|socket|fetch)\b")),
+    ("environment", re.compile(r"\b(?:getenv|environ)\b")),
+)
+
+_ALLOWED_IMPORT_EXACT = {
+    "from manim import *",
+    "from manim import *  # noqa: F403,F405",
+    "from manim_voiceover import VoiceoverScene",
+    "from manim_voiceover.services.gtts import GTTSService",
+    "import numpy as np",
+}
+
+
+@dataclass(slots=True)
+class SanitizeResult:
+    source: str
+    changes: list[str] = field(default_factory=list)
+    removed_imports: list[str] = field(default_factory=list)
+    unresolved_references: list[str] = field(default_factory=list)
+    blocked_operations: list[str] = field(default_factory=list)
+    validation_errors: list[str] = field(default_factory=list)
+    compile_error: str | None = None
+    requires_repair: bool = False
+    uses_3d: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def strip_code_fences(src: str) -> str:
     if not isinstance(src, str):
         return ""
-    return RE_FENCE.sub("", src).strip()
-
-
-def ensure_voiceover_header(src: str) -> str:
-    s = src.replace("from manim_voiceover import VoiceoverScene", "")
-    s = s.replace("from manim_voiceover.services.gtts import GTTSService", "")
-    s = s.lstrip()
-    return VOICEOVER_HEADER + "\n" + s
-
-
-def ensure_generated_scene(src: str) -> str:
-    # If there's a class, rename the FIRST one to GeneratedScene(VoiceoverScene)
-    RE_CLASS = re.compile(r"^\s*class\s+[A-Za-z_]\w*\s*\([^)]+\)\s*:\s*$", re.MULTILINE)
-
-    def _swap_first(m: re.Match) -> str:
-        return "class GeneratedScene(VoiceoverScene):"
-
-    if RE_CLASS.search(src):
-        return RE_CLASS.sub(_swap_first, src, count=1)
-    # Otherwise append a minimal skeleton
-    return (
-        src.rstrip()
-        + "\n\nclass GeneratedScene(VoiceoverScene):\n    def construct(self):\n        pass\n"
-    )
-
-
-def allow_manim_star_import_with_noqa(src: str) -> str:
-    """
-    Ensure there is exactly one 'from manim import *  # noqa: F403,F405'
-    Replace any existing star import(s) with the noqa version.
-    If no star import exists at all, insert it after the voiceover header.
-    """
-    s = src
-    if RE_FROM_MANIM_STAR.search(s):
-        s = RE_FROM_MANIM_STAR.sub("from manim import *  # noqa: F403,F405", s)
-        return s
-    if s.startswith(VOICEOVER_HEADER):
-        return (
-            VOICEOVER_HEADER
-            + "from manim import *  # noqa: F403,F405\n"
-            + s[len(VOICEOVER_HEADER) :]
-        )
-    return "from manim import *  # noqa: F403,F405\n" + s
+    return RE_FENCE.sub("", src).replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def patch_unsafe_latex(src: str) -> str:
-    """Replace unsupported LaTeX macros with safe alternatives."""
     replacements = {
         r"\\enclose{longdiv}": r"\\overline",
         r"\\cancel": r"\\times",
     }
-    s = src
+    out = src
     for bad, safe in replacements.items():
-        s = re.sub(bad, safe, s)
-    return s
+        out = re.sub(bad, safe, out)
+    return out
 
 
 def _disable_latex_mobjects(src: str) -> str:
-    """
-    Optional desktop-safe mode:
-    convert LaTeX mobjects to Text to avoid requiring a TeX distribution.
-    Enabled when UPCURVED_DISABLE_LATEX=1.
-    """
     if os.getenv("UPCURVED_DISABLE_LATEX", "0") != "1":
         return src
-
-    s = src
-    s = re.sub(r"\bMathTex\s*\(", "Text(", s)
-    s = re.sub(r"(?<!Math)\bTex\s*\(", "Text(", s)
-
-    # Remove Tex-specific chain methods that are invalid on Text.
-    s = re.sub(r"\.set_color_by_tex_to_color_map\([^)]*\)", "", s)
-    s = re.sub(r"\.set_color_by_tex\([^)]*\)", "", s)
-    s = re.sub(r"\.get_parts_by_tex\([^)]*\)", "", s)
-    s = re.sub(r"\.get_part_by_tex\([^)]*\)", "", s)
-    return s
+    out = re.sub(r"\bMathTex\s*\(", "Text(", src)
+    out = re.sub(r"(?<!Math)\bTex\s*\(", "Text(", out)
+    out = re.sub(r"\.set_color_by_tex_to_color_map\([^)]*\)", "", out)
+    out = re.sub(r"\.set_color_by_tex\([^)]*\)", "", out)
+    out = re.sub(r"\.get_parts_by_tex\([^)]*\)", "", out)
+    out = re.sub(r"\.get_part_by_tex\([^)]*\)", "", out)
+    return out
 
 
-# --- NEW: guard against negative/zero waits that crash Manim ---
 def _guard_negative_waits(src: str) -> str:
-    s = src
-    s = re.sub(
+    out = re.sub(
         r"self\.wait\(\s*tracker\.duration\s*-\s*([^)]+)\)",
         r"self.wait(max(0.1, tracker.duration - \1))",
-        s,
+        src,
     )
-    s = re.sub(
+    out = re.sub(
         r"self\.wait\(\s*max\(\s*0(?:\.0)?\s*,\s*([^)]+)\)\s*\)",
         r"self.wait(max(0.1, \1))",
-        s,
+        out,
     )
 
-    def _clamp_numeric_wait(m: re.Match) -> str:
-        raw = m.group(1)
+    def clamp_numeric(match: re.Match[str]) -> str:
+        raw = match.group(1)
         try:
-            val = float(raw)
+            value = float(raw)
         except ValueError:
-            return m.group(0)
-        return f"self.wait({max(0.1, val):.3f})" if val <= 0 else m.group(0)
+            return match.group(0)
+        if value <= 0:
+            return f"self.wait({max(0.1, value):.3f})"
+        return match.group(0)
 
-    s = re.sub(r"self\.wait\(\s*(-?\d+(?:\.\d+)?)\s*\)", _clamp_numeric_wait, s)
-    return s
-
-
-# ----------------------------------------------------------------
+    return re.sub(r"self\.wait\(\s*(-?\d+(?:\.\d+)?)\s*\)", clamp_numeric, out)
 
 
-# --- NEW: strip unsupported kwargs inside Code(...) calls (stability for 0.19) ---
-def _strip_unsupported_code_kwargs(src: str) -> str:
-    allowed = {"code_string", "code_file", "language", "add_line_numbers"}
-    bad_kwargs = {
-        "font_size",
-        "font",
-        "font_family",
-        "theme",
-        "line_spacing",
-        "syntax_highlighter",
-        "file_name",
-        "code",
-        "insert_line_no",
-        "background_config",
-        "formatter",
-        "formatter_style",
-    }
-
-    s = src
-    out = []
-    i = 0
-    n = len(s)
-
-    def strip_kwargs_in_args(args_text: str) -> str:
-        for kw in bad_kwargs:
-            args_text = re.sub(
-                rf"(?<![A-Za-z0-9_]){kw}\s*=\s*[^,\)\n]+,?\s*",
-                "",
-                args_text,
-                flags=re.DOTALL,
-            )
-        args_text = re.sub(
-            rf"(?<![A-Za-z0-9_])(?!{'|'.join(map(re.escape, allowed))}\b)"
-            r"[A-Za-z_]\w*\s*=\s*[^,\)\n]+,?\s*",
-            "",
-            args_text,
-            flags=re.DOTALL,
-        )
-        return args_text
-
-    while i < n:
-        j = s.find("Code(", i)
-        if j == -1:
-            out.append(s[i:])
-            break
-
-        out.append(s[i:j])
-        k = j + len("Code(")
-
+def _balanced_call_spans(src: str, call_name: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(call_name)}\s*\(")
+    for match in pattern.finditer(src):
+        start = match.start()
+        index = match.end()
         depth = 1
-        in_str = False
-        str_delim = ""
-        while k < n and depth > 0:
-            ch = s[k]
-            if not in_str and ch in ("'", '"'):
-                if k + 2 < n and s[k : k + 3] in ("'''", '"""'):
-                    in_str = True
-                    str_delim = s[k : k + 3]
-                    k += 3
-                    continue
-                else:
-                    in_str = True
-                    str_delim = ch
-                    k += 1
-                    continue
-            elif in_str:
-                if str_delim in ("'", '"'):
-                    if ch == "\\":
-                        k += 2
-                        continue
-                    if ch == str_delim:
-                        in_str = False
-                        str_delim = ""
-                        k += 1
-                        continue
-                    k += 1
-                    continue
-                else:
-                    if s.startswith(str_delim, k):
-                        in_str = False
-                        str_delim = ""
-                        k += 3
-                        continue
-                    k += 1
-                    continue
-
-            if ch == "(":
+        quote = ""
+        triple = False
+        escaped = False
+        while index < len(src) and depth > 0:
+            char = src[index]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif triple and src.startswith(quote * 3, index):
+                    index += 2
+                    quote = ""
+                    triple = False
+                elif not triple and char == quote:
+                    quote = ""
+                index += 1
+                continue
+            if src.startswith("'''", index) or src.startswith('"""', index):
+                quote = src[index]
+                triple = True
+                index += 3
+                continue
+            if char in {"'", '"'}:
+                quote = char
+                triple = False
+                index += 1
+                continue
+            if char == "(":
                 depth += 1
-            elif ch == ")":
+            elif char == ")":
                 depth -= 1
-                if depth == 0:
-                    k += 1
-                    break
-            k += 1
-
+            index += 1
         if depth == 0:
-            call_text = s[j:k]
-            head = "Code("
-            inner = call_text[len(head) : -1]
-            tail = ")"
-            cleaned_inner = strip_kwargs_in_args(inner)
-            out.append(head + cleaned_inner + tail)
-            i = k
-        else:
-            out.append(s[j:])
-            break
-
-    return "".join(out)
+            spans.append((start, index))
+    return spans
 
 
-# --- NEW: fix BarChart kwargs for our Manim version ---
-def _sanitize_barchart_kwargs(src: str) -> str:
-    """
-    Fix common BarChart keyword mistakes for the Manim version we run:
-    - `width` kwarg is not supported: rename it to `bar_width`
-    - `max_value` kwarg is not supported: drop it
-    """
-    if not isinstance(src, str) or not src:
-        return src
+def _split_top_level_args(inner: str) -> list[str]:
+    args: list[str] = []
+    start = 0
+    depth = 0
+    quote = ""
+    triple = False
+    escaped = False
+    index = 0
+    while index < len(inner):
+        char = inner[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif triple and inner.startswith(quote * 3, index):
+                index += 2
+                quote = ""
+                triple = False
+            elif not triple and char == quote:
+                quote = ""
+            index += 1
+            continue
+        if inner.startswith("'''", index) or inner.startswith('"""', index):
+            quote = inner[index]
+            triple = True
+            index += 3
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            args.append(inner[start:index].strip())
+            start = index + 1
+        index += 1
+    tail = inner[start:].strip()
+    if tail:
+        args.append(tail)
+    return args
 
-    s = src
 
-    # Rename `width=` to `bar_width=` inside BarChart(...)
-    s = re.sub(
-        r"BarChart\(([^)]*?)\bwidth\s*=",
-        r"BarChart(\1bar_width=",
-        s,
-        flags=re.DOTALL,
+def _rewrite_call_kwargs(
+    src: str,
+    call_name: str,
+    *,
+    allowed: set[str] | None = None,
+    rename: dict[str, str] | None = None,
+    remove: set[str] | None = None,
+) -> tuple[str, list[str]]:
+    rename = rename or {}
+    remove = remove or set()
+    changes: list[str] = []
+    spans = _balanced_call_spans(src, call_name)
+    if not spans:
+        return src, changes
+    out = src
+    for start, end in reversed(spans):
+        call = out[start:end]
+        open_index = call.find("(")
+        inner = call[open_index + 1 : -1]
+        rebuilt: list[str] = []
+        for arg in _split_top_level_args(inner):
+            match = re.match(r"^([A-Za-z_]\w*)\s*=", arg, flags=re.DOTALL)
+            if not match:
+                rebuilt.append(arg)
+                continue
+            key = match.group(1)
+            value = arg[match.end() :].strip()
+            if key in remove or (allowed is not None and key not in allowed):
+                changes.append(f"Removed unsupported {call_name} keyword: {key}")
+                continue
+            new_key = rename.get(key, key)
+            if new_key != key:
+                changes.append(f"Renamed {call_name} keyword {key} to {new_key}")
+            rebuilt.append(f"{new_key}={value}")
+        replacement = f"{call_name}({', '.join(rebuilt)})"
+        out = out[:start] + replacement + out[end:]
+    return out, changes
+
+
+def _patch_known_manim_compatibility(src: str) -> tuple[str, list[str]]:
+    changes: list[str] = []
+    out, code_changes = _rewrite_call_kwargs(
+        src,
+        "Code",
+        allowed={"code_string", "code_file", "language", "add_line_numbers"},
     )
-    # Remove `max_value=` kwarg (and following comma if present)
-    s = re.sub(
-        r"BarChart\(([^)]*?),\s*max_value\s*=\s*[^,\)\n]+",
-        r"BarChart(\1",
-        s,
-        flags=re.DOTALL,
+    changes.extend(code_changes)
+    out, chart_changes = _rewrite_call_kwargs(
+        out,
+        "BarChart",
+        rename={"width": "bar_width"},
+        remove={"max_value"},
     )
-    return s
+    changes.extend(chart_changes)
+    guarded = _guard_negative_waits(out)
+    if guarded != out:
+        changes.append("Clamped potentially non-positive self.wait durations")
+    out = guarded
+    latex = patch_unsafe_latex(out)
+    if latex != out:
+        changes.append("Replaced unsupported LaTeX macros")
+    out = _disable_latex_mobjects(latex)
+    return out, changes
 
 
-# -------------------------------------------------------------------------------
+def _imported_names_from_line(line: str) -> tuple[str, list[str]]:
+    stripped = line.strip()
+    try:
+        node = ast.parse(stripped).body[0]
+    except Exception:
+        return stripped, []
+    names: list[str] = []
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            names.append(alias.asname or alias.name.split(".")[0])
+    elif isinstance(node, ast.ImportFrom):
+        for alias in node.names:
+            if alias.name != "*":
+                names.append(alias.asname or alias.name)
+    return stripped, names
 
-# --- NEW: auto-upgrade to 3D mixin when 3D usage detected ---
-_3D_MARKERS = re.compile(r"\b(ThreeDAxes|Surface|Polyhedron|move_camera|set_camera_orientation)\b")
+
+def _normalize_imports(src: str) -> tuple[str, list[str], list[str], list[str]]:
+    """Remove model imports and rebuild the exact allowed import header.
+
+    A few unambiguous aliases are normalized locally: ``import manim as mn`` becomes the
+    canonical star import with ``mn.`` prefixes removed, and nonstandard NumPy aliases become
+    ``np.``. Other libraries are removed and any remaining references are reported.
+    """
+    kept_lines: list[str] = []
+    removed_imports: list[str] = []
+    removed_names: list[str] = []
+    changes: list[str] = []
+    numpy_requested = False
+    manim_aliases: list[str] = []
+    numpy_aliases: list[str] = []
+
+    for line in src.splitlines():
+        stripped = line.strip()
+        if not re.match(r"^(?:from\s+\S+\s+import\s+|import\s+)", stripped):
+            kept_lines.append(line)
+            continue
+
+        normalized = re.sub(r"\s+#.*$", "", stripped).strip()
+        if normalized in _ALLOWED_IMPORT_EXACT:
+            if normalized.startswith("import numpy"):
+                numpy_requested = True
+            continue
+
+        manim_alias = re.fullmatch(r"import\s+manim(?:\s+as\s+([A-Za-z_]\w*))?", normalized)
+        if manim_alias:
+            alias = manim_alias.group(1) or "manim"
+            manim_aliases.append(alias)
+            changes.append(f"Normalized {normalized} to the canonical Manim star import")
+            continue
+        if re.fullmatch(r"from\s+manim\s+import\s+.+", normalized):
+            changes.append(f"Normalized {normalized} to the canonical Manim star import")
+            continue
+
+        numpy_alias = re.fullmatch(r"import\s+numpy(?:\s+as\s+([A-Za-z_]\w*))?", normalized)
+        if numpy_alias:
+            alias = numpy_alias.group(1) or "numpy"
+            numpy_aliases.append(alias)
+            numpy_requested = True
+            changes.append(f"Normalized {normalized} to import numpy as np")
+            continue
+
+        original, names = _imported_names_from_line(stripped)
+        removed_imports.append(original)
+        removed_names.extend(names)
+        changes.append(f"Removed unsupported import: {original}")
+
+    body = "\n".join(kept_lines).strip()
+    for alias in sorted(set(manim_aliases), key=len, reverse=True):
+        replaced = re.sub(rf"\b{re.escape(alias)}\.", "", body)
+        if replaced != body:
+            changes.append(f"Removed {alias}. prefixes after normalizing the Manim import")
+        body = replaced
+    for alias in sorted(set(numpy_aliases), key=len, reverse=True):
+        replaced = re.sub(rf"\b{re.escape(alias)}\.", "np.", body)
+        if replaced != body:
+            changes.append(f"Normalized {alias}. references to np.")
+        body = replaced
+    if re.search(r"\bnumpy\.", body):
+        body = re.sub(r"\bnumpy\.", "np.", body)
+        numpy_requested = True
+        changes.append("Normalized numpy. references to np.")
+    if re.search(r"\bnp\.", body):
+        numpy_requested = True
+
+    header = list(_CANONICAL_IMPORTS)
+    if numpy_requested:
+        header.append(_NUMPY_IMPORT)
+    source = "\n".join(header) + "\n\n" + body
+    return source.strip() + "\n", changes, removed_imports, removed_names
+
+
+def _find_unresolved_removed_names(src: str, names: list[str]) -> list[str]:
+    unresolved: list[str] = []
+    for name in sorted(set(names)):
+        if not name or name in {"VoiceoverScene", "GTTSService", "np"}:
+            continue
+        patterns = (
+            rf"\b{re.escape(name)}\s*\.",
+            rf"\b{re.escape(name)}\s*\(",
+            rf"\b{re.escape(name)}\b",
+        )
+        if any(re.search(pattern, src) for pattern in patterns):
+            unresolved.append(name)
+    return unresolved
+
+
+def _class_header_span(src: str) -> tuple[re.Match[str] | None, list[re.Match[str]]]:
+    pattern = re.compile(
+        r"^(?P<indent>[ \t]*)class\s+(?P<name>[A-Za-z_]\w*)\s*(?:\((?P<bases>[^)]*)\))?\s*:\s*$",
+        flags=re.MULTILINE,
+    )
+    matches = list(pattern.finditer(src))
+    return (matches[0] if matches else None), matches
+
+
+def _normalize_single_scene_class(src: str, uses_3d: bool) -> tuple[str, list[str], list[str]]:
+    changes: list[str] = []
+    errors: list[str] = []
+    first, matches = _class_header_span(src)
+    if not matches:
+        errors.append("No scene class was defined. Return exactly one GeneratedScene class.")
+        return src, changes, errors
+    if len(matches) > 1:
+        errors.append("More than one class was defined. Return exactly one GeneratedScene class.")
+        return src, changes, errors
+
+    assert first is not None
+    desired_bases = "VoiceoverScene, ThreeDScene" if uses_3d else "VoiceoverScene"
+    desired = f"{first.group('indent')}class GeneratedScene({desired_bases}):"
+    current = first.group(0)
+    if current != desired:
+        src = src[: first.start()] + desired + src[first.end() :]
+        changes.append(
+            "Normalized scene class to "
+            + ("GeneratedScene(VoiceoverScene, ThreeDScene)" if uses_3d else "GeneratedScene(VoiceoverScene)")
+        )
+    return src, changes, errors
+
+
+def _validate_scene_ast(src: str, uses_3d: bool) -> tuple[list[str], str | None]:
+    errors: list[str] = []
+    try:
+        tree = ast.parse(src)
+        compile(src, "<generated-manim-scene>", "exec")
+    except SyntaxError as exc:
+        detail = f"SyntaxError: {exc.msg} at line {exc.lineno}, column {exc.offset}"
+        return errors, detail
+    except Exception as exc:
+        return errors, f"{type(exc).__name__}: {exc}"
+
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    if len(classes) != 1:
+        errors.append("Script must define exactly one class.")
+        return errors, None
+    scene_class = classes[0]
+    if scene_class.name != "GeneratedScene":
+        errors.append("Scene class must be named GeneratedScene.")
+
+    base_names: set[str] = set()
+    for base in scene_class.bases:
+        if isinstance(base, ast.Name):
+            base_names.add(base.id)
+        elif isinstance(base, ast.Attribute):
+            base_names.add(base.attr)
+    if "VoiceoverScene" not in base_names:
+        errors.append("GeneratedScene must inherit VoiceoverScene.")
+    if uses_3d and "ThreeDScene" not in base_names:
+        errors.append("3D usage requires GeneratedScene(VoiceoverScene, ThreeDScene).")
+
+    methods = [node for node in scene_class.body if isinstance(node, ast.FunctionDef)]
+    constructs = [node for node in methods if node.name == "construct"]
+    if len(constructs) != 1:
+        errors.append("GeneratedScene must define exactly one construct(self) method.")
+    if len(methods) != 1:
+        errors.append("GeneratedScene should define only construct(self); nested helpers may be local functions.")
+
+    if "self.set_speech_service" not in src or "GTTSService" not in src:
+        errors.append("construct() must configure GTTSService with self.set_speech_service(...).")
+    if "self.voiceover" not in src:
+        errors.append("Creative scene must include at least one self.voiceover block.")
+    if src.count("self.play(") < 2:
+        errors.append("Creative scene should contain at least two self.play(...) calls.")
+    if re.search(r"\b(?:MathTex|Tex)\s*\(", src):
+        errors.append("Tex and MathTex are not allowed; use Text with portable formulas.")
+    return errors, None
+
+
+def sanitize_manim_script(src: str) -> SanitizeResult:
+    """Sanitize and statically preflight one model-authored complete Manim script."""
+    original = str(src or "")
+    changes: list[str] = []
+    cleaned = strip_code_fences(original)
+    if cleaned != original.strip():
+        changes.append("Removed markdown code fences or transport whitespace")
+
+    cleaned, compatibility_changes = _patch_known_manim_compatibility(cleaned)
+    changes.extend(compatibility_changes)
+
+    cleaned, import_changes, removed_imports, removed_names = _normalize_imports(cleaned)
+    changes.extend(import_changes)
+
+    uses_3d = bool(_3D_MARKERS.search(cleaned))
+    cleaned, class_changes, structural_errors = _normalize_single_scene_class(cleaned, uses_3d)
+    changes.extend(class_changes)
+
+    unresolved = _find_unresolved_removed_names(cleaned, removed_names)
+    blocked = [name for name, pattern in _DANGEROUS_PATTERNS if pattern.search(cleaned)]
+    validation_errors, compile_error = _validate_scene_ast(cleaned, uses_3d)
+    validation_errors = list(dict.fromkeys(structural_errors + validation_errors))
+
+    if unresolved:
+        validation_errors.append(
+            "References remain after unsupported imports were removed: " + ", ".join(unresolved)
+        )
+    if blocked:
+        validation_errors.append(
+            "Blocked operations remain in the script: " + ", ".join(blocked)
+        )
+
+    requires_repair = bool(compile_error or validation_errors or unresolved or blocked)
+    return SanitizeResult(
+        source=cleaned.strip() + "\n",
+        changes=list(dict.fromkeys(changes)),
+        removed_imports=list(dict.fromkeys(removed_imports)),
+        unresolved_references=unresolved,
+        blocked_operations=blocked,
+        validation_errors=list(dict.fromkeys(validation_errors)),
+        compile_error=compile_error,
+        requires_repair=requires_repair,
+        uses_3d=uses_3d,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy/minimal sanitizer retained for deterministic wrappers and old paths.
+# ---------------------------------------------------------------------------
+
+
+def ensure_voiceover_header(src: str) -> str:
+    out = src.replace("from manim_voiceover import VoiceoverScene", "")
+    out = out.replace("from manim_voiceover.services.gtts import GTTSService", "")
+    return VOICEOVER_HEADER + "\n" + out.lstrip()
+
+
+def ensure_generated_scene(src: str) -> str:
+    first, matches = _class_header_span(src)
+    if first is not None:
+        uses_3d = bool(_3D_MARKERS.search(src))
+        bases = "VoiceoverScene, ThreeDScene" if uses_3d else "VoiceoverScene"
+        replacement = f"{first.group('indent')}class GeneratedScene({bases}):"
+        return src[: first.start()] + replacement + src[first.end() :]
+    return src.rstrip() + "\n\nclass GeneratedScene(VoiceoverScene):\n    def construct(self):\n        pass\n"
+
+
+def allow_manim_star_import_with_noqa(src: str) -> str:
+    if RE_FROM_MANIM_STAR.search(src):
+        return RE_FROM_MANIM_STAR.sub("from manim import *  # noqa: F403,F405", src)
+    if src.startswith(VOICEOVER_HEADER):
+        return (
+            VOICEOVER_HEADER
+            + "from manim import *  # noqa: F403,F405\n"
+            + src[len(VOICEOVER_HEADER) :]
+        )
+    return "from manim import *  # noqa: F403,F405\n" + src
 
 
 def _ensure_threed_mixin(src: str) -> str:
-    """
-    If code uses 3D objects/methods but class is only VoiceoverScene,
-    upgrade to (VoiceoverScene, ThreeDScene).
-    """
-    if not isinstance(src, str) or not src:
-        return src
     if not _3D_MARKERS.search(src):
-        return src  # no 3D usage detected
-
-    # Only replace "class GeneratedScene(VoiceoverScene):" headers
+        return src
     pattern = re.compile(
         r"^(\s*class\s+GeneratedScene\s*\()\s*VoiceoverScene\s*(\)\s*:\s*)$",
         re.MULTILINE,
@@ -285,236 +566,12 @@ def _ensure_threed_mixin(src: str) -> str:
     return pattern.sub(r"\1VoiceoverScene, ThreeDScene\2", src)
 
 
-# -------------------------------------------------------------------------------
-
-
-# --- NEW: Auto-cleanup to prevent text/object overlap in videos ---
-def _auto_cleanup_overlapping_objects(src: str) -> str:
-    """
-    Prevent text/object overlap by:
-    1. Ensuring objects created in voiceover blocks are cleaned up
-    2. Adding FadeOut for text objects that would otherwise persist
-    3. Inserting self.clear() between major scene sections when appropriate
-
-    This addresses the common issue where LLM-generated code creates
-    multiple text/shape objects without removing previous ones, causing
-    visual overlap in the rendered video.
-
-    IMPORTANT: This function skips adding FadeOut for objects that appear
-    inside code snippets (Code(...) blocks or triple-backtick fenced code)
-    since those are meant to be displayed to the viewer, not actual scene
-    objects.
-    """
-    if not isinstance(src, str) or not src:
-        return src
-
-    lines = src.split("\n")
-    result = []
-
-    # Track objects that need cleanup within voiceover blocks
-    in_voiceover_block = False
-    voiceover_indent = 0
-    objects_in_block = []
-    pending_cleanup = []
-
-    # Track if we're inside a code snippet context (Code(...) or fenced code)
-    in_code_snippet = False
-    code_snippet_depth = 0  # For nested parentheses in Code(...)
-
-    # Pattern to detect object creation (common Manim objects)
-    object_creation = re.compile(
-        r"(\s*)(\w+)\s*=\s*(Text|MathTex|Tex|Title|Paragraph|"
-        r"MarkupText|Code|BulletedList|Table|"
-        r"Circle|Square|Rectangle|Triangle|Line|Arrow|"
-        r"Dot|NumberPlane|Axes|Graph|BarChart|"
-        r"VGroup|Group|SurroundingRectangle|Brace)\s*\("
-    )
-
-    # Pattern to detect voiceover context manager entry
-    voiceover_start = re.compile(r"(\s*)with\s+self\.voiceover\s*\(")
-
-    # Pattern to detect FadeOut/removal animations
-    removal_pattern = re.compile(r"(FadeOut|Uncreate|ShrinkToCenter|FadeOutAndShift)\s*\(\s*(\w+)")
-
-    # Pattern to detect self.clear() or self.remove()
-    clear_pattern = re.compile(r"\s*self\.(clear|remove)\s*\(")
-
-    # Pattern to detect Code(...) call start (code snippet being displayed)
-    code_call_start = re.compile(r"=\s*Code\s*\(")
-
-    # Pattern to detect triple-backtick code fence inside a string
-    # This catches code_string="""...``` patterns
-    re.compile(r'(code_string|code)\s*=\s*("""|\'\'\')')
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # Check if we're entering a Code(...) block
-        if code_call_start.search(line):
-            in_code_snippet = True
-            # Count opening parens to track when Code(...) ends
-            code_snippet_depth = line.count("(") - line.count(")")
-
-        # If in a code snippet, track parentheses to know when it ends
-        if in_code_snippet:
-            if i > 0 or not code_call_start.search(line):
-                code_snippet_depth += line.count("(") - line.count(")")
-            if code_snippet_depth <= 0:
-                in_code_snippet = False
-                code_snippet_depth = 0
-
-        # Check for voiceover block start
-        vo_match = voiceover_start.match(line)
-        if vo_match:
-            in_voiceover_block = True
-            voiceover_indent = len(vo_match.group(1))
-            objects_in_block = []
-            result.append(line)
-            i += 1
-            continue
-
-        # Check if we're exiting a voiceover block (dedent)
-        if in_voiceover_block:
-            current_indent = (
-                len(line) - len(line.lstrip()) if line.strip() else voiceover_indent + 4
-            )
-            if line.strip() and current_indent <= voiceover_indent:
-                # We're exiting the voiceover block
-                # Check if there are objects that weren't cleaned up
-                if objects_in_block and pending_cleanup:
-                    # Insert cleanup before exiting the block
-                    cleanup_indent = " " * (voiceover_indent + 4)
-                    for obj in pending_cleanup:
-                        # Only add FadeOut if the object wasn't already removed
-                        result.append(f"{cleanup_indent}self.play(FadeOut({obj}))")
-
-                in_voiceover_block = False
-                objects_in_block = []
-                pending_cleanup = []
-
-        # Track object creation - but SKIP if we're inside a code snippet
-        # (Code snippets show code to the viewer, not actual scene objects)
-        obj_match = object_creation.match(line)
-        if obj_match and in_voiceover_block and not in_code_snippet:
-            obj_name = obj_match.group(2)
-            obj_type = obj_match.group(3)
-            # Don't track Code objects themselves for cleanup -
-            # they're display objects that should persist
-            if obj_type != "Code":
-                objects_in_block.append(obj_name)
-                pending_cleanup.append(obj_name)
-
-        # Track object removal
-        removal_match = removal_pattern.search(line)
-        if removal_match:
-            removed_obj = removal_match.group(2)
-            if removed_obj in pending_cleanup:
-                pending_cleanup.remove(removed_obj)
-
-        # Track clear calls
-        if clear_pattern.search(line):
-            pending_cleanup = []  # All objects considered cleaned
-
-        result.append(line)
-        i += 1
-
-    return "\n".join(result)
-
-
-def _ensure_wait_between_animations(src: str) -> str:
-    """
-    Ensure there's adequate wait time between rapid animations
-    to prevent visual overlap. This is especially important for
-    text that appears and disappears quickly.
-    """
-    if not isinstance(src, str) or not src:
-        return src
-
-    lines = src.split("\n")
-    result = []
-
-    # Pattern to detect consecutive self.play calls
-    play_pattern = re.compile(r"(\s*)self\.play\s*\(")
-
-    prev_was_play = False
-
-    for line in lines:
-        play_match = play_pattern.match(line)
-
-        if play_match:
-            # Check if previous line was also a play without wait
-            if prev_was_play:
-                # Don't add extra wait - this can interfere with intended animations
-                # Just let the code run as-is
-                pass
-            prev_was_play = True
-        else:
-            # Check if this line has a wait
-            if "self.wait" in line or "Wait(" in line:
-                prev_was_play = False
-            elif line.strip() and not line.strip().startswith("#"):
-                # Non-empty, non-comment line that's not a wait
-                if "self.play" not in line:
-                    prev_was_play = False
-
-        result.append(line)
-
-    return "\n".join(result)
-
-
-def _dedupe_overlapping_text_positions(src: str) -> str:
-    """
-    Detect when multiple text objects might be created at the same position
-    and add position offsets to prevent overlap.
-
-    This is a conservative heuristic - it only adds offsets when it's
-    very confident objects will overlap.
-    """
-    if not isinstance(src, str) or not src:
-        return src
-
-    # Pattern to find text with .to_edge(UP) or similar that might overlap
-    # This is intentionally conservative to avoid breaking valid code
-    pattern = re.compile(r"(\w+)\s*=\s*(Text|MathTex|Tex|Title)\s*\([^)]+\)\.to_edge\(UP\)")
-
-    matches = list(pattern.finditer(src))
-
-    if len(matches) <= 1:
-        return src  # No potential overlap
-
-    # For now, just return the source unchanged
-    # A more sophisticated version could add .shift(DOWN * n) for subsequent elements
-    # but this risks breaking intentional layouts
-    return src
-
-
-# -------------------------------------------------------------------------------
-
-
 def sanitize_minimally(src: str) -> str:
-    """
-    Minimal, non-restrictive sanitizer:
-    - strip code fences/backticks
-    - ensure voiceover header at top
-    - guarantee a GeneratedScene(VoiceoverScene) class exists
-    - ensure star import exists and is marked with # noqa: F403,F405
-    - patch a couple of unsafe LaTeX macros
-    - strip unsupported Code(...) kwargs that crash Manim 0.19
-    - fix some BarChart kwargs (width→bar_width, drop unsupported max_value)
-    - guard negative/zero waits that would crash Manim
-    - auto-upgrade to (VoiceoverScene, ThreeDScene) if 3D usage is detected
-    - auto-cleanup objects to prevent text/visual overlap in videos
-    """
-    s = strip_code_fences(src)
-    s = ensure_voiceover_header(s)
-    s = ensure_generated_scene(s)
-    s = allow_manim_star_import_with_noqa(s)
-    s = patch_unsafe_latex(s)
-    s = _disable_latex_mobjects(s)
-    s = _strip_unsupported_code_kwargs(s)
-    s = _sanitize_barchart_kwargs(s)
-    s = _guard_negative_waits(s)
-    s = _ensure_threed_mixin(s)
-    # s = _auto_cleanup_overlapping_objects(s)  # Prevent text/object overlap
-    return s.strip() + "\n"
+    """Backward-compatible non-restrictive sanitizer for trusted wrapper code."""
+    out = strip_code_fences(src)
+    out = ensure_voiceover_header(out)
+    out = ensure_generated_scene(out)
+    out = allow_manim_star_import_with_noqa(out)
+    out, _changes = _patch_known_manim_compatibility(out)
+    out = _ensure_threed_mixin(out)
+    return out.strip() + "\n"

@@ -480,6 +480,9 @@ def build_concept_fallback_scene_code(scene: dict[str, Any]) -> str:
     safe_scene["visual_mode"] = "diagram"
     safe_scene.pop("manim_body", None)
     safe_scene.pop("manim_body_ref", None)
+    safe_scene.pop("manim_script", None)
+    safe_scene.pop("manim_script_ref", None)
+    safe_scene.pop("requires_3d", None)
     safe_scene.pop("code_goal", None)
 
     # Ordered steps and formulas already have strong deterministic renderers. Otherwise force
@@ -515,7 +518,11 @@ def build_concept_fallback_scene_code(scene: dict[str, Any]) -> str:
 
 
 def build_custom_scene_code(scene: dict[str, Any], body_code: str) -> str:
-    """Wrap model-authored construct-body code in a stable VoiceoverScene shell."""
+    """Wrap legacy body-only custom code in a stable VoiceoverScene shell.
+
+    New generations use complete MANIM_SCRIPT files. This wrapper remains so older saved
+    structured bundles can be opened, edited, and migrated without losing their custom scene.
+    """
     scene_literal = _safe_python_literal(_scene_for_render(scene))
     body = (body_code or "").strip() or "self.wait(0.1)"
     indented = "\n".join("        " + line if line.strip() else "" for line in body.splitlines())
@@ -647,3 +654,8 @@ __BODY_CODE__
         self.wait(0.1)
 '''.lstrip()
     return template.replace("__SCENE_JSON__", scene_literal).replace("__BODY_CODE__", indented)
+
+
+def build_legacy_custom_scene_code(scene: dict[str, Any], body_code: str) -> str:
+    """Explicit alias used by the complete-script orchestrator for older MANIM_BODY bundles."""
+    return build_custom_scene_code(scene, body_code)
