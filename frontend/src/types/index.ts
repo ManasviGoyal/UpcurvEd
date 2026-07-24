@@ -17,13 +17,10 @@ export interface GenerationDiagnostics {
   llm_calls?: number;
   total_scenes?: number;
   creative_scenes?: number;
-  rendered_initially?: number;
-  sanitizer_repaired?: number;
-  render_repaired?: number;
+  repaired_scenes?: number;
+  plan_repaired_by_model?: boolean;
   simplified_scenes?: number;
   component_fallbacks?: number;
-  local_sanitizer_corrections?: number;
-  plan_repaired?: boolean;
   recovery_stages?: string[];
   failure_stage?: string | null;
   summary?: string;

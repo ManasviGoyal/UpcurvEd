@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import textwrap
+import time
 import uuid
 from typing import Any
 
@@ -50,10 +51,16 @@ from backend.agent.video_components import (
 from backend.runner.job_runner import (
     STORAGE,
     check_manim_runtime,
+    cleanup_structured_job_artifacts,
     run_job_from_code,
     to_static_url,
 )
-from backend.utils.failure_log import append_generation_index, summarize_error
+from backend.utils.failure_log import (
+    append_generation_audit,
+    mark_diagnostic_retention,
+    prune_diagnostic_bundles,
+    summarize_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -836,6 +843,178 @@ def _write_response_debug_artifacts(
         "\n".join(combined), encoding="utf-8"
     )
 
+
+def _remember_response_debug_context(
+    metrics: dict[str, Any],
+    *,
+    prefix: str,
+    raw_text: str,
+    plan_text: str,
+    scripts: dict[str, str],
+    legacy_bodies: dict[str, str],
+    repaired_plan_text: str | None = None,
+    plan_was_repaired: bool = False,
+) -> None:
+    """Keep initial model artifacts in memory unless a run actually becomes abnormal."""
+    metrics.setdefault("_response_debug_contexts", []).append(
+        {
+            "prefix": prefix,
+            "raw_text": raw_text,
+            "plan_text": plan_text,
+            "scripts": dict(scripts),
+            "legacy_bodies": dict(legacy_bodies),
+            "repaired_plan_text": repaired_plan_text,
+            "plan_was_repaired": bool(plan_was_repaired),
+        }
+    )
+
+
+def _flush_response_debug_contexts(
+    metrics: dict[str, Any],
+    logs_dir: pathlib.Path,
+) -> None:
+    """Persist remembered model artifacts once, only for abnormal runs."""
+    if metrics.get("_debug_contexts_flushed"):
+        return
+    contexts = metrics.get("_response_debug_contexts") or []
+    for context in contexts:
+        _write_response_debug_artifacts(
+            logs_dir=logs_dir,
+            prefix=str(context.get("prefix") or "structured"),
+            raw_text=str(context.get("raw_text") or ""),
+            plan_text=str(context.get("plan_text") or ""),
+            scripts=dict(context.get("scripts") or {}),
+            legacy_bodies=dict(context.get("legacy_bodies") or {}),
+            repaired_plan_text=context.get("repaired_plan_text"),
+            plan_was_repaired=bool(context.get("plan_was_repaired")),
+        )
+    metrics["_debug_contexts_flushed"] = True
+
+
+def _record_local_script_adjustments(
+    metrics: dict[str, Any],
+    *,
+    scene_index: int,
+    stage: str,
+    result: SanitizeResult,
+) -> None:
+    changes = [str(value).strip() for value in result.changes if str(value).strip()]
+    if not changes:
+        return
+    metrics.setdefault("local_script_adjustments", []).append(
+        {
+            "scene": int(scene_index),
+            "stage": str(stage),
+            "changes": list(dict.fromkeys(changes)),
+        }
+    )
+    adjusted = metrics.setdefault("_locally_adjusted_scene_ids", set())
+    adjusted.add(int(scene_index))
+    metrics["local_sanitizer_corrections"] = len(adjusted)
+
+
+def _audit_outcome(metrics: dict[str, Any], *, failed: bool) -> str:
+    if failed:
+        return "failed"
+    if metrics.get("component_fallback_scene_ids"):
+        return "completed_with_fallback"
+    if metrics.get("simplified_scene_ids"):
+        return "simplified"
+    if (
+        metrics.get("plan_repaired_by_model")
+        or metrics.get("sanitizer_repaired_scene_ids")
+        or metrics.get("render_repaired_scene_ids")
+    ):
+        return "recovered"
+    if (
+        metrics.get("local_json_plan_repair")
+        or metrics.get("local_plan_adjustments")
+        or metrics.get("local_script_adjustments")
+    ):
+        return "normalized_locally"
+    return "clean_success"
+
+
+def _append_audit_and_cleanup(
+    *,
+    job_id: str,
+    plan: dict[str, Any] | None,
+    provider_name: str | None,
+    model: str | None,
+    metrics: dict[str, Any],
+    failed: bool,
+    failure_stage: str | None = None,
+    affected_scenes: list[int] | None = None,
+    error_summary: str | None = None,
+    has_final_artifact: bool = False,
+) -> None:
+    scenes = plan.get("scenes") if isinstance(plan, dict) else []
+    scenes = scenes if isinstance(scenes, list) else []
+    creative = sum(
+        1
+        for scene in scenes
+        if isinstance(scene, dict) and scene.get("type") == "custom_manim_scene"
+    )
+    duration = max(
+        0.0,
+        time.monotonic() - float(metrics.get("_started_monotonic") or time.monotonic()),
+    )
+    abnormal = bool(
+        failed
+        or metrics.get("plan_repaired_by_model")
+        or metrics.get("recovery_stages")
+        or metrics.get("simplified_scene_ids")
+        or metrics.get("component_fallback_scene_ids")
+    )
+
+    try:
+        append_generation_audit(
+            {
+                "job_id": job_id,
+                "operation": metrics.get("operation") or "generate",
+                "outcome": _audit_outcome(metrics, failed=failed),
+                "provider": provider_name,
+                "model": model,
+                "llm_calls": metrics.get("llm_calls"),
+                "total_scenes": len(scenes),
+                "creative_scenes": creative,
+                "rendered_initially": metrics.get("rendered_initially"),
+                "plan_repaired_by_model": metrics.get("plan_repaired_by_model"),
+                "sanitizer_repaired_scenes": metrics.get("sanitizer_repaired_scene_ids"),
+                "render_repaired_scenes": metrics.get("render_repaired_scene_ids"),
+                "simplified_scene_ids": metrics.get("simplified_scene_ids"),
+                "component_fallback_scene_ids": metrics.get("component_fallback_scene_ids"),
+                "recovery_stages": metrics.get("recovery_stages"),
+                "local_json_plan_repair": metrics.get("local_json_plan_repair"),
+                "local_plan_adjustments": metrics.get("local_plan_adjustments"),
+                "local_script_adjustments": metrics.get("local_script_adjustments"),
+                "failure_stage": failure_stage,
+                "affected_scenes": affected_scenes or [],
+                "error_summary": error_summary,
+                "duration_seconds": duration,
+            }
+        )
+    except Exception as exc:
+        logger.warning("generation_audit_append_failed job_id=%s error=%s", job_id, exc)
+
+    if abnormal:
+        mark_diagnostic_retention(
+            job_id=job_id,
+            status="failed" if failed else _audit_outcome(metrics, failed=False),
+            has_final_artifact=has_final_artifact,
+        )
+    try:
+        cleanup_structured_job_artifacts(
+            job_id,
+            keep_diagnostics=abnormal,
+        )
+    except Exception as exc:
+        logger.warning("structured_job_cleanup_failed job_id=%s error=%s", job_id, exc)
+    try:
+        prune_diagnostic_bundles()
+    except Exception as exc:
+        logger.warning("diagnostic_prune_failed error=%s", exc)
+
 def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
     title = _short_text(plan.get("title"), 72, _short_text(topic, 72, "Educational video"))
     subtitle = _short_text(plan.get("subtitle"), 100, "")
@@ -1260,17 +1439,19 @@ def _repair_plan_if_needed(
 ) -> tuple[dict[str, Any], bool]:
     local_fixes = _apply_local_plan_quality_fixes(plan, topic=topic)
     if local_fixes:
-        (logs_dir / "plan_local_fixes.json").write_text(
-            _safe_json(local_fixes), encoding="utf-8"
-        )
+        metrics.setdefault("local_plan_adjustments", []).extend(local_fixes)
         logger.info("structured_video_plan_local_fixes fixes=%s", local_fixes)
 
     errors = _plan_quality_errors(plan)
     if not errors:
-        return plan, bool(local_fixes)
+        return plan, False
 
-    (logs_dir / "plan_quality_errors.json").write_text(_safe_json(errors), encoding="utf-8")
+    _flush_response_debug_contexts(metrics, logs_dir)
+    (logs_dir / "plan_quality_errors.json").write_text(
+        _safe_json(errors), encoding="utf-8"
+    )
     metrics["llm_calls"] += 1
+    metrics["plan_repaired_by_model"] = True
     metrics["recovery_stages"].append("plan_repair")
     raw = call_llm(
         provider=provider_name,
@@ -1285,6 +1466,8 @@ def _repair_plan_if_needed(
     parsed, scripts, bodies, plan_text, repaired_plan_text, plan_was_repaired = (
         _parse_structured_response(raw_text)
     )
+    if plan_was_repaired:
+        metrics["local_json_plan_repair"] = True
     _write_response_debug_artifacts(
         logs_dir=logs_dir,
         prefix="plan_repair",
@@ -1300,9 +1483,7 @@ def _repair_plan_if_needed(
     repaired = _normalize_plan(parsed, topic=topic)
     second_local_fixes = _apply_local_plan_quality_fixes(repaired, topic=topic)
     if second_local_fixes:
-        (logs_dir / "plan_repair_local_fixes.json").write_text(
-            _safe_json(second_local_fixes), encoding="utf-8"
-        )
+        metrics.setdefault("local_plan_adjustments", []).extend(second_local_fixes)
     remaining = _plan_quality_errors(repaired)
     if remaining:
         (logs_dir / "plan_repair_remaining_errors.json").write_text(
@@ -1440,9 +1621,6 @@ def _prepare_custom_states(
         elif legacy_body:
             source_kind = "legacy_body"
             original_script = build_legacy_custom_scene_code(scene, legacy_body)
-            (logs_dir / f"scene_{index:02d}_legacy_body.py").write_text(
-                legacy_body + "\n", encoding="utf-8"
-            )
             sanitize_result = _enforce_scene_script_contract(
                 scene, _legacy_wrapper_preflight(original_script)
             )
@@ -1452,15 +1630,25 @@ def _prepare_custom_states(
                 scene, sanitize_manim_script("")
             )
 
-        _write_sanitize_artifacts(
-            logs_dir=logs_dir,
+        _record_local_script_adjustments(
+            metrics,
             scene_index=index,
             stage="initial",
-            original_script=original_script,
             result=sanitize_result,
         )
-        if sanitize_result.changes:
-            metrics["local_sanitizer_corrections"] += 1
+        if sanitize_result.requires_repair:
+            _flush_response_debug_contexts(metrics, logs_dir)
+            if legacy_body:
+                (logs_dir / f"scene_{index:02d}_legacy_body.py").write_text(
+                    legacy_body + "\n", encoding="utf-8"
+                )
+            _write_sanitize_artifacts(
+                logs_dir=logs_dir,
+                scene_index=index,
+                stage="initial",
+                original_script=original_script,
+                result=sanitize_result,
+            )
 
         state = {
             "scene_index": index,
@@ -1493,6 +1681,7 @@ def _prepare_custom_states(
     if not failures:
         return states
 
+    _flush_response_debug_contexts(metrics, logs_dir)
     request_failures: list[dict[str, Any]] = []
     for state in failures:
         result: SanitizeResult = state["sanitize_result"]
@@ -1555,6 +1744,12 @@ def _prepare_custom_states(
         repaired = _enforce_scene_script_contract(
             state["scene"], sanitize_manim_script(replacement)
         )
+        _record_local_script_adjustments(
+            metrics,
+            scene_index=index,
+            stage="sanitizer_repair",
+            result=repaired,
+        )
         _write_sanitize_artifacts(
             logs_dir=logs_dir,
             scene_index=index,
@@ -1578,6 +1773,7 @@ def _prepare_custom_states(
         state["scene"].pop("manim_body_ref", None)
         state["attempts"].append({"stage": "sanitizer_repair", "ok": True})
         metrics["sanitizer_repaired"] += 1
+        metrics.setdefault("sanitizer_repaired_scene_ids", []).append(index)
     return states
 
 
@@ -1622,13 +1818,11 @@ def _attempt_custom_render(
     logs_dir: pathlib.Path,
     stage: str,
     render_source: str,
+    metrics: dict[str, Any],
 ) -> bool:
     index = int(state["scene_index"])
     code = str(state.get("current_script") or "").strip()
     stage_slug = _safe_ref(stage)
-    (logs_dir / f"scene_{index:02d}_{stage_slug}_executed.py").write_text(
-        code + ("\n" if code else ""), encoding="utf-8"
-    )
     scene_job_id = f"{final_job_id}-scene-{index:02d}-{stage_slug}"
     clip, result, detail = _render_code_once(code=code, scene_job_id=scene_job_id)
     command = result.get("render_command")
@@ -1646,6 +1840,10 @@ def _attempt_custom_render(
     }
     state["attempts"].append(attempt)
     if clip is None:
+        _flush_response_debug_contexts(metrics, logs_dir)
+        (logs_dir / f"scene_{index:02d}_{stage_slug}_executed.py").write_text(
+            code + ("\n" if code else ""), encoding="utf-8"
+        )
         state["status"] = "render_failed"
         state["last_render_detail"] = detail
         state["last_render_result"] = result
@@ -1666,14 +1864,21 @@ def _render_standard_scene(
     final_job_id: str,
     scene_index: int,
     logs_dir: pathlib.Path,
+    metrics: dict[str, Any],
 ) -> tuple[pathlib.Path, dict[str, Any], str]:
     code = sanitize_minimally(build_component_scene_code(scene))
-    (logs_dir / f"scene_{scene_index:02d}_component.py").write_text(code, encoding="utf-8")
     clip, result, detail = _render_code_once(
         code=code,
         scene_job_id=f"{final_job_id}-scene-{scene_index:02d}-component",
     )
     if clip is None:
+        _flush_response_debug_contexts(metrics, logs_dir)
+        (logs_dir / f"scene_{scene_index:02d}_component.py").write_text(
+            code, encoding="utf-8"
+        )
+        (logs_dir / f"scene_{scene_index:02d}_component_render_error.txt").write_text(
+            detail + "\n", encoding="utf-8"
+        )
         raise StructuredVideoFailure(
             f"Standard scene {scene_index} failed to render: {summarize_error(detail)}",
             stage="standard_scene_render",
@@ -1709,6 +1914,7 @@ def _batch_runtime_repair(
     if not failures:
         return
 
+    _flush_response_debug_contexts(metrics, logs_dir)
     request = []
     for state in failures:
         request.append({
@@ -1764,6 +1970,12 @@ def _batch_runtime_repair(
         sanitized = _enforce_scene_script_contract(
             state["scene"], sanitize_manim_script(replacement)
         )
+        _record_local_script_adjustments(
+            metrics,
+            scene_index=index,
+            stage="focused_render_repair",
+            result=sanitized,
+        )
         _write_sanitize_artifacts(
             logs_dir=logs_dir,
             scene_index=index,
@@ -1786,11 +1998,15 @@ def _batch_runtime_repair(
             logs_dir=logs_dir,
             stage="focused_render_repair",
             render_source="custom_render_repaired",
+            metrics=metrics,
         ):
             state["scene"]["manim_script"] = sanitized.source
             state["scene"].pop("manim_body", None)
             state["scene"].pop("manim_body_ref", None)
-            metrics["render_repaired"] += 1
+            repaired_ids = metrics.setdefault("render_repaired_scene_ids", [])
+            if index not in repaired_ids:
+                repaired_ids.append(index)
+            metrics["render_repaired"] = len(repaired_ids)
 
 
 def _batch_simplify_remaining(
@@ -1807,6 +2023,7 @@ def _batch_simplify_remaining(
     if not failures:
         return
 
+    _flush_response_debug_contexts(metrics, logs_dir)
     request = []
     for state in failures:
         history = [
@@ -1868,6 +2085,12 @@ def _batch_simplify_remaining(
         sanitized = _enforce_scene_script_contract(
             state["scene"], sanitize_manim_script(replacement)
         )
+        _record_local_script_adjustments(
+            metrics,
+            scene_index=index,
+            stage="simpler_scene",
+            result=sanitized,
+        )
         _write_sanitize_artifacts(
             logs_dir=logs_dir,
             scene_index=index,
@@ -1890,11 +2113,15 @@ def _batch_simplify_remaining(
             logs_dir=logs_dir,
             stage="simpler_scene_retry",
             render_source="custom_simplified",
+            metrics=metrics,
         ):
             state["scene"]["manim_script"] = sanitized.source
             state["scene"].pop("manim_body", None)
             state["scene"].pop("manim_body_ref", None)
-            metrics["simplified_scenes"] += 1
+            simplified_ids = metrics.setdefault("simplified_scene_ids", [])
+            if index not in simplified_ids:
+                simplified_ids.append(index)
+            metrics["simplified_scenes"] = len(simplified_ids)
 
 
 def _apply_component_fallbacks(
@@ -1905,6 +2132,8 @@ def _apply_component_fallbacks(
     metrics: dict[str, Any],
 ) -> None:
     failures = [state for state in states.values() if state.get("status") != "rendered"]
+    if failures:
+        _flush_response_debug_contexts(metrics, logs_dir)
     for state in failures:
         index = int(state["scene_index"])
         fallback_code = sanitize_minimally(build_concept_fallback_scene_code(state["scene"]))
@@ -1918,6 +2147,7 @@ def _apply_component_fallbacks(
             logs_dir=logs_dir,
             stage="component_fallback",
             render_source="component_fallback",
+            metrics=metrics,
         ):
             raise StructuredVideoFailure(
                 f"Scene {index} failed after creative repair, simplification, and component fallback: "
@@ -1926,7 +2156,10 @@ def _apply_component_fallbacks(
                 affected_scenes=[index],
             )
         state["used_fallback"] = True
-        metrics["component_fallbacks"] += 1
+        fallback_ids = metrics.setdefault("component_fallback_scene_ids", [])
+        if index not in fallback_ids:
+            fallback_ids.append(index)
+        metrics["component_fallbacks"] = len(fallback_ids)
 def _find_ffmpeg() -> str:
     for name in ("UPCURVED_FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE", "FFMPEG_BINARY"):
         candidate = str(os.getenv(name) or "").strip()
@@ -2124,66 +2357,53 @@ def _build_generation_diagnostics(
     scenes = plan.get("scenes") if isinstance(plan, dict) else []
     scenes = scenes if isinstance(scenes, list) else []
     creative = sum(
-        1 for scene in scenes if isinstance(scene, dict) and scene.get("type") == "custom_manim_scene"
+        1
+        for scene in scenes
+        if isinstance(scene, dict) and scene.get("type") == "custom_manim_scene"
     )
-    fallback_count = int(metrics.get("component_fallbacks") or 0)
-    simplified = int(metrics.get("simplified_scenes") or 0)
-    sanitizer_repaired = int(metrics.get("sanitizer_repaired") or 0)
-    render_repaired = int(metrics.get("render_repaired") or 0)
-    rendered_initially = int(metrics.get("rendered_initially") or 0)
+    repaired_ids = sorted(
+        {
+            int(value)
+            for value in (
+                list(metrics.get("sanitizer_repaired_scene_ids") or [])
+                + list(metrics.get("render_repaired_scene_ids") or [])
+            )
+        }
+    )
+    fallback_count = len(set(metrics.get("component_fallback_scene_ids") or []))
+    simplified_count = len(set(metrics.get("simplified_scene_ids") or []))
+    plan_repaired_by_model = bool(metrics.get("plan_repaired_by_model"))
 
     if failed:
         quality_status = "failed"
-        summary = failure_summary or "Video generation failed."
-    elif creative == 0:
-        quality_status = "standard"
-        summary = "Structured render; no creative-code scenes were required."
     elif fallback_count:
         quality_status = "completed_with_fallback"
-        noun = "scene" if creative == 1 else "scenes"
-        summary = (
-            f"{creative} creative {noun}; {fallback_count} used component fallback after "
-            "creative recovery attempts."
-        )
-    elif simplified:
+    elif simplified_count:
         quality_status = "simplified"
-        noun = "scene" if creative == 1 else "scenes"
-        verb = "was" if simplified == 1 else "were"
-        summary = (
-            f"{creative} creative {noun}; {simplified} {verb} simplified to render reliably."
-        )
-    elif sanitizer_repaired or render_repaired:
+    elif plan_repaired_by_model or repaired_ids:
         quality_status = "recovered"
-        repaired_total = sanitizer_repaired + render_repaired
-        noun = "scene" if creative == 1 else "scenes"
-        repair_verb = "was" if repaired_total == 1 else "were"
-        summary = (
-            f"{creative} creative {noun}; {rendered_initially} rendered from the initial scripts "
-            f"and {repaired_total} {repair_verb} repaired successfully."
-        )
+    elif creative == 0:
+        quality_status = "standard"
     else:
         quality_status = "full_quality"
-        noun = "scene" if creative == 1 else "scenes"
-        summary = f"All {creative} creative {noun} rendered from the initial scripts."
 
-    return {
+    diagnostics: dict[str, Any] = {
         "quality_status": quality_status,
         "provider": str(provider_name or ""),
         "model": str(model or ""),
         "llm_calls": int(metrics.get("llm_calls") or 0),
         "total_scenes": len(scenes),
         "creative_scenes": creative,
-        "rendered_initially": rendered_initially,
-        "sanitizer_repaired": sanitizer_repaired,
-        "render_repaired": render_repaired,
-        "simplified_scenes": simplified,
+        "repaired_scenes": len(repaired_ids),
+        "plan_repaired_by_model": plan_repaired_by_model,
+        "simplified_scenes": simplified_count,
         "component_fallbacks": fallback_count,
-        "local_sanitizer_corrections": int(metrics.get("local_sanitizer_corrections") or 0),
-        "plan_repaired": bool(metrics.get("plan_repaired")),
         "recovery_stages": list(dict.fromkeys(metrics.get("recovery_stages") or [])),
         "failure_stage": failure_stage,
-        "summary": summary,
     }
+    if failed and failure_summary:
+        diagnostics["summary"] = failure_summary
+    return diagnostics
 
 
 def _runtime_preflight_result(
@@ -2197,9 +2417,10 @@ def _runtime_preflight_result(
     logs_dir = job_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     runtime = check_manim_runtime()
-    (logs_dir / "runtime_preflight.json").write_text(_safe_json(runtime), encoding="utf-8")
     if runtime.get("ok"):
         return None
+
+    (logs_dir / "runtime_preflight.json").write_text(_safe_json(runtime), encoding="utf-8")
     detail = str(runtime.get("stderr") or runtime.get("stdout") or "Manim runtime preflight failed.")
     summary = summarize_error(detail, fallback="Manim runtime preflight failed.")
     diagnostics = _build_generation_diagnostics(
@@ -2211,17 +2432,19 @@ def _runtime_preflight_result(
         failure_stage="runtime_dependency_preflight",
         failure_summary=summary,
     )
-    append_generation_index(
+    (job_dir / "generation_diagnostics.json").write_text(
+        _safe_json(diagnostics), encoding="utf-8"
+    )
+    _append_audit_and_cleanup(
         job_id=final_job_id,
-        status="failed",
-        stage="runtime_dependency_preflight",
-        provider=provider_name,
+        plan=None,
+        provider_name=provider_name,
         model=model,
-        error_detail=detail,
-        summary=summary,
-        llm_calls=0,
-        recovery_stages=[],
-        job_dir=job_dir,
+        metrics=metrics,
+        failed=True,
+        failure_stage="runtime_dependency_preflight",
+        error_summary=summary,
+        has_final_artifact=False,
     )
     return {
         "ok": False,
@@ -2268,6 +2491,7 @@ def _render_structured_plan(
                 final_job_id=final_job_id,
                 scene_index=index,
                 logs_dir=logs_dir,
+                metrics=metrics,
             )
             continue
         state = custom_states[index]
@@ -2283,6 +2507,7 @@ def _render_structured_plan(
                 if state.get("sanitizer_repaired")
                 else "custom_initial"
             ),
+            metrics=metrics,
         ) and not state.get("sanitizer_repaired"):
             metrics["rendered_initially"] += 1
 
@@ -2379,25 +2604,17 @@ def _render_structured_plan(
     (job_dir / "generation_diagnostics.json").write_text(
         _safe_json(diagnostics), encoding="utf-8"
     )
-    used_fallback = bool(metrics.get("component_fallbacks"))
-    if used_fallback:
-        affected = [
-            int(result["scene_index"])
-            for result in scene_results
-            if result.get("used_fallback")
-        ]
-        append_generation_index(
-            job_id=final_job_id,
-            status="completed_with_fallback",
-            stage="component_fallback",
-            provider=provider_name,
-            model=model,
-            affected_scenes=affected,
-            summary=diagnostics["summary"],
-            llm_calls=diagnostics["llm_calls"],
-            recovery_stages=diagnostics["recovery_stages"],
-            job_dir=job_dir,
-        )
+    used_fallback = bool(metrics.get("component_fallback_scene_ids"))
+
+    _append_audit_and_cleanup(
+        job_id=final_job_id,
+        plan=plan,
+        provider_name=provider_name,
+        model=model,
+        metrics=metrics,
+        failed=False,
+        has_final_artifact=True,
+    )
 
     return {
         "ok": True,
@@ -2409,13 +2626,15 @@ def _render_structured_plan(
         "scene_plan": plan,
         "scene_results": scene_results,
         "used_fallback": used_fallback,
-        "plan_repaired": bool(metrics.get("plan_repaired")),
+        "plan_repaired": bool(metrics.get("plan_repaired_by_model")),
         "generation_diagnostics": diagnostics,
     }
 
 
-def _new_metrics() -> dict[str, Any]:
+def _new_metrics(operation: str = "generate") -> dict[str, Any]:
     return {
+        "operation": operation,
+        "_started_monotonic": time.monotonic(),
         "llm_calls": 0,
         "rendered_initially": 0,
         "sanitizer_repaired": 0,
@@ -2424,7 +2643,17 @@ def _new_metrics() -> dict[str, Any]:
         "component_fallbacks": 0,
         "local_sanitizer_corrections": 0,
         "plan_repaired": False,
+        "plan_repaired_by_model": False,
+        "local_json_plan_repair": False,
+        "local_plan_adjustments": [],
+        "local_script_adjustments": [],
+        "sanitizer_repaired_scene_ids": [],
+        "render_repaired_scene_ids": [],
+        "simplified_scene_ids": [],
+        "component_fallback_scene_ids": [],
         "recovery_stages": [],
+        "_response_debug_contexts": [],
+        "_debug_contexts_flushed": False,
     }
 
 
@@ -2453,22 +2682,22 @@ def _failure_result(
     job_dir = pathlib.Path(STORAGE) / "jobs" / job_id
     logs_dir = job_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    _flush_response_debug_contexts(metrics, logs_dir)
     (logs_dir / "structured_failure.txt").write_text(detail + "\n", encoding="utf-8")
     (job_dir / "generation_diagnostics.json").write_text(
         _safe_json(diagnostics), encoding="utf-8"
     )
-    append_generation_index(
+    _append_audit_and_cleanup(
         job_id=job_id,
-        status="failed",
-        stage=stage,
-        provider=provider_name,
+        plan=plan,
+        provider_name=provider_name,
         model=model,
+        metrics=metrics,
+        failed=True,
+        failure_stage=stage,
         affected_scenes=affected,
-        error_detail=detail,
-        summary=summary,
-        llm_calls=diagnostics["llm_calls"],
-        recovery_stages=diagnostics["recovery_stages"],
-        job_dir=job_dir,
+        error_summary=summary,
+        has_final_artifact=False,
     )
     logger.exception("structured_video_failed job_id=%s stage=%s", job_id, stage)
     return {
@@ -2492,7 +2721,7 @@ def generate_structured_manim_video(
     job_id: str | None = None,
 ) -> dict[str, Any]:
     final_job_id = str(job_id or uuid.uuid4().hex[:12])
-    metrics = _new_metrics()
+    metrics = _new_metrics("generate")
     plan: dict[str, Any] | None = None
     provider_name: str | None = provider
     resolved_model: str | None = model
@@ -2531,8 +2760,10 @@ def generate_structured_manim_video(
         parsed, scripts, bodies, plan_text, repaired_plan_text, plan_was_repaired = (
             _parse_structured_response(raw_text)
         )
-        _write_response_debug_artifacts(
-            logs_dir=logs_dir,
+        if plan_was_repaired:
+            metrics["local_json_plan_repair"] = True
+        _remember_response_debug_context(
+            metrics,
             prefix="structured",
             raw_text=raw_text,
             plan_text=plan_text,
@@ -2553,6 +2784,7 @@ def generate_structured_manim_video(
             metrics=metrics,
         )
         metrics["plan_repaired"] = repaired
+        metrics["plan_repaired_by_model"] = repaired
         return _render_structured_plan(
             plan,
             provider_name=provider_name,
@@ -2583,7 +2815,7 @@ def edit_structured_manim_video(
     job_id: str | None = None,
 ) -> dict[str, Any]:
     final_job_id = str(job_id or uuid.uuid4().hex[:12])
-    metrics = _new_metrics()
+    metrics = _new_metrics("edit")
     plan: dict[str, Any] | None = None
     provider_name: str | None = provider
     resolved_model: str | None = model
@@ -2617,8 +2849,10 @@ def edit_structured_manim_video(
         parsed, scripts, bodies, plan_text, repaired_plan_text, plan_was_repaired = (
             _parse_structured_response(raw_text)
         )
-        _write_response_debug_artifacts(
-            logs_dir=logs_dir,
+        if plan_was_repaired:
+            metrics["local_json_plan_repair"] = True
+        _remember_response_debug_context(
+            metrics,
             prefix="structured_edit",
             raw_text=raw_text,
             plan_text=plan_text,
@@ -2640,6 +2874,7 @@ def edit_structured_manim_video(
             metrics=metrics,
         )
         metrics["plan_repaired"] = repaired
+        metrics["plan_repaired_by_model"] = repaired
         return _render_structured_plan(
             plan,
             provider_name=provider_name,

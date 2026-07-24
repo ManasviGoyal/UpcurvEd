@@ -476,6 +476,99 @@ def run_job_from_code(
             ACTIVE_PROCS.pop(job_id, None)
 
 
+
+def cleanup_structured_job_artifacts(
+    parent_job_id: str,
+    *,
+    keep_diagnostics: bool,
+) -> dict[str, int]:
+    """Remove structured-video render intermediates without deleting final user artifacts.
+
+    Child scene jobs are always transient after concatenation or a terminal failure. Parent logs
+    and metadata are retained only for abnormal runs selected by the orchestrator.
+    """
+    jobs_root = (STORAGE / "jobs").resolve()
+    parent_name = str(parent_job_id or "").strip()
+    if not parent_name:
+        return {"child_jobs_removed": 0, "parent_items_removed": 0}
+
+    child_jobs_removed = 0
+    try:
+        for candidate in list(jobs_root.iterdir()):
+            if not candidate.is_dir():
+                continue
+            if candidate.name.startswith(f"{parent_name}-scene-"):
+                shutil.rmtree(candidate, ignore_errors=True)
+                child_jobs_removed += 1
+    except Exception:
+        pass
+
+    parent_dir = (jobs_root / parent_name).resolve()
+    if jobs_root not in parent_dir.parents:
+        return {
+            "child_jobs_removed": child_jobs_removed,
+            "parent_items_removed": 0,
+        }
+    parent_items_removed = 0
+    if not parent_dir.exists():
+        return {
+            "child_jobs_removed": child_jobs_removed,
+            "parent_items_removed": parent_items_removed,
+        }
+
+    # These directories contain Manim/ffmpeg intermediates and should never be retained.
+    transient_dirs = (
+        "out",
+        "media",
+        "partial_movie_files",
+        "Tex",
+        "texts",
+        "images",
+        "sounds",
+    )
+    for name in transient_dirs:
+        target = parent_dir / name
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+                parent_items_removed += 1
+        except Exception:
+            pass
+
+    # Watermarking uses this temporary sibling when interrupted before replacement.
+    for pattern in ("video_watermarked.mp4", "*.tmp", "*.temp"):
+        for target in parent_dir.glob(pattern):
+            try:
+                if target.is_file():
+                    target.unlink()
+                    parent_items_removed += 1
+            except Exception:
+                pass
+
+    if not keep_diagnostics:
+        for name in (
+            "logs",
+            "structured_plan.json",
+            "structured_scene_results.json",
+            "generation_diagnostics.json",
+            ".diagnostic_retention.json",
+        ):
+            target = parent_dir / name
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target, ignore_errors=True)
+                    parent_items_removed += 1
+                elif target.exists():
+                    target.unlink()
+                    parent_items_removed += 1
+            except Exception:
+                pass
+
+    return {
+        "child_jobs_removed": child_jobs_removed,
+        "parent_items_removed": parent_items_removed,
+    }
+
 def cancel_job(job_id: str) -> dict[str, str]:
     """Cancel an exact render or any structured-video child render."""
     actual_job_id = job_id

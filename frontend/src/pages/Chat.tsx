@@ -162,6 +162,12 @@ const normalizeGenerationDiagnostics = (
         .map((stage) => diagnosticText(stage))
         .filter((stage): stage is string => Boolean(stage))
     : [];
+  const repairedScenes = diagnosticCount(raw.repaired_scenes)
+    ?? ((diagnosticCount(raw.sanitizer_repaired) || 0)
+      + (diagnosticCount(raw.render_repaired) || 0));
+  const legacyPlanRepairWasModelCall =
+    Boolean(raw.plan_repaired)
+    && recoveryStages.includes("plan_repair");
 
   return {
     quality_status: status,
@@ -170,15 +176,11 @@ const normalizeGenerationDiagnostics = (
     llm_calls: diagnosticCount(raw.llm_calls),
     total_scenes: diagnosticCount(raw.total_scenes),
     creative_scenes: diagnosticCount(raw.creative_scenes),
-    rendered_initially: diagnosticCount(raw.rendered_initially),
-    sanitizer_repaired: diagnosticCount(raw.sanitizer_repaired),
-    render_repaired: diagnosticCount(raw.render_repaired),
+    repaired_scenes: repairedScenes,
+    plan_repaired_by_model:
+      Boolean(raw.plan_repaired_by_model) || legacyPlanRepairWasModelCall,
     simplified_scenes: diagnosticCount(raw.simplified_scenes),
     component_fallbacks: diagnosticCount(raw.component_fallbacks),
-    local_sanitizer_corrections: diagnosticCount(
-      raw.local_sanitizer_corrections,
-    ),
-    plan_repaired: Boolean(raw.plan_repaired),
     recovery_stages: recoveryStages,
     failure_stage: diagnosticText(raw.failure_stage) || null,
     summary: diagnosticText(raw.summary),
@@ -198,137 +200,69 @@ const compactModelLabel = (diagnostics: GenerationDiagnostics): string => {
   return [provider, model].filter(Boolean).join(" · ");
 };
 
-const diagnosticStatusPresentation = (
-  status: GenerationQualityStatus,
-): { label: string; container: string; dot: string } => {
-  switch (status) {
-    case "full_quality":
-      return {
-        label: "Rendered from initial scripts",
-        container: "border-emerald-500/30 bg-emerald-500/5",
-        dot: "bg-emerald-500",
-      };
-    case "recovered":
-      return {
-        label: "Recovered successfully",
-        container: "border-sky-500/30 bg-sky-500/5",
-        dot: "bg-sky-500",
-      };
-    case "simplified":
-      return {
-        label: "Simplified for reliability",
-        container: "border-amber-500/30 bg-amber-500/5",
-        dot: "bg-amber-500",
-      };
-    case "completed_with_fallback":
-      return {
-        label: "Completed with fallback",
-        container: "border-amber-500/30 bg-amber-500/5",
-        dot: "bg-amber-500",
-      };
-    case "failed":
-      return {
-        label: "Generation failed",
-        container: "border-destructive/30 bg-destructive/5",
-        dot: "bg-destructive",
-      };
-    case "standard":
-    default:
-      return {
-        label: "Standard structured render",
-        container: "border-border bg-background/40",
-        dot: "bg-muted-foreground",
-      };
-  }
-};
-
 const GenerationDiagnosticsPanel: FC<{
   diagnostics?: GenerationDiagnostics;
 }> = ({ diagnostics }) => {
   if (!diagnostics) return null;
 
-  const presentation = diagnosticStatusPresentation(
-    diagnostics.quality_status,
-  );
-  const overview: string[] = [];
-  const recovery: string[] = [];
+  const firstLine: string[] = [];
+  const secondLine: string[] = [];
   const modelLabel = compactModelLabel(diagnostics);
 
-  if (modelLabel) overview.push(modelLabel);
+  if (modelLabel) firstLine.push(modelLabel);
   if (typeof diagnostics.llm_calls === "number") {
-    overview.push(
+    firstLine.push(
       `${diagnostics.llm_calls} model ${diagnostics.llm_calls === 1 ? "call" : "calls"}`,
     );
   }
   if (typeof diagnostics.total_scenes === "number") {
-    overview.push(
+    secondLine.push(
       `${diagnostics.total_scenes} ${diagnostics.total_scenes === 1 ? "scene" : "scenes"}`,
     );
   }
   if (diagnostics.creative_scenes) {
-    overview.push(`${diagnostics.creative_scenes} creative`);
+    secondLine.push(`${diagnostics.creative_scenes} creative`);
   }
 
-  if (diagnostics.plan_repaired) recovery.push("Plan repaired");
-  if (diagnostics.local_sanitizer_corrections) {
-    recovery.push(
-      `${diagnostics.local_sanitizer_corrections} local ${
-        diagnostics.local_sanitizer_corrections === 1 ? "fix" : "fixes"
+  const outcome: string[] = [];
+  if (diagnostics.quality_status === "failed") {
+    outcome.push(
+      diagnostics.failure_stage
+        ? `Failed at ${humanizeDiagnosticToken(diagnostics.failure_stage)}`
+        : "Generation failed",
+    );
+  } else if (diagnostics.component_fallbacks) {
+    outcome.push(
+      `${diagnostics.component_fallbacks} ${
+        diagnostics.component_fallbacks === 1 ? "scene used" : "scenes used"
+      } fallback`,
+    );
+  } else if (diagnostics.simplified_scenes) {
+    outcome.push(
+      `${diagnostics.simplified_scenes} ${
+        diagnostics.simplified_scenes === 1 ? "scene simplified" : "scenes simplified"
       }`,
     );
+  } else {
+    if (diagnostics.plan_repaired_by_model) outcome.push("Plan repaired");
+    if (diagnostics.repaired_scenes) {
+      outcome.push(
+        `${diagnostics.repaired_scenes} ${
+          diagnostics.repaired_scenes === 1 ? "scene repaired" : "scenes repaired"
+        }`,
+      );
+    }
+    if (outcome.length === 0) outcome.push("No repair or fallback");
   }
-  if (diagnostics.sanitizer_repaired) {
-    recovery.push(
-      `${diagnostics.sanitizer_repaired} sanitizer ${
-        diagnostics.sanitizer_repaired === 1 ? "repair" : "repairs"
-      }`,
-    );
-  }
-  if (diagnostics.render_repaired) {
-    recovery.push(
-      `${diagnostics.render_repaired} render ${
-        diagnostics.render_repaired === 1 ? "repair" : "repairs"
-      }`,
-    );
-  }
-  if (diagnostics.simplified_scenes) {
-    recovery.push(`${diagnostics.simplified_scenes} simplified`);
-  }
-  if (diagnostics.component_fallbacks) {
-    recovery.push(
-      `${diagnostics.component_fallbacks} component ${
-        diagnostics.component_fallbacks === 1 ? "fallback" : "fallbacks"
-      }`,
-    );
-  }
+  secondLine.push(outcome.join(" · "));
 
   return (
     <div
-      className={`mt-3 rounded-md border px-3 py-2 text-xs ${presentation.container}`}
+      className="mt-3 border-t border-border/70 pt-2 text-[11px] text-muted-foreground"
       aria-label="Video generation diagnostics"
     >
-      <div className="flex items-center gap-2 font-medium">
-        <span
-          className={`h-2 w-2 rounded-full ${presentation.dot}`}
-          aria-hidden="true"
-        />
-        <span>{presentation.label}</span>
-      </div>
-      {diagnostics.summary && (
-        <p className="mt-1 leading-relaxed text-muted-foreground">
-          {diagnostics.summary}
-        </p>
-      )}
-      {overview.length > 0 && (
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          {overview.join(" · ")}
-        </p>
-      )}
-      {recovery.length > 0 && (
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Recovery: {recovery.join(" · ")}
-        </p>
-      )}
+      {firstLine.length > 0 && <p>{firstLine.join(" · ")}</p>}
+      {secondLine.length > 0 && <p className="mt-0.5">{secondLine.join(" · ")}</p>}
     </div>
   );
 };

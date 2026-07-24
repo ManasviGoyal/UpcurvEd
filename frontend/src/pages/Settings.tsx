@@ -11,6 +11,7 @@ import {
   PROVIDER_IDS,
   normalizeApiKeys,
 } from "@/lib/providerConfig";
+import { apiFetch } from "@/lib/api";
 import {
   clearSecurelyStoredApiKeysForUser,
   isSecureStorageEnabledForUser,
@@ -46,6 +47,8 @@ export const SettingsPage = ({
   const [useSecureStorage, setUseSecureStorage] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [exportBusy, setExportBusy] = useState<boolean>(false);
+  const [exportStatus, setExportStatus] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +111,48 @@ export const SettingsPage = ({
       setView("chat");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleExportDiagnostics = async () => {
+    if (!desktopLocal || exportBusy) return;
+    setExportBusy(true);
+    setExportStatus("");
+
+    try {
+      const response = await apiFetch("/diagnostics/generation-export", {
+        method: "GET",
+      });
+      if (!response.ok) {
+        let detail = "Could not export generation diagnostics.";
+        try {
+          const payload = await response.json();
+          detail = String(payload?.detail || detail);
+        } catch {}
+        throw new Error(detail);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|["']?)([^"';\n]+)/i);
+      const filename = filenameMatch?.[1]
+        ? decodeURIComponent(filenameMatch[1].trim())
+        : "upcurved_generation_diagnostics.zip";
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setExportStatus("Generation diagnostics exported.");
+    } catch (error: any) {
+      setExportStatus(
+        error?.message || "Could not export generation diagnostics."
+      );
+    } finally {
+      setExportBusy(false);
     }
   };
 
@@ -277,6 +322,28 @@ export const SettingsPage = ({
               >
                 Reset local data
               </Button>
+            </div>
+          )}
+
+          {desktopLocal && (
+            <div className="pt-4 border-t space-y-3">
+              <div>
+                <p className="text-sm font-medium">Export generation diagnostics</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Download a privacy-safe summary of video generation performance.
+                </p>
+              </div>
+              <Button
+                onClick={handleExportDiagnostics}
+                variant="outline"
+                className="w-full"
+                disabled={busy || exportBusy}
+              >
+                {exportBusy ? "Preparing export..." : "Export generation diagnostics"}
+              </Button>
+              {exportStatus && (
+                <p className="text-xs text-muted-foreground">{exportStatus}</p>
+              )}
             </div>
           )}
         </div>

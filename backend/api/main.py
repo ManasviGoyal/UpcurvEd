@@ -17,6 +17,7 @@ from uuid import uuid4
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -462,6 +463,30 @@ class ChatDetailOut(BaseModel):
 @app.get("/health")
 def health():
     return {"ok": True, "mode": APP_MODE}
+
+
+@app.get("/diagnostics/generation-export")
+def export_generation_diagnostics(
+    _uid: str = Depends(require_firebase_user),
+):
+    """Download a privacy-safe local generation audit and aggregate summary."""
+    if not DESKTOP_LOCAL_MODE:
+        raise HTTPException(status_code=404, detail="Not available")
+    try:
+        from backend.utils.failure_log import build_generation_export
+
+        export_path = build_generation_export()
+        return FileResponse(
+            path=str(export_path),
+            media_type="application/zip",
+            filename=export_path.name,
+        )
+    except Exception as exc:
+        logger.exception("generation diagnostics export failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not export generation diagnostics.",
+        ) from exc
 
 
 @app.post("/echo")
