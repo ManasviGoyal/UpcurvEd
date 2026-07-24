@@ -120,6 +120,7 @@ def _has_visible_component_content(scene: dict[str, Any]) -> bool:
         str(scene.get("subtitle") or "").strip()
         or str(scene.get("learner_question") or "").strip()
         or str(scene.get("formula") or "").strip()
+        or str(scene.get("code_snippet") or "").strip()
         or [x for x in (scene.get("key_points") or []) if str(x).strip()]
         or [x for x in (scene.get("labels") or []) if str(x).strip()]
         or [x for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
@@ -172,8 +173,101 @@ def _safe_python_literal(value: Any) -> str:
     return repr(value)
 
 
+def build_code_snippet_scene_code(scene: dict[str, Any]) -> str:
+    """Render learner-facing source code without relying on Manim's Code internals.
+
+    This domain-neutral renderer is the final reliable path for any code scene. It uses plain
+    Text rows, line numbers, automatic sizing, and no files, syntax highlighters, or external
+    fonts. The exact snippet remains attached to its scene in the structured bundle.
+    """
+    safe_scene = _scene_for_render(scene)
+    scene_literal = _safe_python_literal(safe_scene)
+    template = r'''
+import re
+import manim as mn
+from manim_voiceover import VoiceoverScene
+from manim_voiceover.services.gtts import GTTSService
+
+
+class GeneratedScene(VoiceoverScene):
+    def construct(self):
+        self.set_speech_service(GTTSService(lang="en"))
+        scene = __SCENE_JSON__
+        title_text = str(scene.get("title") or "Code example")
+        narration = str(scene.get("narration") or title_text)
+        snippet = str(scene.get("code_snippet") or "").replace("\r\n", "\n").replace("\r", "\n").expandtabs(4).strip("\n")
+        raw_lines = snippet.splitlines() if snippet else ["# Code snippet unavailable"]
+        max_visible = 24
+        lines = raw_lines[:max_visible]
+        if len(raw_lines) > max_visible:
+            lines[-1] = "# ... additional lines omitted for display"
+
+        bg = mn.Rectangle(width=mn.config.frame_width, height=mn.config.frame_height)
+        bg.set_fill("#0b1120", opacity=1)
+        bg.set_stroke(width=0)
+        self.add(bg)
+
+        title = mn.Text(title_text, font_size=35, color=mn.WHITE)
+        if title.width > 11.0:
+            title.scale_to_fit_width(11.0)
+        title.to_edge(mn.UP, buff=0.35)
+
+        panel = mn.RoundedRectangle(
+            width=11.5,
+            height=5.55,
+            corner_radius=0.18,
+            color=mn.TEAL_C,
+            stroke_width=1.5,
+        )
+        panel.set_fill("#111827", opacity=0.98)
+        panel.next_to(title, mn.DOWN, buff=0.28)
+
+        longest = max((len(line) for line in lines), default=1)
+        line_count = max(1, len(lines))
+        font_size = min(23, max(13, int(560 / max(24, longest))))
+        font_size = min(font_size, max(13, int(360 / line_count)))
+
+        rows = mn.VGroup()
+        for index, line in enumerate(lines, start=1):
+            number = mn.Text(f"{index:>2}", font_size=font_size, color=mn.GRAY_B)
+            code = mn.Text(line if line else " ", font_size=font_size, color=mn.WHITE)
+            row = mn.VGroup(number, code).arrange(mn.RIGHT, buff=0.28, aligned_edge=mn.DOWN)
+            rows.add(row)
+        rows.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.08)
+        if rows.width > 10.75:
+            rows.scale_to_fit_width(10.75)
+        if rows.height > 4.8:
+            rows.scale_to_fit_height(4.8)
+        rows.move_to(panel.get_center()).align_to(panel, mn.LEFT).shift(mn.RIGHT * 0.34)
+
+        nonempty_indices = [i for i, line in enumerate(lines) if line.strip()]
+        focus_index = nonempty_indices[min(len(nonempty_indices) - 1, max(0, len(nonempty_indices) // 2))] if nonempty_indices else 0
+        focus = mn.SurroundingRectangle(
+            rows[focus_index], color=mn.YELLOW, buff=0.07, corner_radius=0.05
+        )
+
+        with self.voiceover(text=narration) as tracker:
+            self.play(mn.FadeIn(title, shift=mn.DOWN * 0.08), mn.Create(panel), run_time=0.75)
+            self.play(
+                mn.LaggedStart(*[mn.FadeIn(row, shift=mn.RIGHT * 0.08) for row in rows], lag_ratio=0.035),
+                run_time=min(2.2, max(0.9, 0.09 * len(rows))),
+            )
+            self.play(mn.Create(focus), mn.Indicate(rows[focus_index]), run_time=0.75)
+            used = 1.5 + min(2.2, max(0.9, 0.09 * len(rows)))
+            remaining = max(0.15, float(getattr(tracker, "duration", 0) or 0) - used)
+            if remaining > 0.15:
+                self.wait(remaining)
+        self.wait(1.2)
+        self.play(mn.FadeOut(focus), mn.FadeOut(rows), mn.FadeOut(panel), mn.FadeOut(title), run_time=0.55)
+        self.wait(0.1)
+'''.strip() + "\n"
+    return template.replace("__SCENE_JSON__", scene_literal)
+
+
 def build_component_scene_code(scene: dict[str, Any]) -> str:
     """Return one runnable Manim/Voiceover scene for a standard scene object."""
+    if str(scene.get("code_snippet") or "").strip():
+        return build_code_snippet_scene_code(scene)
     scene_literal = _safe_python_literal(_scene_for_render(scene))
     template = r'''
 import re
@@ -475,6 +569,8 @@ def build_concept_fallback_scene_code(scene: dict[str, Any]) -> str:
     A failed creative visual must never collapse into a heading-only slide. Existing learner
     content is preserved, then concise cards are added until at least two visible ideas exist.
     """
+    if str(scene.get("code_snippet") or "").strip():
+        return build_code_snippet_scene_code(scene)
     safe_scene = dict(scene)
     safe_scene["type"] = "concept_scene"
     safe_scene["visual_mode"] = "diagram"
@@ -543,6 +639,7 @@ class GeneratedScene(VoiceoverScene):
         key_points = [str(x) for x in (scene.get("key_points") or []) if str(x).strip()][:5]
         visual = str(scene.get("visual") or scene.get("visual_goal") or scene.get("code_goal") or "")
         formula = str(scene.get("formula") or "").replace("\n", " ").strip()
+        code_snippet = str(scene.get("code_snippet") or "")
         steps = [str(x).replace("\n", " ").strip() for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()][:6]
         step_narrations = [str(x).replace("\n", " ").strip() for x in (scene.get("step_narrations") or []) if str(x).strip()][:6]
         calculation_steps = steps  # legacy alias for existing saved custom bodies

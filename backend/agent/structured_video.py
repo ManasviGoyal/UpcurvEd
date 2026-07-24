@@ -43,6 +43,7 @@ from backend.agent.prompts import (
     build_structured_video_user_prompt,
 )
 from backend.agent.video_components import (
+    build_code_snippet_scene_code,
     build_component_scene_code,
     build_concept_fallback_scene_code,
     build_legacy_custom_scene_code,
@@ -101,6 +102,7 @@ _ALLOWED_ROLES = {
 _ALLOWED_VISUAL_MODES = {
     "diagram",
     "graph",
+    "code",
     "motion",
     "comparison",
     "process",
@@ -337,6 +339,8 @@ def _standard_visible_content_score(scene: dict[str, Any]) -> int:
         return max(2, len(steps))
     if str(scene.get("formula") or "").strip():
         return 2
+    if str(scene.get("code_snippet") or "").strip():
+        return 2
 
     score = 0
     score += len([value for value in (scene.get("key_points") or []) if str(value).strip()])
@@ -485,6 +489,21 @@ def _clean_code_block(source: Any) -> str:
     text = re.sub(r"^[ \t]*```(?:python)?[ \t]*(?:\n)?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"(?:\n)?[ \t]*```[ \t]*$", "", text)
     return textwrap.dedent(text).strip()
+
+
+def _normalize_code_snippet(value: Any, *, max_lines: int = 30, max_chars: int = 6000) -> str:
+    """Preserve readable learner-facing source code without executing it."""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
+    text = re.sub(r"^[ \t]*```(?:[A-Za-z0-9_+-]+)?[ \t]*(?:\n)?", "", text)
+    text = re.sub(r"(?:\n)?[ \t]*```[ \t]*$", "", text)
+    text = text.strip("\n")
+    if not text.strip():
+        return ""
+    lines = text.splitlines()[:max_lines]
+    normalized = "\n".join(line.rstrip() for line in lines).rstrip()
+    if len(normalized) > max_chars:
+        normalized = normalized[: max_chars - 4].rstrip() + "\n..."
+    return normalized
 
 
 def _extract_tagged_section(text: str, tag: str) -> str | None:
@@ -648,6 +667,7 @@ def _parse_tagged_video_plan(text: str) -> tuple[dict[str, Any], str] | None:
         "essential_visual": "ESSENTIAL_VISUAL",
         "requires_3d": "REQUIRES_3D",
         "code_goal": "CODE_GOAL",
+        "code_snippet": "CODE_SNIPPET",
         "manim_script_ref": "MANIM_SCRIPT_REF",
         "manim_body_ref": "MANIM_BODY_REF",
     }
@@ -1052,8 +1072,13 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         visual_mode = str(incoming.get("visual_mode") or "").strip().lower()
         if visual_mode not in _ALLOWED_VISUAL_MODES:
             visual_mode = "text" if scene_type != "custom_manim_scene" else "motion"
-        if visual_mode == "graph":
+        code_snippet = _normalize_code_snippet(
+            incoming.get("code_snippet") or incoming.get("source_code") or ""
+        )
+        if visual_mode in {"graph", "code"} or code_snippet:
             scene_type = "custom_manim_scene"
+        if code_snippet and visual_mode == "text":
+            visual_mode = "code"
 
         scene_title = _short_text(
             incoming.get("title") or incoming.get("heading"), 68, f"{title} {index}"
@@ -1072,7 +1097,11 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
             item_limit=120,
         )
         formula = _normalize_math(incoming.get("formula") or incoming.get("equation"), 220)
-        essential_visual = _coerce_bool(incoming.get("essential_visual")) or visual_mode == "graph"
+        essential_visual = (
+            _coerce_bool(incoming.get("essential_visual"))
+            or visual_mode in {"graph", "code"}
+            or bool(code_snippet)
+        )
         requires_3d = _coerce_bool(incoming.get("requires_3d"))
 
         raw_steps = (
@@ -1136,6 +1165,8 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         }
         if formula:
             scene["formula"] = formula
+        if code_snippet:
+            scene["code_snippet"] = code_snippet
         if steps:
             scene["steps"] = steps
             scene["step_narrations"] = step_narrations
@@ -1163,6 +1194,7 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         "manim_body",
         "manim_body_ref",
         "code_goal",
+        "code_snippet",
         "requires_3d",
     ):
         scenes[0].pop(field, None)
@@ -1174,6 +1206,7 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
             custom_indices,
             key=lambda idx: (
                 not bool(scenes[idx].get("essential_visual")),
+                not bool(scenes[idx].get("code_snippet")),
                 not bool(scenes[idx].get("requires_3d")),
                 idx,
             ),
@@ -1184,8 +1217,8 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
                 continue
             scene = scenes[idx]
             scene["type"] = "concept_scene"
-            scene["visual_mode"] = "diagram"
-            scene["essential_visual"] = False
+            scene["visual_mode"] = "code" if scene.get("code_snippet") else "diagram"
+            scene["essential_visual"] = bool(scene.get("code_snippet"))
             for field in (
                 "manim_script",
                 "manim_script_ref",
@@ -1242,6 +1275,13 @@ def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
             if not scene.get("required_visual_elements"):
                 errors.append(f"Scene {index}: graph scene needs required_visual_elements.")
 
+        code_snippet = str(scene.get("code_snippet") or "").strip()
+        if mode == "code" or code_snippet:
+            if scene_type != "custom_manim_scene":
+                errors.append(f"Scene {index}: learner-facing code must use custom_manim_scene.")
+            if not code_snippet:
+                errors.append(f"Scene {index}: visual_mode=code requires a non-empty CODE_SNIPPET.")
+
         if role == "example" and formula:
             if len(steps) < 3:
                 errors.append(
@@ -1293,6 +1333,13 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
         if not isinstance(scene, dict):
             continue
         visual_mode = str(scene.get("visual_mode") or "")
+
+        if scene.get("code_snippet") and visual_mode != "code":
+            scene["visual_mode"] = "code"
+            scene["type"] = "custom_manim_scene"
+            scene["essential_visual"] = True
+            fixes.append(f"Scene {index}: normalized a learner-facing code scene locally.")
+            visual_mode = "code"
 
         if visual_mode == "graph" and not scene.get("required_visual_elements"):
             inferred = _short_text(
@@ -1392,6 +1439,7 @@ def _inherit_missing_scene_fields(
         "requires_3d",
         "labels",
         "key_points",
+        "code_snippet",
         "manim_script_ref",
         "manim_body_ref",
     )
@@ -1531,6 +1579,27 @@ def _enforce_scene_script_contract(
             for marker in (".plot(", ".plot_line_graph(", ".c2p(", "ParametricFunction(", "FunctionGraph(", "Surface(")
         ):
             errors.append("Graph scene must draw a coordinate-based relationship.")
+    code_snippet = str(scene.get("code_snippet") or "").strip()
+    if str(scene.get("visual_mode") or "").lower() == "code" or code_snippet:
+        if not code_snippet:
+            errors.append("Code scene is missing its learner-facing CODE_SNIPPET.")
+        if not any(marker in source for marker in ("Code(", "MarkupText(", "Text(")):
+            errors.append("Code scene must visibly render the scene CODE_SNIPPET.")
+        if code_snippet:
+            identifiers = [
+                token
+                for token in re.findall(r"[A-Za-z_]\w*", code_snippet)
+                if len(token) >= 4
+                and token.lower() not in {
+                    "return", "range", "while", "class", "import", "from",
+                    "true", "false", "none", "self", "value", "values",
+                }
+            ]
+            if identifiers and not any(re.search(rf"\b{re.escape(token)}\b", source) for token in identifiers[:12]):
+                errors.append(
+                    "Code scene MANIM_SCRIPT does not appear to embed the scene CODE_SNIPPET."
+                )
+
     if _coerce_bool(scene.get("requires_3d")) and not result.uses_3d:
         errors.append("Scene plan requires 3D, but the script contains no 3D object or camera usage.")
 
@@ -2136,7 +2205,11 @@ def _apply_component_fallbacks(
         _flush_response_debug_contexts(metrics, logs_dir)
     for state in failures:
         index = int(state["scene_index"])
-        fallback_code = sanitize_minimally(build_concept_fallback_scene_code(state["scene"]))
+        if str(state["scene"].get("code_snippet") or "").strip():
+            fallback_source = build_code_snippet_scene_code(state["scene"])
+        else:
+            fallback_source = build_concept_fallback_scene_code(state["scene"])
+        fallback_code = sanitize_minimally(fallback_source)
         state["current_script"] = fallback_code
         (logs_dir / f"scene_{index:02d}_component_fallback.py").write_text(
             fallback_code, encoding="utf-8"

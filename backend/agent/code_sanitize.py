@@ -8,8 +8,10 @@ New model-authored creative scenes use complete Python scripts and pass through
 from __future__ import annotations
 
 import ast
+import io
 import os
 import re
+import tokenize
 from dataclasses import asdict, dataclass, field
 from textwrap import dedent
 from typing import Any
@@ -133,11 +135,36 @@ def _guard_negative_waits(src: str) -> str:
     return re.sub(r"self\.wait\(\s*(-?\d+(?:\.\d+)?)\s*\)", clamp_numeric, out)
 
 
+def _string_and_comment_spans(src: str) -> list[tuple[int, int]]:
+    """Return absolute source spans occupied by Python strings or comments."""
+    line_offsets = [0]
+    for line in src.splitlines(keepends=True):
+        line_offsets.append(line_offsets[-1] + len(line))
+
+    spans: list[tuple[int, int]] = []
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(src).readline)
+        for token in tokens:
+            if token.type not in {tokenize.STRING, tokenize.COMMENT}:
+                continue
+            start_line, start_col = token.start
+            end_line, end_col = token.end
+            start = line_offsets[max(0, start_line - 1)] + start_col
+            end = line_offsets[max(0, end_line - 1)] + end_col
+            spans.append((start, end))
+    except (tokenize.TokenError, IndentationError):
+        pass
+    return spans
+
+
 def _balanced_call_spans(src: str, call_name: str) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
+    ignored = _string_and_comment_spans(src)
     pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(call_name)}\s*\(")
     for match in pattern.finditer(src):
         start = match.start()
+        if any(span_start <= start < span_end for span_start, span_end in ignored):
+            continue
         index = match.end()
         depth = 1
         quote = ""
@@ -263,13 +290,124 @@ def _rewrite_call_kwargs(
     return out, changes
 
 
+
+def _sanitize_code_calls(src: str) -> tuple[str, list[str]]:
+    """Normalize Code(...) calls without discarding the learner-facing source.
+
+    Model outputs commonly use ``code=`` or a first positional argument. Both are converted
+    to ``code_string=``. File-backed and styling kwargs are removed because generated scenes
+    must be self-contained and the supported Manim surface varies across installations.
+    """
+    changes: list[str] = []
+    spans = _balanced_call_spans(src, "Code")
+    if not spans:
+        return src, changes
+
+    out = src
+    allowed = {"code_string", "language", "add_line_numbers"}
+    rename = {"code": "code_string"}
+    for start, end in reversed(spans):
+        call = out[start:end]
+        open_index = call.find("(")
+        args = _split_top_level_args(call[open_index + 1 : -1])
+        rebuilt: list[str] = []
+        positional: list[str] = []
+        seen: set[str] = set()
+
+        for arg in args:
+            match = re.match(r"^([A-Za-z_]\w*)\s*=", arg, flags=re.DOTALL)
+            if not match:
+                if arg:
+                    positional.append(arg)
+                continue
+            key = match.group(1)
+            value = arg[match.end() :].strip()
+            new_key = rename.get(key, key)
+            if new_key != key:
+                changes.append("Renamed Code keyword code to code_string")
+            if new_key == "code_file":
+                changes.append("Removed file-backed Code keyword: code_file")
+                continue
+            if new_key not in allowed:
+                changes.append(f"Removed unsupported Code keyword: {key}")
+                continue
+            if new_key in seen:
+                changes.append(f"Removed duplicate Code keyword: {new_key}")
+                continue
+            seen.add(new_key)
+            rebuilt.append(f"{new_key}={value}")
+
+        if positional:
+            if "code_string" not in seen:
+                rebuilt.insert(0, f"code_string={positional[0]}")
+                seen.add("code_string")
+                changes.append("Converted the first positional Code argument to code_string")
+                positional = positional[1:]
+            if positional:
+                changes.append(
+                    f"Removed {len(positional)} unsupported extra positional Code argument"
+                    + ("s" if len(positional) != 1 else "")
+                )
+
+        replacement = f"Code({', '.join(rebuilt)})"
+        out = out[:start] + replacement + out[end:]
+    return out, changes
+
+
+def _code_usage_errors(tree: ast.AST) -> list[str]:
+    """Return deterministic validation errors for fragile or incomplete Code usage."""
+    errors: list[str] = []
+    code_variables: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "Code":
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        code_variables.add(target.id)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Code":
+            code_kw = next((kw for kw in node.keywords if kw.arg == "code_string"), None)
+            if code_kw is None:
+                errors.append(
+                    "Every Code(...) call must provide learner-facing source with code_string=."
+                )
+            elif isinstance(code_kw.value, ast.Constant) and (
+                not isinstance(code_kw.value.value, str) or not code_kw.value.value.strip()
+            ):
+                errors.append("Code(..., code_string=...) cannot be empty.")
+            if node.args:
+                errors.append("Code(...) must not retain positional arguments after sanitization.")
+            unsupported = [
+                kw.arg
+                for kw in node.keywords
+                if kw.arg not in {"code_string", "language", "add_line_numbers"}
+            ]
+            if unsupported:
+                errors.append(
+                    "Unsupported Code keyword(s) remain: " + ", ".join(sorted(set(unsupported)))
+                )
+
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id in code_variables and node.attr in {"code", "lines"}:
+                errors.append(
+                    f"Do not access Code internals through {node.value.id}.{node.attr}; animate the Code object as a whole."
+                )
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            if node.value.id in code_variables:
+                errors.append(
+                    f"Do not index Code internals through {node.value.id}[...]; animate the Code object as a whole."
+                )
+
+    return list(dict.fromkeys(errors))
+
+
 def _patch_known_manim_compatibility(src: str) -> tuple[str, list[str]]:
     changes: list[str] = []
-    out, code_changes = _rewrite_call_kwargs(
-        src,
-        "Code",
-        allowed={"code_string", "code_file", "language", "add_line_numbers"},
-    )
+    out, code_changes = _sanitize_code_calls(src)
     changes.extend(code_changes)
     out, chart_changes = _rewrite_call_kwargs(
         out,
@@ -474,7 +612,8 @@ def _validate_scene_ast(src: str, uses_3d: bool) -> tuple[list[str], str | None]
         errors.append("Creative scene should contain at least two self.play(...) calls.")
     if re.search(r"\b(?:MathTex|Tex)\s*\(", src):
         errors.append("Tex and MathTex are not allowed; use Text with portable formulas.")
-    return errors, None
+    errors.extend(_code_usage_errors(tree))
+    return list(dict.fromkeys(errors)), None
 
 
 def sanitize_manim_script(src: str) -> SanitizeResult:

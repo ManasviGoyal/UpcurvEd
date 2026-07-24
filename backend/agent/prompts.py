@@ -113,6 +113,7 @@ def _format_structured_plan(plan: dict[str, Any]) -> str:
         ("ESSENTIAL_VISUAL", "essential_visual"),
         ("REQUIRES_3D", "requires_3d"),
         ("CODE_GOAL", "code_goal"),
+        ("CODE_SNIPPET", "code_snippet"),
         ("MANIM_SCRIPT_REF", "manim_script_ref"),
     )
     list_fields = (
@@ -204,8 +205,16 @@ Creative quality:
   external graph libraries.
 - Grid-world scenes should build the grid from Rectangles/Squares and visibly animate values,
   actions, transitions, or policy updates.
-- Code scenes should use Code(code_string=..., language="python", add_line_numbers=True) or
-  plain Text/VGroup when a Code object is unnecessary. Do not inspect Code internals.
+- A code scene must display the learner-facing CODE_SNIPPET from its own SCENE_PLAN.
+  Multiple scenes may each have one different CODE_SNIPPET. CODE_SNIPPET is educational
+  source code; MANIM_SCRIPT is the separate executable renderer.
+- For Code mobjects use only Code(code_string=<str>, language="python",
+  add_line_numbers=True). Never use code=, code_file=, file_name=, theme=, font=,
+  font_size=, background_config=, or other Code kwargs. Never access Code internals such as
+  panel.code, panel.lines, or fragile submobject indices. Scale or place the Code mobject as a
+  whole. For a very short snippet, a VGroup of Text lines is also acceptable.
+- Preserve CODE_SNIPPET exactly through plan repair, sanitizer repair, render repair,
+  simplification, and editing. Simplify the animation around it, not the educational code.
 - Prefer two or three focused creative scenes in a normal video, and never more than three.
 
 Before returning each script, silently verify:
@@ -284,10 +293,30 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     complete runnable Python file
     </MANIM_SCRIPT>
 
+    For a code scene, CODE_SNIPPET belongs inside that scene's SCENE_PLAN:
+    <SCENE_PLAN id="4">
+    <TYPE>custom_manim_scene</TYPE>
+    <LEARNING_ROLE>example</LEARNING_ROLE>
+    <VISUAL_MODE>code</VISUAL_MODE>
+    <TITLE>Bellman update in Python</TITLE>
+    <NARRATION>The loop evaluates each action and keeps the highest expected return.</NARRATION>
+    <VISUAL>Show the source code in a readable dark panel and emphasize the update.</VISUAL>
+    <REQUIRED_VISUAL_ELEMENT>readable source code with line numbers</REQUIRED_VISUAL_ELEMENT>
+    <ESSENTIAL_VISUAL>true</ESSENTIAL_VISUAL>
+    <CODE_GOAL>Display and explain the exact learner-facing snippet.</CODE_GOAL>
+    <CODE_SNIPPET>def bellman_update(V, R, P, gamma):
+    for state in range(num_states):
+        V[state] = max(action_values[state])
+    return V</CODE_SNIPPET>
+    <MANIM_SCRIPT_REF>scene_4</MANIM_SCRIPT_REF>
+    </SCENE_PLAN>
+
     Transport rules:
     - Never output JSON, dictionaries, markdown fences, or prose outside tags.
     - Put each field in its own opening and closing tag. Close every SCENE_PLAN.
     - Repeat REQUIRED_VISUAL_ELEMENT, LABEL, KEY_POINT, STEP_TEXT, and STEP_NARRATION as needed.
+    - A SCENE_PLAN may contain at most one CODE_SNIPPET, while multiple different scenes may
+      each contain their own CODE_SNIPPET. Preserve indentation and line breaks inside it.
     - Output all SCENE_PLAN blocks before all MANIM_SCRIPT blocks.
     - Omit optional fields rather than returning empty tags.
 
@@ -295,7 +324,7 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     comparison_scene, custom_manim_scene.
     Allowed LEARNING_ROLE values: intuition, definition, problem, formula, example,
     interpretation.
-    Allowed VISUAL_MODE values: diagram, graph, motion, comparison, process, text.
+    Allowed VISUAL_MODE values: diagram, graph, code, motion, comparison, process, text.
 
     Teaching rules:
     - Scene 1 must be title_scene.
@@ -305,6 +334,8 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     - Worked mathematics must show completed substitution, simplification, and final answer.
     - Teach meaning before notation and show graph meaning before algebra.
     - Every graph scene must be custom_manim_scene with concrete REQUIRED_VISUAL_ELEMENT values.
+    - Every scene whose central visual is source code must use VISUAL_MODE code,
+      custom_manim_scene, ESSENTIAL_VISUAL true, and one non-empty CODE_SNIPPET.
     - Use custom_manim_scene only when a concept benefits from actual spatial, graphical,
       simulated, networked, coded, or 3D explanation. Standard scenes remain preferable for
       titles, concise definitions, comparisons, formulas, and cumulative instructional steps.
@@ -314,7 +345,7 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
       view, network, grid, or 3D visual is central to the user request.
     - Set REQUIRES_3D true only when the complete script genuinely uses 3D objects or camera.
     - Internal fields VISUAL, CODE_GOAL, ESSENTIAL_VISUAL, REQUIRES_3D, and MANIM_SCRIPT_REF
-      are never learner-facing.
+      are never learner-facing. CODE_SNIPPET is learner-facing content shown in the video.
 
     {_COMPLETE_SCRIPT_CONTRACT}
 
@@ -334,6 +365,30 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
                 self.play(GrowFromCenter(left), run_time=0.7)
                 self.play(GrowArrow(arrow), GrowFromCenter(right), run_time=0.9)
                 self.wait(max(0.1, tracker.duration - 1.6))
+            self.wait(1.0)
+    </MANIM_SCRIPT>
+
+    Minimal valid code-panel example:
+    <MANIM_SCRIPT id="scene_example_code">
+    from manim import *
+    from manim_voiceover import VoiceoverScene
+    from manim_voiceover.services.gtts import GTTSService
+
+    class GeneratedScene(VoiceoverScene):
+        def construct(self):
+            self.set_speech_service(GTTSService(lang="en"))
+            snippet = "def update(value, reward, gamma):\n    return reward + gamma * value"
+            panel = Code(
+                code_string=snippet,
+                language="python",
+                add_line_numbers=True,
+            ).scale(0.82)
+            panel.move_to(ORIGIN)
+            frame = SurroundingRectangle(panel, color=TEAL_C, buff=0.22)
+            with self.voiceover(text="This function combines immediate reward with discounted future value.") as tracker:
+                self.play(FadeIn(panel), Create(frame), run_time=1.2)
+                self.play(Indicate(panel), run_time=0.8)
+                self.wait(max(0.1, tracker.duration - 2.0))
             self.wait(1.0)
     </MANIM_SCRIPT>
 
@@ -375,8 +430,9 @@ STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety(f"""\
     custom scenes that are new or changed. Omitted existing scripts are preserved.
 
     Keep good material and make the smallest changes needed. Scene 1 must remain title_scene.
-    Preserve KEY_POINT values and STEP_TEXT/STEP_NARRATION pairs. Every non-title scene must
-    retain meaningful learner-facing visual content. A graph scene must use custom_manim_scene,
+    Preserve KEY_POINT values, STEP_TEXT/STEP_NARRATION pairs, and every scene-level
+    CODE_SNIPPET. Every non-title scene must retain meaningful learner-facing visual content.
+    A code scene must continue to display its exact CODE_SNIPPET. A graph scene must use custom_manim_scene,
     real axes or a number plane, and marked graph features. A worked math example must contain
     completed substitution, simplification, and final answer.
 
@@ -412,8 +468,9 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety(f"""\
     only for custom scenes that are new or changed. Omitted existing scripts are preserved.
 
     You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
-    Preserve useful material and improve learning roles, questions, visible points, steps,
-    formulas, diagrams, graphs, networks, grids, code views, simulations, or 3D visuals as the
+    Preserve useful material and every existing scene-level CODE_SNIPPET. Improve learning
+    roles, questions, visible points, steps, formulas, diagrams, graphs, networks, grids, code
+    views, simulations, or 3D visuals as the
     edit request requires. Prefer standard scenes for reliable text-based teaching and custom
     scenes only when actual Manim visualization adds educational value.
 
@@ -450,7 +507,8 @@ STRUCTURED_VIDEO_BATCH_SANITIZER_REPAIR_SYSTEM = _with_artifact_safety(f"""\
 
     Use the original teaching goal and preserve the intended visual ambition. Correct imports,
     class structure, 2D/3D inheritance, syntax, unresolved references, blocked operations, and
-    static Manim compatibility issues. Return complete runnable files, never fragments.
+    static Manim compatibility issues. When SCENE_DATA contains code_snippet, the repaired
+    MANIM_SCRIPT must display that exact snippet. Return complete runnable files, never fragments.
 
     {_COMPLETE_SCRIPT_CONTRACT}
 """)
@@ -494,7 +552,8 @@ STRUCTURED_VIDEO_BATCH_RENDER_REPAIR_SYSTEM = _with_artifact_safety(f"""\
     Do not return JSON, markdown, commentary, or scripts for scenes that already rendered.
 
     Preserve each scene's teaching purpose and original visual ambition. Fix the actual runtime
-    or compatibility errors shown in the tracebacks. Return complete replacement files, never
+    or compatibility errors shown in the tracebacks. When SCENE_DATA contains code_snippet,
+    preserve and visibly display that exact snippet. Return complete replacement files, never
     fragments.
 
     {_COMPLETE_SCRIPT_CONTRACT}
@@ -544,7 +603,8 @@ STRUCTURED_VIDEO_BATCH_SIMPLIFY_SYSTEM = _with_artifact_safety(f"""\
     technical fragility: use stable Manim primitives, fewer objects, simpler transformations,
     and fewer delicate APIs. Do not replace a scene with only headings, bullet points, or
     decorative motion. A graph must remain a real graph; a network must remain a visible state
-    network; a grid-world must remain a meaningful grid-world explanation.
+    network; a grid-world must remain a meaningful grid-world explanation; and a code scene
+    must still visibly display its exact CODE_SNIPPET, even if the animation becomes simpler.
 
     {_COMPLETE_SCRIPT_CONTRACT}
 """)
