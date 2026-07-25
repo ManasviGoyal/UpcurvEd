@@ -353,6 +353,48 @@ class GeneratedScene(VoiceoverScene):
                 mob.scale_to_fit_width(max_width)
             return mob
 
+        def wrap_complete_text(text, max_chars=48):
+            value = clean_text(text)
+            if not value:
+                return [""]
+            words = value.split()
+            lines = []
+            current = ""
+            for word in words:
+                chunks = [word[index:index + max_chars] for index in range(0, len(word), max_chars)] or [word]
+                for chunk in chunks:
+                    candidate = chunk if not current else f"{current} {chunk}"
+                    if len(candidate) <= max_chars:
+                        current = candidate
+                    else:
+                        if current:
+                            lines.append(current)
+                        current = chunk
+            if current:
+                lines.append(current)
+            return lines or [value]
+
+        def fit_wrapped_text(
+            text,
+            size=30,
+            color=mn.WHITE,
+            max_width=10.4,
+            max_height=2.1,
+            max_chars=48,
+            line_buff=0.1,
+        ):
+            lines = wrap_complete_text(text, max_chars=max_chars)
+            mob = mn.VGroup(*[
+                mn.Text(line if line else " ", font_size=size, color=color)
+                for line in lines
+            ])
+            mob.arrange(mn.DOWN, buff=line_buff)
+            if mob.width > max_width:
+                mob.scale_to_fit_width(max_width)
+            if mob.height > max_height:
+                mob.scale_to_fit_height(max_height)
+            return mob
+
         def formula_mob(text, size=30, color=mn.YELLOW):
             return fit_text(text, size=size, color=color, max_width=10.8)
 
@@ -381,7 +423,15 @@ class GeneratedScene(VoiceoverScene):
             line = mn.Line(start=[-3.9, 0, 0], end=[3.9, 0, 0], color=mn.BLUE_C)
             title = fit_text(title_text, 47, mn.WHITE, 11.0).next_to(line, mn.UP, buff=0.38)
             subtitle_source = subtitle_text or learner_question
-            subtitle = fit_text(subtitle_source, 26, mn.BLUE_B, 10.5).next_to(line, mn.DOWN, buff=0.38)
+            subtitle = fit_wrapped_text(
+                subtitle_source,
+                size=26,
+                color=mn.BLUE_B,
+                max_width=10.5,
+                max_height=1.7,
+                max_chars=54,
+                line_buff=0.08,
+            ).next_to(line, mn.DOWN, buff=0.38)
             formula = formula_mob(formula_text, 27) if formula_text else None
             if formula is not None:
                 formula.next_to(subtitle, mn.DOWN, buff=0.3)
@@ -465,8 +515,16 @@ class GeneratedScene(VoiceoverScene):
 
         if scene_type == "question_scene":
             question_text = subtitle_text or learner_question or title_text
-            q = fit_text(question_text, 33, mn.YELLOW, 10.4).next_to(content_top, mn.DOWN, buff=0.55)
-            mark = mn.Text("?", font_size=82, color=mn.BLUE_C).next_to(q, mn.LEFT, buff=0.3)
+            q = fit_wrapped_text(
+                question_text,
+                size=33,
+                color=mn.YELLOW,
+                max_width=9.7,
+                max_height=2.15,
+                max_chars=50,
+                line_buff=0.11,
+            ).next_to(content_top, mn.DOWN, buff=0.48)
+            mark = mn.Text("?", font_size=78, color=mn.BLUE_C).next_to(q, mn.LEFT, buff=0.24)
             details = mn.VGroup(*[fit_text(x, 22, mn.WHITE, 8.5) for x in labels[:3]])
             if len(details):
                 details.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.18).next_to(q, mn.DOWN, buff=0.45)

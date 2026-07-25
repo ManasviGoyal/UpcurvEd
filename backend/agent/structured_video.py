@@ -178,6 +178,12 @@ def _short_text(value: Any, limit: int, default: str = "") -> str:
     return text
 
 
+def _complete_display_text(value: Any, default: str = "") -> str:
+    """Normalize learner-facing display copy without shortening its wording."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text or default
+
+
 def _normalize_math(value: Any, limit: int = 220) -> str:
     return _short_text(portable_math_text(value), limit, "")
 
@@ -1220,10 +1226,10 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         scene_title = _short_text(
             incoming.get("title") or incoming.get("heading"), 68, f"{title} {index}"
         )
-        scene_subtitle = _short_text(incoming.get("subtitle"), 100, "")
+        scene_subtitle = _complete_display_text(incoming.get("subtitle"), "")
         narration = _short_text(incoming.get("narration"), 900, scene_title)
         visual = _short_text(incoming.get("visual") or incoming.get("visual_goal"), 280, "")
-        learner_question = _short_text(incoming.get("learner_question"), 180, "")
+        learner_question = _complete_display_text(incoming.get("learner_question"), "")
         required_elements = _normalize_string_list(
             incoming.get("required_visual_elements"), limit=6, item_limit=72
         )

@@ -197,6 +197,14 @@ Script structure:
 - Do not use Tex or MathTex. Use Text and portable plain-text formulas instead.
 - Keep every important object inside the frame and remove or transform old objects before
   introducing a new dense layout.
+- Preserve the complete wording of learner-facing questions. Wrap long questions across two or
+  more lines and reduce font size gradually when needed; do not shorten them with string slicing
+  or ellipses merely to make them fit.
+- Treat the outer edge of the video as a safety boundary. Keep essential labels, axes, surfaces,
+  curves, points, and arrows inside roughly the inner 88 percent of the frame.
+- For 3D scenes, use conservative camera framing: start with zoom around 0.75 to 0.85, use compact
+  axis ranges, scale the complete 3D group when needed, and shift it slightly downward when the
+  upper surface approaches the top edge. Reserve visible margin above peaks and below axis labels.
 - Use self.wait(max(0.1, ...)) when waiting on computed durations.
 
 Creative quality guidance:
@@ -207,6 +215,9 @@ Creative quality guidance:
   class. A scene labeled graph may use axes, a number plane, a state diagram, a grid, or another
   clear representation when that better teaches the requested relationship.
 - Prefer stable Manim primitives over external graph libraries or fragile internal APIs.
+- Before animating a graph or 3D scene, inspect the full group bounds conceptually and leave a
+  comfortable border on every side. A visually ambitious scene is still incomplete if a title,
+  curve, surface, arrowhead, or axis label touches or crosses the frame edge.
 - A code scene must display the learner-facing CODE_SNIPPET from its own SCENE_PLAN.
   Multiple scenes may each have one different CODE_SNIPPET. CODE_SNIPPET is educational
   source code; MANIM_SCRIPT is the separate executable renderer.
@@ -410,10 +421,18 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     class GeneratedScene(VoiceoverScene, ThreeDScene):
         def construct(self):
             self.set_speech_service(GTTSService(lang="en"))
-            self.set_camera_orientation(phi=65 * DEGREES, theta=-45 * DEGREES)
-            axes = ThreeDAxes()
+            self.set_camera_orientation(phi=65 * DEGREES, theta=-45 * DEGREES, zoom=0.8)
+            axes = ThreeDAxes(
+                x_range=[-2.5, 2.5, 1],
+                y_range=[-2.5, 2.5, 1],
+                z_range=[0, 2.5, 0.5],
+                x_length=5.4,
+                y_length=5.4,
+                z_length=3.0,
+            )
             surface = Surface(lambda u, v: axes.c2p(u, v, 0.18 * (u*u + v*v)),
                               u_range=[-2, 2], v_range=[-2, 2], resolution=(16, 16))
+            visual_group = Group(axes, surface).scale(0.82).shift(DOWN * 0.3)
             with self.voiceover(text="The bowl shape has one lowest region.") as tracker:
                 self.play(Create(axes), FadeIn(surface), run_time=1.5)
                 self.wait(max(0.1, tracker.duration - 1.5))
