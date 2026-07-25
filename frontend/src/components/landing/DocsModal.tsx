@@ -189,7 +189,7 @@ export default function DocsModal({ isDark, onClose }: DocsModalProps) {
           <section className={`rounded-xl border p-4 sm:p-5 ${sectionClass}`}>
             <h3 className="mb-2 text-lg font-bold">Example prompt</h3>
             <div className={`rounded-lg border p-4 font-mono text-sm ${codeClass}`}>
-              Create a short animated lesson explaining fractions using a pizza example.
+              Explain how to add fractions.
             </div>
           </section>
 
