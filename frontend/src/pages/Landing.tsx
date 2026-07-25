@@ -1,28 +1,35 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from "react";
+import DocsModal from "@/components/landing/DocsModal";
 import { trackEvent } from "@/lib/analytics";
+
+const FEEDBACK_FORM_URL =
+  "https://docs.google.com/forms/d/e/1FAIpQLSemR4uuVdmnGVFjcGRc3bSGsZ1zcNRLgQuSXZuYSVw-CkI68g/viewform?usp=header";
 
 export default function Landing({ setView: _setView }: { setView?: (view: string) => void }) {
   const [isDark, setIsDark] = useState(true);
   const [mutedStates, setMutedStates] = useState([true, true, true]);
-  const windowsDownloadUrl = (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
-  const macDownloadUrl = (import.meta.env.VITE_MAC_DOWNLOAD_URL as string | undefined) || "";
-  const linuxDownloadUrl = (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) || "";
+  const [isDocsOpen, setIsDocsOpen] = useState(false);
+  const windowsDownloadUrl =
+    (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
+  const macDownloadUrl =
+    (import.meta.env.VITE_MAC_DOWNLOAD_URL as string | undefined) || "";
+  const linuxDownloadUrl =
+    (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) || "";
   const iconColor = isDark ? "FFFFFF" : "0F172A";
   const appleLogo = `https://cdn.simpleicons.org/apple/${iconColor}`;
   const linuxLogo = `https://cdn.simpleicons.org/linux/${iconColor}`;
 
   useEffect(() => {
-    // Determine theme based on time of day
+    // Dark mode from 6 PM to 6 AM.
     const hour = new Date().getHours();
-    // Dark mode from 6 PM (18) to 6 AM (6)
     setIsDark(hour >= 18 || hour < 6);
   }, []);
 
-  const toggleMute = (index) => {
-    setMutedStates(prev => {
-      const newStates = [...prev];
-      newStates[index] = !newStates[index];
-      return newStates;
+  const toggleMute = (index: number) => {
+    setMutedStates((previous) => {
+      const next = [...previous];
+      next[index] = !next[index];
+      return next;
     });
   };
 
@@ -32,85 +39,157 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  const bgClass = isDark 
-    ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900' 
-    : 'bg-gradient-to-br from-slate-50 via-white to-slate-100';
-  
-  const textPrimary = isDark ? 'text-white' : 'text-slate-900';
-  const textSecondary = isDark ? 'text-slate-300' : 'text-slate-600';
-  const textTertiary = isDark ? 'text-slate-400' : 'text-slate-500';
-  const cardBg = isDark ? 'bg-slate-800/50' : 'bg-white';
-  const cardBorder = isDark ? 'border-slate-700' : 'border-slate-200';
+  const handleDocsOpen = () => {
+    trackEvent("docs_open", { source: "landing" });
+    setIsDocsOpen(true);
+  };
 
-  // Example videos data
+  const handleFeedbackClick = () => {
+    trackEvent("feedback_click", { source: "landing" });
+    window.open(FEEDBACK_FORM_URL, "_blank", "noopener,noreferrer");
+  };
+
+  const bgClass = isDark
+    ? "bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
+    : "bg-gradient-to-br from-slate-50 via-white to-slate-100";
+
+  const textPrimary = isDark ? "text-white" : "text-slate-900";
+  const textSecondary = isDark ? "text-slate-300" : "text-slate-600";
+  const textTertiary = isDark ? "text-slate-400" : "text-slate-500";
+  const cardBg = isDark ? "bg-slate-800/50" : "bg-white";
+  const cardBorder = isDark ? "border-slate-700" : "border-slate-200";
+  const utilityButtonClass = isDark
+    ? "border-slate-600 bg-slate-900/65 text-slate-100 hover:border-slate-500 hover:bg-slate-800"
+    : "border-slate-300 bg-white/75 text-slate-800 hover:border-slate-400 hover:bg-white";
+
   const exampleVideos = [
     {
-      title: 'Convex Optimization',
-      description: 'Visualize 3D graphs',
-      videoUrl: '/landing_snippets/demo1_convex.mov',
-      category: 'Algorithm'
+      title: "Convex Optimization",
+      description: "Visualize 3D graphs",
+      videoUrl: "/landing_snippets/demo1_convex.mov",
+      category: "Algorithm",
     },
     {
-      title: 'LangGraph Agent State',
-      description: 'Visualize systems',
-      videoUrl: '/landing_snippets/demo2_langgraph.mov',
-      category: 'AI Systems'
+      title: "LangGraph Agent State",
+      description: "Visualize systems",
+      videoUrl: "/landing_snippets/demo2_langgraph.mov",
+      category: "AI Systems",
     },
     {
-      title: 'Bellman Grid World',
-      description: 'Include code snippets',
-      videoUrl: '/landing_snippets/demo3_bellman.mov',
-      category: 'ML Theory'
-    }
+      title: "Bellman Grid World",
+      description: "Include code snippets",
+      videoUrl: "/landing_snippets/demo3_bellman.mov",
+      category: "ML Theory",
+    },
   ];
 
   return (
-    <div className={`min-h-screen ${bgClass} transition-colors duration-500 relative overflow-hidden`}>
-      {/* Decorative background elements */}
+    <div
+      className={`min-h-screen ${bgClass} relative overflow-hidden transition-colors duration-500`}
+    >
       <div className="absolute inset-0 overflow-hidden opacity-20">
-        <div className={`absolute top-20 right-20 w-96 h-96 ${isDark ? 'bg-teal-500' : 'bg-teal-400'} rounded-full blur-3xl animate-pulse`}></div>
-        <div className={`absolute bottom-20 left-20 w-96 h-96 ${isDark ? 'bg-purple-600' : 'bg-purple-400'} rounded-full blur-3xl`} style={{ animationDelay: '1s' }}></div>
+        <div
+          className={`absolute right-20 top-20 h-96 w-96 rounded-full ${
+            isDark ? "bg-teal-500" : "bg-teal-400"
+          } animate-pulse blur-3xl`}
+        />
+        <div
+          className={`absolute bottom-20 left-20 h-96 w-96 rounded-full ${
+            isDark ? "bg-purple-600" : "bg-purple-400"
+          } blur-3xl`}
+          style={{ animationDelay: "1s" }}
+        />
       </div>
 
-      <div className="relative z-10 min-h-screen flex flex-col items-center justify-center p-8 py-16">
-        <div className="max-w-7xl w-full">
-          {/* Header with Logo */}
-          <div className="text-center mb-12">
-            <div className="inline-flex items-center gap-3 mb-6">
-              <div className="relative w-14 h-14">
-                <div className="absolute top-0 left-0 w-10 h-10 bg-teal-400 rounded-full"></div>
-                <div className="absolute bottom-0 right-0 w-8 h-8 bg-purple-500 rounded"></div>
-                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                  <div className={`w-0 h-0 border-l-[18px] border-l-transparent border-r-[18px] border-r-transparent border-b-[30px] ${isDark ? 'border-b-slate-900' : 'border-b-slate-50'}`}></div>
+      <div className="absolute right-4 top-4 z-20 flex items-center gap-2 sm:right-6 sm:top-6">
+        <button
+          type="button"
+          onClick={handleDocsOpen}
+          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
+          aria-label="Open Docs and FAQ"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M4 5.5A2.5 2.5 0 016.5 3H11v16H6.5A2.5 2.5 0 004 21.5v-16zM20 5.5A2.5 2.5 0 0017.5 3H13v16h4.5a2.5 2.5 0 012.5 2.5v-16z"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Docs
+        </button>
+
+        <button
+          type="button"
+          onClick={handleFeedbackClick}
+          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
+          aria-label="Open feedback form"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M5 5h14a2 2 0 012 2v8a2 2 0 01-2 2h-7l-4.5 3v-3H5a2 2 0 01-2-2V7a2 2 0 012-2z"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path d="M7 9h10M7 13h6" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          Feedback
+        </button>
+      </div>
+
+      <div className="relative z-10 flex min-h-screen flex-col items-center justify-center p-8 py-16">
+        <div className="w-full max-w-7xl">
+          <div className="mb-12 text-center">
+            <div className="mb-6 inline-flex items-center gap-3">
+              <div className="relative h-14 w-14">
+                <div className="absolute left-0 top-0 h-10 w-10 rounded-full bg-teal-400" />
+                <div className="absolute bottom-0 right-0 h-8 w-8 rounded bg-purple-500" />
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 transform">
+                  <div
+                    className={`h-0 w-0 border-b-[30px] border-l-[18px] border-r-[18px] border-l-transparent border-r-transparent ${
+                      isDark ? "border-b-slate-900" : "border-b-slate-50"
+                    }`}
+                  />
                 </div>
               </div>
-              <h1 className={`text-4xl md:text-5xl font-black ${textPrimary}`}>
-                UpcurvEd
-              </h1>
+              <h1 className={`text-4xl font-black md:text-5xl ${textPrimary}`}>UpcurvEd</h1>
             </div>
-            <p className={`text-xl md:text-2xl ${textSecondary} font-light max-w-3xl mx-auto mb-3`}>
+            <p
+              className={`mx-auto mb-3 max-w-3xl text-xl font-light md:text-2xl ${textSecondary}`}
+            >
               Create Educational Content with Natural Language
             </p>
-            <p className={`text-lg ${textTertiary} max-w-2xl mx-auto`}>
+            <p className={`mx-auto max-w-2xl text-lg ${textTertiary}`}>
               Animations, podcasts, quizzes, and interactive visuals.
             </p>
           </div>
 
-          {/* Video Showcase - Bigger Size */}
-          <div className="mb-10 max-w-6xl mx-auto">
-            <h2 className={`text-xl font-semibold ${textPrimary} text-center mb-6`}>
+          <div className="mx-auto mb-10 max-w-6xl">
+            <h2 className={`mb-6 text-center text-xl font-semibold ${textPrimary}`}>
               See What You Can Create
             </h2>
-            <div className="flex gap-6 justify-center flex-wrap">
+            <div className="flex flex-wrap justify-center gap-6">
               {exampleVideos.map((video, idx) => (
-                <div 
-                  key={idx}
-                  className={`group relative ${cardBg} backdrop-blur-sm rounded-xl overflow-hidden border ${cardBorder} shadow-md hover:shadow-xl transition-all duration-300 hover:scale-105 w-80`}
+                <div
+                  key={video.title}
+                  className={`group relative w-80 overflow-hidden rounded-xl border ${cardBg} ${cardBorder} shadow-md backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:shadow-xl`}
                 >
-                  {/* Video */}
-                  <div className="relative aspect-video bg-slate-800 overflow-hidden">
-                    <video 
-                      className="w-full h-full object-cover"
+                  <div className="relative aspect-video overflow-hidden bg-slate-800">
+                    <video
+                      className="h-full w-full object-cover"
                       autoPlay
                       loop
                       muted={mutedStates[idx]}
@@ -118,100 +197,135 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                     >
                       <source src={video.videoUrl} type="video/mp4" />
                     </video>
-                    
-                    {/* Sound Toggle Button */}
+
                     <button
+                      type="button"
                       onClick={() => toggleMute(idx)}
-                      className={`absolute bottom-3 right-3 w-10 h-10 rounded-full ${isDark ? 'bg-slate-900/70' : 'bg-white/70'} backdrop-blur-sm flex items-center justify-center hover:scale-110 transition-transform z-10`}
+                      aria-label={mutedStates[idx] ? `Unmute ${video.title}` : `Mute ${video.title}`}
+                      className={`absolute bottom-3 right-3 z-10 flex h-10 w-10 items-center justify-center rounded-full ${
+                        isDark ? "bg-slate-900/70" : "bg-white/70"
+                      } backdrop-blur-sm transition-transform hover:scale-110`}
                     >
                       {mutedStates[idx] ? (
-                        <svg className={`w-5 h-5 ${isDark ? 'text-white' : 'text-slate-900'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" clipRule="evenodd" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                        <svg
+                          className={`h-5 w-5 ${isDark ? "text-white" : "text-slate-900"}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
+                            clipRule="evenodd"
+                          />
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"
+                          />
                         </svg>
                       ) : (
-                        <svg className={`w-5 h-5 ${isDark ? 'text-white' : 'text-slate-900'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                        <svg
+                          className={`h-5 w-5 ${isDark ? "text-white" : "text-slate-900"}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
+                          />
                         </svg>
                       )}
                     </button>
 
-                    {/* Category Badge */}
-                    <div className="absolute top-2 left-2">
-                      <span className="px-2.5 py-1 bg-teal-500 text-white text-xs font-semibold rounded-full">
+                    <div className="absolute left-2 top-2">
+                      <span className="rounded-full bg-teal-500 px-2.5 py-1 text-xs font-semibold text-white">
                         {video.category}
                       </span>
                     </div>
                   </div>
-                  
-                  {/* Video Info */}
+
                   <div className="p-4">
-                    <h3 className={`text-base font-bold ${textPrimary} mb-1`}>
-                      {video.title}
-                    </h3>
-                    <p className={`text-sm ${textSecondary}`}>
-                      {video.description}
-                    </p>
+                    <h3 className={`mb-1 text-base font-bold ${textPrimary}`}>{video.title}</h3>
+                    <p className={`text-sm ${textSecondary}`}>{video.description}</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Desktop Download Section */}
           <div className="flex flex-col items-center gap-4">
-            <h3 className={`text-lg md:text-xl font-semibold ${textPrimary}`}>
+            <h3 className={`text-lg font-semibold md:text-xl ${textPrimary}`}>
               Download UpcurvEd Desktop
             </h3>
             <div className="flex flex-wrap items-center justify-center gap-4">
               <button
                 type="button"
                 onClick={() => handleDownloadClick("windows", windowsDownloadUrl)}
-                className={`min-w-[240px] px-6 py-4 rounded-xl border text-base font-semibold transition-colors inline-flex items-center justify-center gap-3 disabled:cursor-not-allowed ${
+                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors disabled:cursor-not-allowed ${
                   isDark
-                    ? "border-teal-500 text-white hover:bg-teal-500 hover:text-white disabled:bg-slate-800 disabled:text-slate-400 disabled:border-slate-600"
-                    : "border-teal-500 text-slate-900 hover:bg-teal-500 hover:text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:border-slate-300"
+                    ? "border-teal-500 text-white hover:bg-teal-500 hover:text-white disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
+                    : "border-teal-500 text-slate-900 hover:bg-teal-500 hover:text-white disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500"
                 }`}
                 disabled={!windowsDownloadUrl}
-                title={windowsDownloadUrl ? "Download for Windows" : "Windows download URL not configured"}
+                title={
+                  windowsDownloadUrl
+                    ? "Download for Windows"
+                    : "Windows download URL not configured"
+                }
               >
-                <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
-                  <path fill="currentColor" d="M2 3.5l9.5-1.3v9H2v-7.7zm10.8-1.5L22 0.7v10.5h-9.2V2zm-10.8 10.5h9.5v9L2 20.2v-7.7zm10.8 0H22V23.3l-9.2-1.3v-9.5z" />
+                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M2 3.5l9.5-1.3v9H2v-7.7zm10.8-1.5L22 0.7v10.5h-9.2V2zm-10.8 10.5h9.5v9L2 20.2v-7.7zm10.8 0H22V23.3l-9.2-1.3v-9.5z"
+                  />
                 </svg>
                 Download for Windows
               </button>
+
               <button
                 type="button"
                 onClick={() => handleDownloadClick("mac", macDownloadUrl)}
-                className={`min-w-[240px] px-6 py-4 rounded-xl border text-base font-semibold transition-colors inline-flex items-center justify-center gap-3 disabled:cursor-not-allowed ${
+                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors disabled:cursor-not-allowed ${
                   isDark
-                    ? "border-purple-500 text-white hover:bg-purple-500 hover:text-white disabled:bg-slate-800 disabled:text-slate-400 disabled:border-slate-600"
-                    : "border-purple-500 text-slate-900 hover:bg-purple-500 hover:text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:border-slate-300"
+                    ? "border-purple-500 text-white hover:bg-purple-500 hover:text-white disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
+                    : "border-purple-500 text-slate-900 hover:bg-purple-500 hover:text-white disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500"
                 }`}
                 disabled={!macDownloadUrl}
                 title={macDownloadUrl ? "Download for macOS" : "macOS download URL not configured"}
               >
-                <img src={appleLogo} alt="Apple logo" className="w-5 h-5" loading="lazy" />
+                <img src={appleLogo} alt="Apple logo" className="h-5 w-5" loading="lazy" />
                 Download for macOS
               </button>
+
               <button
                 type="button"
                 onClick={() => handleDownloadClick("linux", linuxDownloadUrl)}
-                className={`min-w-[240px] px-6 py-4 rounded-xl border text-base font-semibold transition-colors inline-flex items-center justify-center gap-3 disabled:cursor-not-allowed ${
+                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors disabled:cursor-not-allowed ${
                   isDark
-                    ? "border-blue-500 text-white hover:bg-blue-500 hover:text-white disabled:bg-slate-800 disabled:text-slate-400 disabled:border-slate-600"
-                    : "border-blue-500 text-slate-900 hover:bg-blue-500 hover:text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:border-slate-300"
+                    ? "border-blue-500 text-white hover:bg-blue-500 hover:text-white disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
+                    : "border-blue-500 text-slate-900 hover:bg-blue-500 hover:text-white disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500"
                 }`}
                 disabled={!linuxDownloadUrl}
                 title={linuxDownloadUrl ? "Download for Linux" : "Linux download URL not configured"}
               >
-                <img src={linuxLogo} alt="Linux logo" className="w-5 h-5" loading="lazy" />
+                <img src={linuxLogo} alt="Linux logo" className="h-5 w-5" loading="lazy" />
                 Download for Linux
               </button>
             </div>
           </div>
         </div>
       </div>
+
+      {isDocsOpen && <DocsModal isDark={isDark} onClose={() => setIsDocsOpen(false)} />}
 
       <style>{`
         @keyframes pulse {
