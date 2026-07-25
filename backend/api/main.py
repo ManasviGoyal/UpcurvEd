@@ -65,12 +65,74 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _safe_client_created_at(value: object, fallback_ms: int) -> int:
+    """Return a stable client creation time without trusting extreme values."""
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except Exception:
+        return fallback_ms
+    max_future_skew_ms = 24 * 60 * 60 * 1000
+    if parsed <= 0 or parsed > fallback_ms + max_future_skew_ms:
+        return fallback_ms
+    return parsed
+
+
+def _safe_message_sequence(
+    value: object,
+    client_created_at: int,
+) -> int:
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+        if parsed >= 0:
+            return parsed
+    except Exception:
+        pass
+    return client_created_at * 1000
+
+
+def _stored_message_sort_key(message: dict) -> tuple[int, int, str]:
+    return (
+        int(message.get("createdAt", 0) or 0),
+        int(message.get("sequence", 0) or 0),
+        str(message.get("message_id") or ""),
+    )
+
+
 def _desktop_user(uid: str) -> dict:
     return _DESKTOP_STORE.setdefault(uid, {"chats": {}})
 
 
 def _desktop_chat(uid: str, chat_id: str) -> dict | None:
     return _desktop_user(uid)["chats"].get(chat_id)
+
+
+def _normalize_desktop_messages(messages: object) -> list[dict]:
+    """Backfill stable IDs/order metadata for legacy desktop chat records."""
+    if not isinstance(messages, list):
+        return []
+    normalized: list[dict] = []
+    fallback_base = _now_ms()
+    for index, value in enumerate(messages):
+        if not isinstance(value, dict):
+            continue
+        message = dict(value)
+        created_at = int(message.get("createdAt", 0) or 0)
+        if created_at <= 0:
+            created_at = fallback_base + index
+            message["createdAt"] = created_at
+        client_created_at = int(
+            message.get("clientCreatedAt", 0) or 0
+        ) or created_at
+        message["clientCreatedAt"] = client_created_at
+        message["sequence"] = int(message.get("sequence", 0) or 0) or (
+            client_created_at * 1000 + index
+        )
+        message["message_id"] = str(
+            message.get("message_id")
+            or f"legacy-{created_at}-{index}"
+        )
+        normalized.append(message)
+    return normalized
 
 
 def _normalize_desktop_store(raw: dict | None) -> dict[str, dict]:
@@ -80,11 +142,18 @@ def _normalize_desktop_store(raw: dict | None) -> dict[str, dict]:
     for uid, user_data in raw.items():
         if not isinstance(uid, str):
             continue
-        chats = {}
+        chats: dict[str, dict] = {}
         if isinstance(user_data, dict):
             chats_in = user_data.get("chats", {})
             if isinstance(chats_in, dict):
-                chats = chats_in
+                for chat_id, value in chats_in.items():
+                    if not isinstance(chat_id, str) or not isinstance(value, dict):
+                        continue
+                    chat = dict(value)
+                    chat["messages"] = _normalize_desktop_messages(
+                        chat.get("messages", [])
+                    )
+                    chats[chat_id] = chat
         out[uid] = {"chats": chats}
     return out
 
@@ -97,7 +166,10 @@ def _load_desktop_store() -> None:
             _DESKTOP_STORE = {}
             return
         data = json.loads(_DESKTOP_STATE_FILE.read_text(encoding="utf-8"))
-        _DESKTOP_STORE = _normalize_desktop_store(data)
+        normalized = _normalize_desktop_store(data)
+        _DESKTOP_STORE = normalized
+        if normalized != data:
+            _save_desktop_store()
     except Exception as exc:
         logger.warning(
             "Failed to load desktop state from %s: %s",
@@ -428,6 +500,8 @@ class MessageCreateIn(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     media: MessageMedia | None = None
+    clientCreatedAt: int | None = None
+    sequence: int | None = None
     quizAnchor: bool | None = None
     quizTitle: str | None = None
     quizData: dict | None = None
@@ -438,6 +512,8 @@ class MessageOut(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     createdAt: int | None = None
+    clientCreatedAt: int | None = None
+    sequence: int | None = None
     media: MessageMedia | None = None
     quizAnchor: bool | None = None
     quizTitle: str | None = None
@@ -2049,11 +2125,7 @@ def _paginate_messages(
                 for message in messages
                 if int(message.get("createdAt", 0) or 0) < before_ms
             ]
-        messages.sort(
-            key=lambda message: int(
-                message.get("createdAt", 0) or 0
-            )
-        )
+        messages.sort(key=_stored_message_sort_key)
         has_more = len(messages) > limit
         if has_more:
             messages = messages[-limit:]
@@ -2063,6 +2135,10 @@ def _paginate_messages(
                 role=message.get("role", "assistant"),
                 content=message.get("content", ""),
                 createdAt=int(message.get("createdAt", 0) or 0),
+                clientCreatedAt=int(
+                    message.get("clientCreatedAt", 0) or 0
+                ) or None,
+                sequence=int(message.get("sequence", 0) or 0) or None,
                 media=message.get("media"),
                 quizAnchor=message.get("quizAnchor"),
                 quizTitle=message.get("quizTitle"),
@@ -2097,12 +2173,13 @@ def _paginate_messages(
     else:
         query = messages_ref.order_by(
             "createdAt",
-            direction=gcf.Query.ASCENDING,
+            direction=gcf.Query.DESCENDING,
         ).limit(limit + 1)
         snapshots = list(query.stream())
         has_more = len(snapshots) > limit
         if has_more:
             snapshots = snapshots[:limit]
+        snapshots.reverse()
 
     output: list[MessageOut] = []
     for snapshot in snapshots:
@@ -2113,12 +2190,29 @@ def _paginate_messages(
                 role=data.get("role", "assistant"),
                 content=data.get("content", ""),
                 createdAt=_to_ms(data.get("createdAt")),
+                clientCreatedAt=(
+                    int(data.get("clientCreatedAt"))
+                    if data.get("clientCreatedAt") is not None
+                    else None
+                ),
+                sequence=(
+                    int(data.get("sequence"))
+                    if data.get("sequence") is not None
+                    else None
+                ),
                 media=data.get("media") or None,
                 quizAnchor=data.get("quizAnchor") or None,
                 quizTitle=data.get("quizTitle") or None,
                 quizData=data.get("quizData") or None,
             )
         )
+    output.sort(
+        key=lambda message: (
+            int(message.createdAt or 0),
+            int(message.sequence or 0),
+            message.message_id,
+        )
+    )
     return output, has_more
 
 
@@ -2171,7 +2265,7 @@ def get_chat(
     )
 
 
-def append_message(chat_id: str, body: MessageCreateIn, uid: str):
+def append_message(chat_id: str, body: MessageCreateIn, uid: str) -> MessageOut:
     if DESKTOP_LOCAL_MODE:
         chat = _desktop_chat(uid, chat_id)
         if not chat:
@@ -2185,16 +2279,6 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
             except Exception:
                 media_dict = None
 
-        payload = {
-            "message_id": message_id,
-            "role": body.role,
-            "content": body.content,
-            "createdAt": now_ms,
-            "media": media_dict,
-            "quizAnchor": body.quizAnchor,
-            "quizTitle": body.quizTitle,
-            "quizData": body.quizData,
-        }
         messages = chat.setdefault("messages", [])
         existing_index = next(
             (
@@ -2204,17 +2288,54 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
             ),
             -1,
         )
+        existing_message = (
+            dict(messages[existing_index])
+            if existing_index >= 0
+            else {}
+        )
+        last_created_at = max(
+            (int(message.get("createdAt", 0) or 0) for message in messages),
+            default=0,
+        )
+        created_at = int(existing_message.get("createdAt", 0) or 0) or max(
+            now_ms,
+            last_created_at + 1,
+        )
+        client_created_at = int(
+            existing_message.get("clientCreatedAt", 0) or 0
+        ) or _safe_client_created_at(body.clientCreatedAt, now_ms)
+        sequence = int(existing_message.get("sequence", 0) or 0) or _safe_message_sequence(
+            body.sequence,
+            client_created_at,
+        )
+
+        payload = {
+            **existing_message,
+            "message_id": message_id,
+            "role": body.role,
+            "content": body.content,
+            "createdAt": created_at,
+            "clientCreatedAt": client_created_at,
+            "sequence": sequence,
+            "media": media_dict,
+            "quizAnchor": body.quizAnchor,
+            "quizTitle": body.quizTitle,
+            "quizData": body.quizData,
+        }
         if existing_index >= 0:
             messages[existing_index] = payload
         else:
             messages.append(payload)
-        chat["updatedAt"] = now_ms
+        messages.sort(key=_stored_message_sort_key)
+        chat["updatedAt"] = max(now_ms, created_at)
         _save_desktop_store()
         return MessageOut(
             message_id=message_id,
             role=body.role,
             content=body.content,
-            createdAt=now_ms,
+            createdAt=created_at,
+            clientCreatedAt=client_created_at,
+            sequence=sequence,
             media=media_dict,
             quizAnchor=body.quizAnchor,
             quizTitle=body.quizTitle,
@@ -2231,11 +2352,22 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
         else chat_ref.collection("messages").document()
     )
     existing = message_ref.get()
+    existing_data = (existing.to_dict() or {}) if existing.exists else {}
+    now_ms = _now_ms()
+    client_created_at = int(
+        existing_data.get("clientCreatedAt", 0) or 0
+    ) or _safe_client_created_at(body.clientCreatedAt, now_ms)
+    sequence = int(existing_data.get("sequence", 0) or 0) or _safe_message_sequence(
+        body.sequence,
+        client_created_at,
+    )
     now = gcf.SERVER_TIMESTAMP
     data_to_set = {
         "role": body.role,
         "content": body.content,
         "createdAt": now,
+        "clientCreatedAt": client_created_at,
+        "sequence": sequence,
     }
 
     if body.media is not None:
@@ -2253,16 +2385,17 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
         data_to_set["quizData"] = body.quizData
 
     if existing.exists:
-        try:
-            message_ref.update(
-                {
-                    key: value
-                    for key, value in data_to_set.items()
-                    if key != "createdAt"
-                }
-            )
-        except Exception:
-            pass
+        update_values = {
+            key: value
+            for key, value in data_to_set.items()
+            if key != "createdAt"
+        }
+        # Preserve immutable order fields once a message has been stored.
+        if existing_data.get("clientCreatedAt") is not None:
+            update_values.pop("clientCreatedAt", None)
+        if existing_data.get("sequence") is not None:
+            update_values.pop("sequence", None)
+        message_ref.update(update_values)
     else:
         message_ref.set(data_to_set)
 
@@ -2274,6 +2407,16 @@ def append_message(chat_id: str, body: MessageCreateIn, uid: str):
         role=data.get("role", body.role),
         content=data.get("content", body.content),
         createdAt=_to_ms(data.get("createdAt")),
+        clientCreatedAt=(
+            int(data.get("clientCreatedAt"))
+            if data.get("clientCreatedAt") is not None
+            else None
+        ),
+        sequence=(
+            int(data.get("sequence"))
+            if data.get("sequence") is not None
+            else None
+        ),
         media=data.get("media") or None,
         quizAnchor=data.get("quizAnchor") or None,
         quizTitle=data.get("quizTitle") or None,
@@ -2507,9 +2650,7 @@ def export_chat(
             raise HTTPException(status_code=404, detail="Chat not found")
         messages = sorted(
             list(chat.get("messages", [])),
-            key=lambda message: int(
-                message.get("createdAt", 0) or 0
-            ),
+            key=_stored_message_sort_key,
         )
         output_messages = [
             {
@@ -2519,6 +2660,12 @@ def export_chat(
                 "createdAt": int(
                     message.get("createdAt", 0) or 0
                 ),
+                "clientCreatedAt": int(
+                    message.get("clientCreatedAt", 0) or 0
+                ) or None,
+                "sequence": int(
+                    message.get("sequence", 0) or 0
+                ) or None,
                 "media": message.get("media") or None,
             }
             for message in messages
@@ -2556,6 +2703,8 @@ def export_chat(
                 "role": data.get("role"),
                 "content": data.get("content"),
                 "createdAt": _to_ms(data.get("createdAt")),
+                "clientCreatedAt": data.get("clientCreatedAt"),
+                "sequence": data.get("sequence"),
                 "media": data.get("media") or None,
             }
         )
@@ -2692,12 +2841,21 @@ def get_shared_chat(
                             createdAt=int(
                                 message.get("createdAt", 0) or 0
                             ),
+                            clientCreatedAt=int(
+                                message.get("clientCreatedAt", 0) or 0
+                            ) or None,
+                            sequence=int(
+                                message.get("sequence", 0) or 0
+                            ) or None,
                             media=message.get("media"),
                             quizAnchor=message.get("quizAnchor"),
                             quizTitle=message.get("quizTitle"),
                             quizData=message.get("quizData"),
                         )
-                        for message in chat.get("messages", [])[:limit]
+                        for message in sorted(
+                            chat.get("messages", []),
+                            key=_stored_message_sort_key,
+                        )[:limit]
                     ]
                     return ChatDetailOut(
                         chat_id=chat_id,
@@ -2760,12 +2918,29 @@ def get_shared_chat(
                 role=data.get("role", "assistant"),
                 content=data.get("content", ""),
                 createdAt=_to_ms(data.get("createdAt")),
+                clientCreatedAt=(
+                    int(data.get("clientCreatedAt"))
+                    if data.get("clientCreatedAt") is not None
+                    else None
+                ),
+                sequence=(
+                    int(data.get("sequence"))
+                    if data.get("sequence") is not None
+                    else None
+                ),
                 media=data.get("media") or None,
                 quizAnchor=data.get("quizAnchor") or None,
                 quizTitle=data.get("quizTitle") or None,
                 quizData=data.get("quizData") or None,
             )
         )
+    messages.sort(
+        key=lambda message: (
+            int(message.createdAt or 0),
+            int(message.sequence or 0),
+            message.message_id,
+        )
+    )
     return ChatDetailOut(
         chat_id=chat_id,
         title=chat_data.get("title", "Untitled"),
@@ -2818,7 +2993,7 @@ def get_chat_route(
     return get_chat(chat_id, uid, limit, before)
 
 
-@app.post("/api/chats/{chat_id}", response_model=ChatDetailOut)
+@app.post("/api/chats/{chat_id}", response_model=MessageOut)
 def continue_chat_route(
     chat_id: str,
     body: MessageCreateIn,
@@ -2831,8 +3006,7 @@ def continue_chat_route(
 ):
     if idempotency_key and not body.message_id:
         body.message_id = idempotency_key
-    append_message(chat_id, body, uid)
-    return get_chat(chat_id, uid, limit=200, before_ms=None)
+    return append_message(chat_id, body, uid)
 
 
 @app.get(

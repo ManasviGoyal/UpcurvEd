@@ -51,8 +51,12 @@ export interface Message {
   role: 'user' | 'bot';
   content: string;
   media?: MediaAttachment;
+  quizAnchor?: boolean;
+  quizTitle?: string;
   quizData?: QuizData;
   createdAt?: number;
+  clientCreatedAt?: number;
+  sequence?: number;
   messageId?: string;
 }
 

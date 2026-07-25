@@ -58,6 +58,7 @@ import type {
   MediaAttachment,
   GenerationDiagnostics,
   GenerationQualityStatus,
+  Message,
 } from "@/types";
 import {
   apiListChats,
@@ -88,6 +89,10 @@ import {
   selectedProvider,
 } from "@/lib/providerConfig";
 import { prepareWidgetHtmlForIframe } from "@/lib/widgetRuntime";
+import {
+  createMessageIdentity,
+  mergeMessages,
+} from "@/lib/messageOrdering";
 
 interface ChatInterfaceProps {
   setView: (view: string) => void;
@@ -546,9 +551,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // This cache only prevents flicker when rapidly switching between chats in the same session
   const messagesCache = useRef<Record<string, Chat["messages"]>>({});
 
-  // Track when we last sent a message to prevent premature server fetch (current session only)
-  // Reset to 0 on page refresh - this is intentional so server can sync after refresh
-  const lastMessageSentTime = useRef<number>(0);
   // Pagination state per chat
   const PAGE_SIZE = 50;
   const [hasMoreByChat, setHasMoreByChat] = useState<Record<string, boolean>>({});
@@ -564,6 +566,125 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (/^https?:\/\//i.test(value)) return value;
     if (value.startsWith("blob:")) return value;
     return apiUrl(value);
+  };
+
+  const optionalMessageNumber = (value: unknown): number | undefined => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
+  const mapApiMessage = (message: any): Message => {
+    const media = message?.media
+      ? {
+          type: (message.media.type === "podcast" ? "audio" : message.media.type) as
+            | "audio"
+            | "video"
+            | "widget",
+          url: toPlayableMediaUrl(message.media.url as string | undefined),
+          subtitleUrl: toPlayableMediaUrl(message.media.subtitleUrl as string | undefined),
+          artifactId: message.media.artifactId as string | undefined,
+          title: message.media.title as string | undefined,
+          gcsPath: message.media.gcsPath as string | undefined,
+          sceneCode: message.media.sceneCode as string | undefined,
+          widgetCode: message.media.widgetCode as string | undefined,
+          artifactKind: message.media.artifactKind as ArtifactKind | undefined,
+          downloadFilename: message.media.downloadFilename as string | undefined,
+          scriptGcsPath: message.media.scriptGcsPath as string | undefined,
+          generationDiagnostics: normalizeGenerationDiagnostics(
+            message.media.generationDiagnostics,
+          ),
+        }
+      : undefined;
+
+    return {
+      role: message?.role === "assistant" ? "bot" : "user",
+      content: String(message?.content || ""),
+      media,
+      createdAt: optionalMessageNumber(message?.createdAt),
+      clientCreatedAt: optionalMessageNumber(message?.clientCreatedAt),
+      sequence: optionalMessageNumber(message?.sequence),
+      messageId: message?.message_id ? String(message.message_id) : undefined,
+      quizAnchor:
+        message?.quizAnchor === undefined
+          ? undefined
+          : Boolean(message.quizAnchor),
+      quizTitle: message?.quizTitle ? String(message.quizTitle) : undefined,
+      quizData: message?.quizData,
+    };
+  };
+
+  const appendPayloadFromMessage = (message: Message) => {
+    const baseTime =
+      optionalMessageNumber(message.clientCreatedAt)
+      ?? optionalMessageNumber(message.createdAt)
+      ?? Date.now();
+    const identity = message.messageId
+      ? {
+          messageId: message.messageId,
+          clientCreatedAt: baseTime,
+          sequence: optionalMessageNumber(message.sequence) ?? baseTime * 1000,
+        }
+      : createMessageIdentity(baseTime);
+
+    return {
+      message_id: identity.messageId,
+      role: message.role === "bot" ? ("assistant" as const) : ("user" as const),
+      content: message.content,
+      media: message.media,
+      clientCreatedAt: identity.clientCreatedAt,
+      sequence: identity.sequence,
+      quizAnchor: message.quizAnchor,
+      quizTitle: message.quizTitle,
+      quizData: message.quizData,
+    };
+  };
+
+  const reconcileMessagesForChat = (
+    chatId: string | number,
+    incoming: readonly Message[],
+  ): Message[] => {
+    const cacheKey = String(chatId);
+    const current =
+      messagesCache.current[cacheKey]
+      || chats.find((chat) => String(chat.id) === cacheKey)?.messages
+      || [];
+    const merged = mergeMessages(current, incoming);
+    messagesCache.current[cacheKey] = merged;
+    setChats((previous) =>
+      previous.map((chat) =>
+        String(chat.id) === cacheKey ? { ...chat, messages: merged } : chat,
+      ),
+    );
+    forceUpdate({});
+    return merged;
+  };
+
+  const restoreQuizMessages = (
+    chatId: string,
+    messages: readonly Message[],
+  ) => {
+    const quizMessages = messages.filter(
+      (message) => message.quizAnchor && message.quizData && message.messageId,
+    );
+    if (!quizMessages.length) return;
+
+    setQuizzesByChat((previous) => {
+      const current = previous[chatId] || {};
+      const next = { ...current };
+      for (const message of quizMessages) {
+        const messageId = message.messageId!;
+        const existing = current[messageId];
+        next[messageId] = {
+          data: message.quizData as unknown as QuizData,
+          index: existing?.index || 0,
+          answers: existing?.answers || [],
+          score: existing?.score ?? null,
+          selected: existing?.selected ?? null,
+          revealed: existing?.revealed || false,
+        };
+      }
+      return { ...previous, [chatId]: next };
+    });
   };
 
   const htmlFilenameFromTitle = (title?: string | null, fallback = "upcurved_export.html") => {
@@ -658,9 +779,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     [user.email]
   );
 
-  const normalizeMessageContent = (text?: string | null) =>
-    (text || '').trim().toLowerCase().replace(/\s+/g, ' ');
-
   const loadPersistedMediaSelections = (): Record<string, PersistedMediaSelection> => {
     try {
       const raw = localStorage.getItem(mediaSelectionStoreKey);
@@ -711,36 +829,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch {}
   }, [quizRuntimeStoreKey, quizzesByChat]);
 
-  const makeMessageKey = (msg: any) => {
-    const normalized = normalizeMessageContent(msg?.content);
-    const mediaKey = msg?.media?.artifactId ? `|media:${msg.media.artifactId}` : '';
-    const quizKey = msg?.quizAnchor ? `|quiz:${msg.quizTitle || 'untitled'}` : '';
-    return `${msg?.role || 'bot'}|${normalized}${mediaKey}${quizKey}`;
-  };
-
-  const dedupeMessagesOrdered = (messages: any[]) => {
-    const seen = new Map<string, { idx: number; msg: any }>();
-    const out: any[] = [];
-    messages.forEach((msg) => {
-      const key = makeMessageKey(msg);
-      const prev = seen.get(key);
-      const isServer = msg?.messageId && !String(msg.messageId).startsWith('local-');
-      if (!prev) {
-        seen.set(key, { idx: out.length, msg });
-        out.push(msg);
-      } else {
-        const prevMsg = prev.msg;
-        const prevIsServer = prevMsg?.messageId && !String(prevMsg.messageId).startsWith('local-');
-        if (isServer && !prevIsServer) {
-          const preservedCreatedAt = prevMsg?.createdAt || msg?.createdAt;
-          const replacement = { ...msg, createdAt: preservedCreatedAt };
-          out[prev.idx] = replacement;
-          seen.set(key, { idx: prev.idx, msg: replacement });
-        }
-      }
-    });
-    return out;
-  };
+  // Message identity and ordering are centralized in messageOrdering.ts.
+  // The cache stores one permanent ID per message from optimistic insertion
+  // through persistence and reload.
   // Helper: immediately halt any active playback (media element or synthetic script timer)
   const stopPlayback = () => {
     try {
@@ -1077,38 +1168,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
               // Update chat in list if exists, or add it
               const existingIdx = chats.findIndex(c => c.id === urlId);
-              const msgs = (chatDetail.messages || []).map((m: any) => {
-                const media = m.media ? {
-                  type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
-                  url: toPlayableMediaUrl(m.media.url as string | undefined),
-                  subtitleUrl: toPlayableMediaUrl(m.media.subtitleUrl as string | undefined),
-                  artifactId: m.media.artifactId as string | undefined,
-                  title: m.media.title as string | undefined,
-                  gcsPath: m.media.gcsPath as string | undefined,
-                  sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
-                  widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
-                  artifactKind: (m.media.artifactKind as ArtifactKind | undefined),
-                  downloadFilename: m.media.downloadFilename as string | undefined,
-                  generationDiagnostics: normalizeGenerationDiagnostics(
-                    m.media.generationDiagnostics,
-                  ),
-                } : undefined;
-                // Preserve quiz data
-                const extras: any = {};
-                if (m.quizAnchor || m.quizTitle || m.quizData) {
-                  extras.quizAnchor = m.quizAnchor || false;
-                  extras.quizTitle = m.quizTitle;
-                  extras.quizData = m.quizData;
-                }
-                return {
-                  role: m.role === 'assistant' ? 'bot' : 'user',
-                  content: m.content,
-                  media,
-                  createdAt: m.createdAt,
-                  messageId: m.message_id,
-                  ...extras
-                };
-              });
+              const msgs = (chatDetail.messages || []).map(mapApiMessage);
               const updatedChat: Chat & { model?: string } = {
                 id: chatDetail.chat_id,
                 name: chatDetail.title || 'Untitled',
@@ -1124,21 +1184,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               } else {
                 updateUserChats([updatedChat, ...chats]);
               }
-              // Merge with existing cache instead of replacing
-              const existingCache = messagesCache.current[cacheKey] || [];
-              const byId = new Map();
-              existingCache.forEach((m: any) => {
-                if (m.messageId) byId.set(m.messageId, m);
-              });
-              msgs.forEach((m: any) => {
-                if (m.messageId) byId.set(m.messageId, m);
-              });
-              const merged = Array.from(byId.values()).sort((a: any, b: any) => {
-                const ta = typeof a.createdAt === 'number' ? a.createdAt : 0;
-                const tb = typeof b.createdAt === 'number' ? b.createdAt : 0;
-                return ta - tb;
-              });
-              messagesCache.current[cacheKey] = merged as any;
+              messagesCache.current[cacheKey] = mergeMessages(
+                messagesCache.current[cacheKey] || [],
+                msgs,
+              );
             }
           } catch (err) {
             // If default model fails, try 'llm' as fallback
@@ -1434,77 +1483,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           }));
         localStorage.setItem(`app.chats.${user.email}`, JSON.stringify(persistable));
       } catch {}
-      // Deduplicate messages before updating cache (append-only)
+      // Keep the in-memory cache aligned with the same ID-based merge used by
+      // refresh, pagination, optimistic inserts, and outbox reconciliation.
       try {
-        const ac = newChats.find(c => c.id === activeChatId);
-        if (!ac) return;
-        const cacheKey = String(ac.id);
-        const existingCache = messagesCache.current[cacheKey] || [];
-        const hasMessages = Array.isArray(ac.messages) && ac.messages.length > 0;
-
-        if (hasMessages) {
-          // Merge cache with new messages, prioritize existing cache
-          const byContent: Record<string, any> = {};
-
-          // First, add all existing cache messages (priority)
-          existingCache.forEach((m: any) => {
-            const messageId = m.messageId || '';
-            // Include quiz key to prevent different quizzes from being merged
-            const quizKey = m.quizAnchor ? `|quiz:${m.quizTitle || 'untitled'}` : '';
-            const normalizedContent = (m.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-            const contentKey = `${m.role}|${normalizedContent}|${m.media?.artifactId||''}${quizKey}`;
-            byContent[contentKey] = m;
-          });
-
-          // Then merge in new messages from ac.messages (only if not already in cache by content)
-          ac.messages.forEach((m: any) => {
-            const messageId = m.messageId || '';
-            // Include quiz key to prevent different quizzes from being merged
-            const quizKey = m.quizAnchor ? `|quiz:${m.quizTitle || 'untitled'}` : '';
-            const normalizedContent = (m.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-            const contentKey = `${m.role}|${normalizedContent}|${m.media?.artifactId||''}${quizKey}`;
-            const existingMsg = byContent[contentKey];
-
-            if (!existingMsg) {
-              // New message not in cache - add it
-              byContent[contentKey] = m;
-            } else {
-              // Message already exists - prefer server version if available
-              const isServerId = messageId && !String(messageId).startsWith('local-');
-              const existingIsServerId = existingMsg.messageId && !String(existingMsg.messageId).startsWith('local-');
-
-              if (isServerId && !existingIsServerId) {
-                // Upgrade local to server message, preserve timestamp and quiz data
-                const merged = {
-                  ...existingMsg,
-                  ...m,
-                  messageId: m.messageId,
-                  createdAt: existingMsg.createdAt || m.createdAt,
-                  quizData: m.quizData || existingMsg.quizData,
-                  quizAnchor: m.quizAnchor ?? existingMsg.quizAnchor,
-                  quizTitle: m.quizTitle || existingMsg.quizTitle,
-                  // Merge media data
-                  media: m.media || existingMsg.media
-                };
-                byContent[contentKey] = merged;
-              }
-            }
-          });
-
-          // Convert to array and sort by timestamp
-          const merged = Object.values(byContent).sort((a: any, b: any) => {
-            const ta = typeof a.createdAt === 'number' ? a.createdAt : 0;
-            const tb = typeof b.createdAt === 'number' ? b.createdAt : 0;
-            return ta - tb;
-          });
-
-          // Only update cache if we have at least as many messages (append-only)
-          if (merged.length >= existingCache.length) {
-            messagesCache.current[cacheKey] = merged as any;
-          }
-        } else if (!existingCache.length && Array.isArray(ac.messages)) {
-          // If cache is empty and we truly have empty messages, keep them in sync
-          messagesCache.current[cacheKey] = ac.messages;
+        const active = newChats.find(
+          (chat) => String(chat.id) === String(activeChatId),
+        );
+        if (active && Array.isArray(active.messages)) {
+          const cacheKey = String(active.id);
+          messagesCache.current[cacheKey] = mergeMessages(
+            messagesCache.current[cacheKey] || [],
+            active.messages,
+          );
         }
       } catch {}
     } catch (error) {
@@ -1566,8 +1556,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           if (typeof it.chatId === 'string' && (/^(local-|draft-)/.test(it.chatId))) {
             continue;
           }
-          // Model is stored in chat data, not needed in URL
-          await apiAppendMessage(it.chatId, it.payload);
+          // Model is stored in chat data, not needed in URL.
+          const persisted = await apiAppendMessage(it.chatId, it.payload);
+          reconcileMessagesForChat(it.chatId, [mapApiMessage(persisted)]);
         } catch {
           remaining.push(it); // keep for next attempt
         }
@@ -1607,8 +1598,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
       const current = chats.find(c => c.id === activeChatId);
       if (current) {
-        for (const m of current.messages || []) {
-          try { await apiAppendMessage(newId, { role: m.role === 'bot' ? 'assistant' : 'user', content: m.content }); } catch {}
+        for (const message of current.messages || []) {
+          try {
+            await apiAppendMessage(newId, appendPayloadFromMessage(message));
+          } catch {}
         }
       }
   const migrated = chats.map(c => c.id === activeChatId ? { ...c, id: newId, sessionId: sid, name: title, model, updatedAt: Date.now() } : c);
@@ -1803,8 +1796,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           const created = await apiCreateChat({ title: lc.name || 'New Chat', sessionId: sid, model });
           const newId = created.chat_id as string;
           // append messages in order
-          for (const m of lc.messages) {
-            await apiAppendMessage(newId, { role: m.role === 'bot' ? 'assistant' : 'user', content: m.content }, model);
+          for (const message of lc.messages) {
+            await apiAppendMessage(
+              newId,
+              appendPayloadFromMessage(message),
+              model,
+            );
           }
           // swap id locally so UI points to persisted chat
           const idx = updated.findIndex(c => c.id === lc.id);
@@ -1825,7 +1822,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (!user?.email) return;
     // Reset cache to ensure we always fetch fresh data from Firestore after login/user change
     messagesCache.current = {};
-    lastMessageSentTime.current = 0;
 
     // Clean up stale localStorage cache from previous versions (backwards compatibility)
     try {
@@ -2043,7 +2039,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   ): Promise<string | undefined> => {
     try {
       const role: 'user' | 'bot' = isUser ? 'user' : 'bot';
-  const newMessage = { role, content, media, createdAt: Date.now(), messageId: `local-${Date.now()}-${Math.random().toString(36).slice(2,6)}` , ...(extras || {}) } as any;
+      const identity = createMessageIdentity();
+      const newMessage: Message = {
+        role,
+        content,
+        media,
+        ...identity,
+        ...(extras || {}),
+      };
       // Prefer the override id (persisted chat) for local updates too
       let localTargetId = (persistChatIdOverride as any) ?? activeChatId;
 
@@ -2095,49 +2098,42 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         localTargetId = currentChat.id;
       }
 
-      // Read from cache first to ensure latest messages
+      // Read from the cache first, then add the optimistic message using the
+      // same permanent ID that will be sent to the backend.
       const historyKey = String(localTargetId);
       const cachedHistory = messagesCache.current[historyKey];
-      let history = cachedHistory && cachedHistory.length > 0 ? [...cachedHistory] : [...currentChat.messages];
-  const isCompletion = /^(✅|❌|⏹️)/.test(content);
-      // Allow repeated user prompts; duplicate suppression removed to preserve user intent
+      let history = cachedHistory && cachedHistory.length > 0
+        ? [...cachedHistory]
+        : [...currentChat.messages];
       const wasEmptyBefore = history.length === 0;
-      history.push(newMessage);
-      const normalizedContent = (content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      const chatKeyForFingerprint = String((persistChatIdOverride as any) ?? localTargetId ?? 'draft');
-      if (isUser) {
-        if (wasEmptyBefore) {
-          const fingerprint = firstPromptFingerprintRef.current[chatKeyForFingerprint];
-          if (fingerprint && fingerprint.key === normalizedContent && Date.now() - fingerprint.ts < 2000) {
-            return fingerprint.messageId;
-          }
-          firstPromptFingerprintRef.current[chatKeyForFingerprint] = {
-            key: normalizedContent,
-            ts: Date.now(),
-            messageId: newMessage.messageId,
-          };
-        } else {
-          delete firstPromptFingerprintRef.current[chatKeyForFingerprint];
-        }
-      }
-      if (isUser && wasEmptyBefore && history.length > 1) {
-        const firstUserMsg = history.find((msg) => msg.role === 'user');
-        if (firstUserMsg) {
-          const normalizedFirst = (firstUserMsg.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-          history = history.filter((msg) => {
-            if (msg === firstUserMsg) return true;
-            if (msg.role !== 'user') return true;
-            const normalized = (msg.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-            return normalized !== normalizedFirst;
-          });
-        }
-      }
-      messagesCache.current[historyKey] = history as any;
+      const normalizedContent = (content || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+      const chatKeyForFingerprint = String(
+        (persistChatIdOverride as any) ?? localTargetId ?? "draft",
+      );
 
-      // Track when message was sent to prevent premature server fetch
-      if (isUser) {
-        lastMessageSentTime.current = Date.now();
+      if (isUser && wasEmptyBefore) {
+        const fingerprint = firstPromptFingerprintRef.current[chatKeyForFingerprint];
+        if (
+          fingerprint
+          && fingerprint.key === normalizedContent
+          && Date.now() - fingerprint.ts < 2000
+        ) {
+          return fingerprint.messageId;
+        }
+        firstPromptFingerprintRef.current[chatKeyForFingerprint] = {
+          key: normalizedContent,
+          ts: Date.now(),
+          messageId: newMessage.messageId!,
+        };
+      } else if (isUser) {
+        delete firstPromptFingerprintRef.current[chatKeyForFingerprint];
       }
+
+      history = mergeMessages(history, [newMessage]);
+      messagesCache.current[historyKey] = history;
 
       // Force re-render for immediate UI update
       forceUpdate({});
@@ -2170,12 +2166,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Update cache with new chat ID after migration
         const oldCacheKey = String(activeChatId);
         const newCacheKey = String(persistChatIdOverride);
-        if (messagesCache.current[oldCacheKey]) {
-          messagesCache.current[newCacheKey] = messagesCache.current[oldCacheKey];
-          delete messagesCache.current[oldCacheKey];
-        } else {
-          messagesCache.current[newCacheKey] = history as any;
-        }
+        messagesCache.current[newCacheKey] = mergeMessages(
+          messagesCache.current[oldCacheKey] || [],
+          history,
+        );
+        delete messagesCache.current[oldCacheKey];
         setActiveChatId(persistChatIdOverride);
       } else {
         // Normal case: move target chat to front based on activity
@@ -2199,35 +2194,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           delete pendingChatsRef.current[String(persistChatIdOverride)];
         }
       }
-  // Persist remotely
-      const targetChatId = persistChatIdOverride || (typeof activeChatId === 'string' ? String(activeChatId) : undefined);
-      if (targetChatId && !String(targetChatId).startsWith('local-')) {
-        const serverRole: 'user' | 'assistant' = role === 'bot' ? 'assistant' : 'user';
-        const mid = (typeof crypto !== 'undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : `m_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-        const payload: any = { message_id: mid, role: serverRole, content };
-        if (media) {
-          payload.media = {
-            type: media.type,
-            url: media.url,
-            subtitleUrl: media.subtitleUrl,
-            artifactId: media.artifactId,
-            title: media.title,
-            gcsPath: media.gcsPath,
-            sceneCode: media.sceneCode,  // Include sceneCode for video editing
-            widgetCode: media.widgetCode,        // BUG FIX: persist widget HTML
-            artifactKind: (media as any).artifactKind,
-            downloadFilename: media.downloadFilename,
-            generationDiagnostics: media.generationDiagnostics,
-          };
+      // Persist remotely with the exact same ID and client order metadata.
+      const targetChatId = String(persistChatIdOverride || modifiedChat.id);
+      if (targetChatId && !targetChatId.startsWith("local-")) {
+        const payload = appendPayloadFromMessage(newMessage);
+        try {
+          const persisted = await apiAppendMessage(targetChatId, payload);
+          reconcileMessagesForChat(targetChatId, [mapApiMessage(persisted)]);
+        } catch {
+          enqueueOutbox({ chatId: targetChatId, payload, model });
         }
-        // Persist quiz data if present in extras
-        if (extras?.quizAnchor || extras?.quizData) {
-          payload.quizAnchor = extras.quizAnchor || false;
-          payload.quizTitle = extras.quizTitle;
-          payload.quizData = extras.quizData;
-        }
-        try { await apiAppendMessage(String(targetChatId), payload); }
-        catch { enqueueOutbox({ chatId: String(targetChatId), payload, model }); }
       }
   if (!isUser) setActiveScript(content);
       // If this was the first user message that created a persisted chat, move to conversation route
@@ -4339,409 +4315,138 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch {}
   }, [isCaptionsOn, vttUrl, videoUrl]);
 
-  // Load first page of messages for persisted chat
+  // Load the newest server page and reconcile it through the one canonical
+  // message-ordering path. Historical messages never receive Date.now() as a
+  // fallback, so reopening a chat cannot move them to the bottom.
   useEffect(() => {
-  async function loadMessagesPage() {
-      // Don't load from server for local/draft chats
-      if (typeof activeChatId !== 'string' || String(activeChatId).startsWith('local-') || String(activeChatId).startsWith('draft-')) {
-        const lastBotMessage = [...(activeChat as Chat).messages].reverse().find((m) => m.role === 'bot');
-        setActiveScript(lastBotMessage ? lastBotMessage.content : null);
+    let cancelled = false;
+
+    async function loadMessagesPage() {
+      if (
+        typeof activeChatId !== "string"
+        || activeChatId.startsWith("local-")
+        || activeChatId.startsWith("draft-")
+      ) {
+        const localMessages = activeChat.messages || [];
+        const lastBotMessage = [...localMessages]
+          .reverse()
+          .find((message) => message.role === "bot");
+        setActiveScript(lastBotMessage?.content || null);
         setIsPlaying(false);
         setProgress([0]);
         return;
       }
 
-      // Wait 3s after sending message before fetching from server (cooldown)
-      const timeSinceLastMessage = Date.now() - lastMessageSentTime.current;
-      if (timeSinceLastMessage < 3000) {
-        // Message was sent less than 3 seconds ago - skip server fetch to preserve local message
-        // Schedule a retry after the cooldown period to sync with server
-        const capturedChatId = activeChatId;
-        const retryDelay = 3000 - timeSinceLastMessage + 500; // Add 500ms buffer
-        setTimeout(() => {
-          // Only retry if chat hasn't changed
-          if (capturedChatId === activeChatId) {
-            void loadMessagesPage();
-          }
-        }, retryDelay);
-        return;
-      }
       try {
-        // Model is stored in chat data, not needed in URL
-        const page = await apiListMessages(String(activeChatId), undefined, { limit: PAGE_SIZE });
-        const msgs = page?.messages || [];
-        const mapped = (msgs || []).map((m: any) => {
-          const media = m.media ? {
-            type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
-            url: toPlayableMediaUrl(m.media.url as string | undefined),
-            subtitleUrl: toPlayableMediaUrl(m.media.subtitleUrl as string | undefined),
-            artifactId: m.media.artifactId as string | undefined,
-            gcsPath: m.media.gcsPath as string | undefined,
-            title: m.media.title as string | undefined,
-            sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
-            widgetCode: m.media.widgetCode as string | undefined, // BUG FIX: restore widget HTML on reload
-            downloadFilename: m.media.downloadFilename as string | undefined,
-            generationDiagnostics: normalizeGenerationDiagnostics(
-              m.media.generationDiagnostics,
-            ),
-          } : undefined;
-          // Ensure all messages have createdAt for proper ordering
-          const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
-          const messageId = m.message_id as string | undefined;
-          // Preserve quiz data and other extras from backend
-          const extras: any = {};
-          if (m.quizAnchor || m.quizTitle || m.quizData) {
-            extras.quizAnchor = m.quizAnchor || false;
-            extras.quizTitle = m.quizTitle;
-            extras.quizData = m.quizData;
-          }
-          return { role: m.role === 'assistant' ? 'bot' : 'user', content: m.content, media, createdAt, messageId, ...extras } as const;
+        const page = await apiListMessages(activeChatId, undefined, {
+          limit: PAGE_SIZE,
         });
-  const cacheKey = String(activeChatId);
-  // messagesCache is session-only; chats.messages is empty after refresh (not persisted)
-  const cachedMessages = messagesCache.current[cacheKey];
-  const chatMessages = chats.find(c => c.id === activeChatId)?.messages || [];
-  const existing = (cachedMessages && cachedMessages.length > 0) ? cachedMessages : chatMessages;
-        // Merge: keep any local messages whose messageId not yet in remote or that lack a messageId
-        const remoteIds = new Set(mapped.map(m => m.messageId).filter(Boolean));
-        // Filter out local messages that have been persisted (their messageId is now in remote)
-        // But keep local messages with temporary IDs (local-*) that haven't been matched yet
-        const pendingLocals = existing.filter(em => {
-          const emId = (em as any).messageId;
-          // Keep if no messageId or if messageId not in remote set
-          if (!emId) return true;
-          // If it's a temporary local ID, check if there's a matching server message by content ONLY
-          if (String(emId).startsWith('local-')) {
-            const emNormContent = (em.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-            const emQuizKey = (em as any).quizAnchor ? (em as any).quizTitle || 'untitled' : '';
-            // Check if there's a server message with same role and content (ignore timestamp)
-            const hasMatchingServer = mapped.some(rm => {
-              const rmNormContent = (rm.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-              const rmQuizKey = (rm as any).quizAnchor ? (rm as any).quizTitle || 'untitled' : '';
-              return rm.role === em.role &&
-                     rmNormContent === emNormContent &&
-                     rm.media?.artifactId === em.media?.artifactId &&
-                     rmQuizKey === emQuizKey;
-            });
-            // Drop local message if matching server message exists
-            return !hasMatchingServer;
-          }
-          // For non-local IDs, keep only if not in remote set
-          return !remoteIds.has(emId);
-        });
-        // Deduplicate by content+role, prefer server messages
-        const prelim = [...mapped, ...pendingLocals];
-        const byKey: Record<string, any> = {};
-        for (const m of prelim) {
-          const messageId = (m as any).messageId || '';
-          // Include quiz title in key to distinguish different quizzes
-          const quizKey = (m as any).quizAnchor ? `|quiz:${(m as any).quizTitle || 'untitled'}` : '';
-          const normalizedContent = (m.content || '').trim().toLowerCase().replace(/\s+/g, ' ');
-          // Use normalized content+role+media+quiz as key (ignore timestamp variations)
-          const contentKey = `${m.role}|${normalizedContent}|${m.media?.artifactId||''}${quizKey}`;
-          const existingMsg = byKey[contentKey];
+        if (cancelled) return;
 
-          if (!existingMsg) {
-            byKey[contentKey] = m;
-          } else {
-            // If duplicate exists, always prefer server messages (non-local IDs)
-            const isServerId = messageId && !String(messageId).startsWith('local-');
-            const existingIsServerId = (existingMsg as any).messageId && !String((existingMsg as any).messageId).startsWith('local-');
+        const cacheKey = String(activeChatId);
+        const mapped = (page?.messages || []).map(mapApiMessage);
+        const existing =
+          messagesCache.current[cacheKey]
+          || chats.find((chat) => String(chat.id) === cacheKey)?.messages
+          || [];
+        const merged = mapped.length
+          ? mergeMessages(existing, mapped)
+          : [...existing];
 
-            if (isServerId && !existingIsServerId) {
-              // Replace local with server message, but preserve local timestamp to maintain order
-              byKey[contentKey] = {
-                ...m,
-                createdAt: existingMsg.createdAt || m.createdAt,
-                quizData: m.quizData || existingMsg.quizData,
-                quizAnchor: m.quizAnchor ?? existingMsg.quizAnchor,
-                quizTitle: m.quizTitle || existingMsg.quizTitle,
-                media: m.media || existingMsg.media
-              };
-            } else if (!isServerId && !existingIsServerId) {
-              // Both are local, keep the one with newer timestamp
-              const tNew = typeof (m as any).createdAt === 'number' ? (m as any).createdAt : 0;
-              const tOld = typeof (existingMsg as any).createdAt === 'number' ? (existingMsg as any).createdAt : 0;
-              if (tNew > tOld) {
-                byKey[contentKey] = m;
-              }
-            }
-            // Otherwise keep existing (already a server message)
-          }
-        }
-        // Ensure all messages have createdAt for proper chronological ordering (prompt-response-prompt-response)
-        let finalMsgsWithTimestamps = dedupeMessagesOrdered(
-          Object.values(byKey).map((msg: any) => {
-            if (!msg.createdAt || typeof msg.createdAt !== 'number') {
-              return { ...msg, createdAt: Date.now() };
-            }
-            return msg;
-          })
+        messagesCache.current[cacheKey] = merged;
+        setChats((previous) =>
+          previous.map((chat) =>
+            String(chat.id) === cacheKey
+              ? { ...chat, messages: merged }
+              : chat,
+          ),
         );
+        restoreQuizMessages(cacheKey, merged);
 
-        let finalMsgsSorted = finalMsgsWithTimestamps.sort((a: any, b: any) => {
-          const ta = typeof a.createdAt === 'number' ? a.createdAt : 0;
-          const tb = typeof b.createdAt === 'number' ? b.createdAt : 0;
-          return ta - tb; // Ascending order: oldest first (like ChatGPT)
-        });
+        const serverTimes = mapped
+          .map((message) => message.createdAt)
+          .filter((value): value is number => Number.isFinite(value));
+        const before = serverTimes.length ? Math.min(...serverTimes) : undefined;
+        setCursorByChat((previous) => ({ ...previous, [cacheKey]: before }));
+        setHasMoreByChat((previous) => ({
+          ...previous,
+          [cacheKey]: Boolean(page?.has_more),
+        }));
 
-        // Restore quiz data from messages that have quizAnchor/quizData
-        // Do this before updating chats so quiz state is ready
-        finalMsgsSorted.forEach((msg: any) => {
-          if (msg.quizAnchor && msg.quizData && typeof activeChatId === 'string' && msg.messageId) {
-            setQuizzesByChat(prev => {
-              const chatQuizzes = prev[String(activeChatId)] || {};
-              // Always restore quiz data even if it exists (in case data changed)
-              return {
-                ...prev,
-                [String(activeChatId)]: {
-                  ...chatQuizzes,
-                  [msg.messageId]: {
-                    data: msg.quizData,
-                    index: chatQuizzes[msg.messageId]?.index || 0, // Preserve progress if exists
-                    answers: chatQuizzes[msg.messageId]?.answers || [],
-                    score: chatQuizzes[msg.messageId]?.score ?? null,
-                    selected: chatQuizzes[msg.messageId]?.selected ?? null,
-                    revealed: chatQuizzes[msg.messageId]?.revealed || false
-                  }
-                }
-              };
-            });
-          }
-        });
-
-        // Preserve unpersisted local messages
-        const hasLocalUnpersisted = existing.some((m: any) => {
-          const msgId = m.messageId;
-          return !msgId || String(msgId).startsWith('local-') || !remoteIds.has(msgId);
-        });
-
-        // If we have local unpersisted messages, ensure they're included in finalMsgsSorted
-        if (hasLocalUnpersisted && finalMsgsSorted.length > 0) {
-          // Double-check all local messages are included
-          const finalIds = new Set(finalMsgsSorted.map((m: any) => m.messageId).filter(Boolean));
-          const missingLocals = existing.filter((em: any) => {
-            const emId = em.messageId;
-            return emId && !finalIds.has(emId) && String(emId).startsWith('local-');
-          });
-          if (missingLocals.length > 0) {
-            // Add missing local messages back
-            finalMsgsSorted.push(...missingLocals);
-            finalMsgsSorted = dedupeMessagesOrdered(finalMsgsSorted);
-            // Re-sort by createdAt
-            finalMsgsSorted.sort((a: any, b: any) => {
-              const ta = typeof a.createdAt === 'number' ? a.createdAt : 0;
-              const tb = typeof b.createdAt === 'number' ? b.createdAt : 0;
-              return ta - tb;
-            });
-          }
-        }
-
-        // Guard: if remote returned empty and we already had local messages, don't clobber them
-        if (finalMsgsSorted.length === 0 && Array.isArray(existing) && existing.length > 0) {
-          // Preserve existing; just update cache and cursors
-          messagesCache.current[cacheKey] = existing as any;
-        } else {
-          // Merge server messages with local messages
-          const updatedList = chats.map(c => {
-            if (c.id === activeChatId) {
-              // Prefer finalMsgsSorted if available, otherwise use existing
-              let messagesToUse: any[];
-              if (finalMsgsSorted.length > 0) {
-                messagesToUse = finalMsgsSorted;
-              } else if (existing.length > 0) {
-                // Keep existing messages if server returned empty (might be a sync issue)
-                messagesToUse = existing;
-              } else {
-                // Last resort: use chat messages
-                messagesToUse = c.messages || [];
-              }
-              return { ...c, messages: messagesToUse as any } as Chat;
-            }
-            return c;
-          });
-          setChats(updatedList);
-          // Update cache with deduplicated messages (append-only)
-          const currentCacheSize = (messagesCache.current[cacheKey] || []).length;
-          if (finalMsgsSorted.length >= currentCacheSize) {
-            messagesCache.current[cacheKey] = finalMsgsSorted as any;
-          }
-
-        }
-        const first = (msgs && msgs[0]) || null;
-        const before = first && typeof first.createdAt === 'number' ? first.createdAt : undefined;
-        setCursorByChat(prev => ({ ...prev, [cacheKey]: before }));
-  setHasMoreByChat(prev => ({ ...prev, [cacheKey]: !!page?.has_more }));
-        const lastBotMessage = [...(messagesCache.current[cacheKey] || finalMsgsSorted)].reverse().find((m) => m.role === 'bot');
-        setActiveScript(lastBotMessage ? lastBotMessage.content : null);
+        const lastBotMessage = [...merged]
+          .reverse()
+          .find((message) => message.role === "bot");
+        setActiveScript(lastBotMessage?.content || null);
         setIsPlaying(false);
         setProgress([0]);
 
-        // Scroll instantly to bottom after loading messages to avoid visible jump
         requestAnimationFrame(() => {
           const container = scrollContainerRef.current;
           if (container) container.scrollTop = container.scrollHeight;
         });
       } catch {
-        // ignore load errors silently
+        // Keep the current local/cache view if the refresh fails.
       }
     }
+
     void loadMessagesPage();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId]);
 
   const loadOlderMessages = async () => {
-    if (typeof activeChatId !== 'string') return;
-    const key = String(activeChatId);
-    const before = cursorByChat[key];
+    if (typeof activeChatId !== "string") return;
+    const cacheKey = String(activeChatId);
+    const before = cursorByChat[cacheKey];
+
     try {
-      // Model is stored in chat data, not needed in URL
-      const page = await apiListMessages(key, undefined, { limit: PAGE_SIZE, before });
-      const older = page?.messages || [];
-      const mapped = (older || []).map((m: any) => {
-        const media = m.media ? {
-          type: (m.media.type === 'podcast' ? 'audio' : m.media.type) as 'audio'|'video'|'widget', // BUG FIX
-          url: toPlayableMediaUrl(m.media.url as string | undefined),
-          subtitleUrl: toPlayableMediaUrl(m.media.subtitleUrl as string | undefined),
-          artifactId: m.media.artifactId as string | undefined,
-          gcsPath: m.media.gcsPath as string | undefined,
-          title: m.media.title as string | undefined,
-          sceneCode: m.media.sceneCode as string | undefined,  // Include sceneCode for video editing
-          widgetCode: m.media.widgetCode as string | undefined, // Restore widget HTML on reload
-          artifactKind: (m.media.artifactKind as ArtifactKind | undefined),
-          downloadFilename: m.media.downloadFilename as string | undefined,
-          generationDiagnostics: normalizeGenerationDiagnostics(
-            m.media.generationDiagnostics,
-          ),
-        } : undefined;
-        // Ensure all messages have createdAt for proper ordering
-        const createdAt = typeof m.createdAt === 'number' ? m.createdAt : (m.timestamp || Date.now());
-        const messageId = m.message_id as string | undefined;
-        // Preserve quiz data and other extras from backend
-        const extras: any = {};
-        if (m.quizAnchor || m.quizTitle || m.quizData) {
-          extras.quizAnchor = m.quizAnchor || false;
-          extras.quizTitle = m.quizTitle;
-          extras.quizData = m.quizData;
-        }
-        return { role: m.role === 'assistant' ? 'bot' : 'user', content: m.content, media, createdAt, messageId, ...extras } as const;
+      const page = await apiListMessages(cacheKey, undefined, {
+        limit: PAGE_SIZE,
+        before,
       });
+      const mapped = (page?.messages || []).map(mapApiMessage);
       if (!mapped.length) {
-        setHasMoreByChat(prev => ({ ...prev, [key]: false }));
+        setHasMoreByChat((previous) => ({
+          ...previous,
+          [cacheKey]: false,
+        }));
         return;
       }
-      // Use cache as source instead of chats array to ensure we have latest messages
-      const current = messagesCache.current[key] || chats.find(c => c.id === activeChatId)?.messages || [];
-      const remoteIds = new Set(mapped.map(m => m.messageId).filter(Boolean));
-      // Filter out local messages that have been persisted (their messageId is now in remote)
-      // But keep local messages with temporary IDs (local-*) that haven't been matched yet
-      const pendingLocals = current.filter(em => {
-        const emId = (em as any).messageId;
-        // Keep if no messageId or if messageId not in remote set
-        if (!emId) return true;
-        // If it's a temporary local ID, check if there's a matching server message by content ONLY
-        if (String(emId).startsWith('local-')) {
-          // Check if there's a server message with same role and content (ignore timestamp)
-          const hasMatchingServer = mapped.some(rm =>
-            rm.role === em.role &&
-            rm.content?.trim() === em.content?.trim() &&
-            rm.media?.artifactId === em.media?.artifactId
-          );
-          // Drop local message if matching server message exists
-          return !hasMatchingServer;
-        }
-        // For non-local IDs, keep only if not in remote set
-        return !remoteIds.has(emId);
-      });
-      // Deduplicate by content+role, prefer server messages
-      const prelim = [...mapped as any, ...pendingLocals];
-      const byKey: Record<string, any> = {};
-      for (const m of prelim) {
-        const messageId = (m as any).messageId || '';
-        // Use content+role as key (ignore timestamp variations)
-        const contentKey = `${m.role}|${m.content?.trim() || ''}|${(m as any).media?.artifactId||''}`;
-        const existing = byKey[contentKey];
 
-        if (!existing) {
-          byKey[contentKey] = m;
-        } else {
-          // If duplicate exists, always prefer server messages (non-local IDs)
-          const isServerId = messageId && !String(messageId).startsWith('local-');
-          const existingIsServerId = (existing as any).messageId && !String((existing as any).messageId).startsWith('local-');
+      const current =
+        messagesCache.current[cacheKey]
+        || chats.find((chat) => String(chat.id) === cacheKey)?.messages
+        || [];
+      const merged = mergeMessages(current, mapped);
+      messagesCache.current[cacheKey] = merged;
+      setChats((previous) =>
+        previous.map((chat) =>
+          String(chat.id) === cacheKey
+            ? { ...chat, messages: merged }
+            : chat,
+        ),
+      );
+      restoreQuizMessages(cacheKey, merged);
 
-          if (isServerId && !existingIsServerId) {
-            // Replace local with server message
-            byKey[contentKey] = m;
-          } else if (!isServerId && !existingIsServerId) {
-            // Both are local, keep the one with newer timestamp
-            const tNew = typeof (m as any).createdAt === 'number' ? (m as any).createdAt : 0;
-            const tOld = typeof (existing as any).createdAt === 'number' ? (existing as any).createdAt : 0;
-            if (tNew > tOld) {
-              byKey[contentKey] = m;
-            }
-          }
-          // Otherwise keep existing (already a server message)
-        }
-      }
-      // Ensure all messages have createdAt for proper chronological ordering
-      let combined = Object.values(byKey).map((msg: any) => {
-        if (!msg.createdAt || typeof msg.createdAt !== 'number') {
-          return { ...msg, createdAt: Date.now() };
-        }
-        return msg;
-      }).sort((a: any, b: any) => {
-        const ta = typeof a.createdAt === 'number' ? a.createdAt : 0;
-        const tb = typeof b.createdAt === 'number' ? b.createdAt : 0;
-        return ta - tb; // Ascending order: oldest first (like ChatGPT)
-      });
-
-        // Restore quiz data from older messages that have quizAnchor/quizData
-        combined.forEach((msg: any) => {
-          if (msg.quizAnchor && msg.quizData && typeof activeChatId === 'string' && msg.messageId) {
-            setQuizzesByChat(prev => {
-              const chatQuizzes = prev[String(activeChatId)] || {};
-              // Always restore quiz data even if it exists (in case data changed)
-              return {
-                ...prev,
-                [String(activeChatId)]: {
-                  ...chatQuizzes,
-                  [msg.messageId]: {
-                    data: msg.quizData,
-                    index: chatQuizzes[msg.messageId]?.index || 0, // Preserve progress if exists
-                    answers: chatQuizzes[msg.messageId]?.answers || [],
-                    score: chatQuizzes[msg.messageId]?.score ?? null,
-                    selected: chatQuizzes[msg.messageId]?.selected ?? null,
-                    revealed: chatQuizzes[msg.messageId]?.revealed || false
-                  }
-                }
-              };
-            });
-          }
-        });
-
-      // Update chat with merged messages
-      const updatedList = chats.map(c => c.id === activeChatId ? ({ ...c, messages: combined as any } as Chat) : c);
-      setChats(updatedList);
-      // Merge with existing cache instead of replacing
-      const existingCache = messagesCache.current[key] || [];
-      const byId = new Map();
-      existingCache.forEach((m: any) => {
-        if (m.messageId) byId.set(m.messageId, m);
-      });
-      combined.forEach((m: any) => {
-        if (m.messageId) byId.set(m.messageId, m);
-      });
-      const finalMerged = Array.from(byId.values()).sort((a: any, b: any) => {
-        const ta = typeof a.createdAt === 'number' ? a.createdAt : 0;
-        const tb = typeof b.createdAt === 'number' ? b.createdAt : 0;
-        return ta - tb;
-      });
-      messagesCache.current[key] = finalMerged as any;
-      const first = mapped[0] as any;
-      const newBefore = first && typeof first.createdAt === 'number' ? first.createdAt : before;
-      setCursorByChat(prev => ({ ...prev, [key]: newBefore }));
-      setHasMoreByChat(prev => ({ ...prev, [key]: !!page?.has_more }));
-    } catch {}
+      const serverTimes = mapped
+        .map((message) => message.createdAt)
+        .filter((value): value is number => Number.isFinite(value));
+      const newBefore = serverTimes.length
+        ? Math.min(...serverTimes)
+        : before;
+      setCursorByChat((previous) => ({
+        ...previous,
+        [cacheKey]: newBefore,
+      }));
+      setHasMoreByChat((previous) => ({
+        ...previous,
+        [cacheKey]: Boolean(page?.has_more),
+      }));
+    } catch {
+      // Keep the already loaded messages unchanged.
+    }
   };
 
   // Synthetic progress only when no media is loaded; real media uses timeupdate

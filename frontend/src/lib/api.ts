@@ -139,18 +139,46 @@ export async function apiGetChat(chatId: string, model?: string, params?: { limi
   return res.json();
 }
 
-export async function apiAppendMessage(chatId: string, msg: { message_id?: string; role: 'user'|'assistant'; content: string; media?: any; timestamp?: string }, model?: string) {
-  // Support idempotency key for retries
-  const idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : `ik_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  const headers: HeadersInit = { 'Idempotency-Key': idempotencyKey };
-  const payload = { ...msg };
-  if (!payload.timestamp) payload.timestamp = new Date().toISOString();
+export interface AppendMessageInput {
+  message_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  media?: any;
+  clientCreatedAt?: number;
+  sequence?: number;
+  quizAnchor?: boolean;
+  quizTitle?: string;
+  quizData?: any;
+}
 
-  // Model is stored in chat data, not URL
+export interface ApiMessage {
+  message_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt?: number;
+  clientCreatedAt?: number;
+  sequence?: number;
+  media?: any;
+  quizAnchor?: boolean;
+  quizTitle?: string;
+  quizData?: any;
+}
+
+export async function apiAppendMessage(
+  chatId: string,
+  msg: AppendMessageInput,
+  model?: string,
+): Promise<ApiMessage> {
+  // The message ID is also the idempotency key. Retries therefore update the
+  // same stored message instead of creating another message with a new order.
+  const idempotencyKey = msg.message_id;
+  const headers: HeadersInit = { 'Idempotency-Key': idempotencyKey };
+
+  // Model is stored in chat data, not URL.
   const res = await apiFetch(`/api/chats/${encodeURIComponent(chatId)}`, {
     method: 'POST',
-    body: JSON.stringify(payload),
-    headers
+    body: JSON.stringify(msg),
+    headers,
   });
   if (!res.ok) throw new Error(`append message failed: ${res.status}`);
   return res.json();
