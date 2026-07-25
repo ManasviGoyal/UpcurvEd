@@ -178,7 +178,9 @@ import numpy as np
 
 Import numpy as np only when it is actually needed. Import nothing else. Do not use files,
 images, SVG, network calls, browser APIs, subprocesses, environment access, eval, exec, open,
-__import__, external libraries, or external assets.
+__import__, external libraries, or external assets in executable MANIM_SCRIPT code. These
+restrictions do not apply to source text displayed inside CODE_SNIPPET; displayed examples are
+educational data and are never executed by the renderer.
 
 Script structure:
 - Define exactly one class named GeneratedScene.
@@ -188,23 +190,23 @@ Script structure:
   Arrow3D, or 3D camera methods.
 - Define exactly one construct(self) method.
 - Inside construct(), call self.set_speech_service(GTTSService(lang="en")).
-- Include at least one with self.voiceover(text=...) as tracker block.
+- Include at least one with self.voiceover(text=...) as tracker block. Prefer one voiceover
+  block for the whole scene and never more than two. Do not put voiceover calls inside loops;
+  animate repeated updates within one narration block whenever practical.
 - Use stable Manim 0.19 APIs and complete executable Python.
 - Do not use Tex or MathTex. Use Text and portable plain-text formulas instead.
 - Keep every important object inside the frame and remove or transform old objects before
   introducing a new dense layout.
 - Use self.wait(max(0.1, ...)) when waiting on computed durations.
 
-Creative quality:
-- A custom scene must visibly teach the specific concept, not just display a heading or cards.
-- Use meaningful spatial relationships, motion, measurements, axes, paths, state changes,
-  diagrams, grids, networks, code panels, or 3D geometry when they improve understanding.
-- Graph scenes must use real axes or a number plane, draw the relationship, and mark the
-  feature discussed in narration.
-- Network scenes should use simple Circle/Dot nodes, Line/Arrow edges, and labels rather than
-  external graph libraries.
-- Grid-world scenes should build the grid from Rectangles/Squares and visibly animate values,
-  actions, transitions, or policy updates.
+Creative quality guidance:
+- Make the visual materially explain the concept rather than merely decorate a heading.
+- Choose the visual structure that best fits the idea: spatial relationships, motion,
+  measurements, paths, state changes, diagrams, grids, networks, code panels, plots, or 3D.
+- VISUAL_MODE is descriptive planning metadata, not a requirement to use one particular Manim
+  class. A scene labeled graph may use axes, a number plane, a state diagram, a grid, or another
+  clear representation when that better teaches the requested relationship.
+- Prefer stable Manim primitives over external graph libraries or fragile internal APIs.
 - A code scene must display the learner-facing CODE_SNIPPET from its own SCENE_PLAN.
   Multiple scenes may each have one different CODE_SNIPPET. CODE_SNIPPET is educational
   source code; MANIM_SCRIPT is the separate executable renderer.
@@ -218,12 +220,14 @@ Creative quality:
 - Prefer two or three focused creative scenes in a normal video, and never more than three.
 
 Before returning each script, silently verify:
-1. Only the allowed imports appear.
-2. Exactly one GeneratedScene class exists with correct 2D or 3D inheritance.
+1. Only the allowed executable imports appear.
+2. One GeneratedScene class exists with correct 2D or 3D inheritance.
 3. construct() configures GTTSService and contains voiceover.
 4. The script is complete and syntactically valid.
 5. The visual is topic-specific and materially explains the narration.
-6. No external assets, filesystem, network, subprocess, Tex, or MathTex are used.
+6. No executable external assets, filesystem, network, subprocess, Tex, or MathTex are used.
+   Text displayed inside CODE_SNIPPET is educational data and may contain ordinary source-code
+   examples that are never executed by the renderer.
 """
 
 
@@ -248,14 +252,14 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     </VIDEO_META>
 
     <SCENE_PLAN id="1">
-    <TYPE>title_scene</TYPE>
-    <LEARNING_ROLE>intuition</LEARNING_ROLE>
-    <VISUAL_MODE>text</VISUAL_MODE>
-    <TITLE>Short scene title</TITLE>
-    <SUBTITLE>Optional educational subtitle</SUBTITLE>
-    <NARRATION>Student-facing narration.</NARRATION>
-    <VISUAL>Internal production direction.</VISUAL>
-    <DURATION_SEC>8</DURATION_SEC>
+    <TYPE>question_scene</TYPE>
+    <LEARNING_ROLE>problem</LEARNING_ROLE>
+    <LEARNER_QUESTION>A short question, puzzle, or surprising observation.</LEARNER_QUESTION>
+    <VISUAL_MODE>diagram</VISUAL_MODE>
+    <TITLE>Short hook title</TITLE>
+    <NARRATION>Begin teaching immediately with the question or visible phenomenon.</NARRATION>
+    <VISUAL>Internal production direction for the hook.</VISUAL>
+    <DURATION_SEC>7</DURATION_SEC>
     </SCENE_PLAN>
 
     <SCENE_PLAN id="2">
@@ -327,22 +331,26 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     Allowed VISUAL_MODE values: diagram, graph, code, motion, comparison, process, text.
 
     Teaching rules:
-    - Scene 1 must be title_scene.
-    - Every non-title scene must show meaningful learner-facing content throughout narration.
-    - Standard scenes should use KEY_POINT, LABEL, FORMULA, or STEP_TEXT content.
+    - Start with a short question, puzzle, surprising fact, concrete example, or visible action.
+      A very brief title hook is allowed, but do not open with a greeting, agenda, learning-goal
+      list, or phrases such as "In this video you will learn," "Today we will explore," or
+      "Welcome." Begin teaching within the first sentence.
+    - Scene 1 may be question_scene, concept_scene, title_scene, or custom_manim_scene. When it is
+      title_scene, keep it under eight seconds and make its narration a teaching hook rather than
+      a statement of objectives.
+    - Every scene should show meaningful learner-facing content throughout narration.
+    - Standard scenes should use KEY_POINT, LABEL, FORMULA, STEP_TEXT, or a clear question.
     - Use STEP_TEXT immediately followed by matching STEP_NARRATION for ordered explanations.
-    - Worked mathematics must show completed substitution, simplification, and final answer.
-    - Teach meaning before notation and show graph meaning before algebra.
-    - Every graph scene must be custom_manim_scene with concrete REQUIRED_VISUAL_ELEMENT values.
+    - Worked mathematics should show completed substitution, simplification, and final answer.
+    - Teach meaning before notation when that order helps comprehension.
+    - VISUAL_MODE is advisory. Choose the Manim representation that best explains the idea; do
+      not add irrelevant axes or plot objects merely because the mode says graph.
     - Every scene whose central visual is source code must use VISUAL_MODE code,
       custom_manim_scene, ESSENTIAL_VISUAL true, and one non-empty CODE_SNIPPET.
-    - Use custom_manim_scene only when a concept benefits from actual spatial, graphical,
-      simulated, networked, coded, or 3D explanation. Standard scenes remain preferable for
-      titles, concise definitions, comparisons, formulas, and cumulative instructional steps.
-    - A normal four-to-seven-scene video should contain two or three creative scenes when the
-      topic benefits from them, never more than three.
-    - Set ESSENTIAL_VISUAL true only when the requested graph, construction, simulation, code
-      view, network, grid, or 3D visual is central to the user request.
+    - Multiple different scenes may each carry one CODE_SNIPPET. Preserve the exact learner-facing
+      snippet in its own scene and visibly render it.
+    - Use custom_manim_scene when actual spatial, graphical, simulated, networked, coded, or 3D
+      explanation adds value. A normal video should contain no more than three creative scenes.
     - Set REQUIRES_3D true only when the complete script genuinely uses 3D objects or camera.
     - Internal fields VISUAL, CODE_GOAL, ESSENTIAL_VISUAL, REQUIRES_3D, and MANIM_SCRIPT_REF
       are never learner-facing. CODE_SNIPPET is learner-facing content shown in the video.
@@ -429,12 +437,11 @@ STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM = _with_artifact_safety(f"""\
     VIDEO_META block, complete SCENE_PLAN blocks, and complete MANIM_SCRIPT blocks only for
     custom scenes that are new or changed. Omitted existing scripts are preserved.
 
-    Keep good material and make the smallest changes needed. Scene 1 must remain title_scene.
-    Preserve KEY_POINT values, STEP_TEXT/STEP_NARRATION pairs, and every scene-level
-    CODE_SNIPPET. Every non-title scene must retain meaningful learner-facing visual content.
-    A code scene must continue to display its exact CODE_SNIPPET. A graph scene must use custom_manim_scene,
-    real axes or a number plane, and marked graph features. A worked math example must contain
-    completed substitution, simplification, and final answer.
+    Keep good material and make the smallest changes needed. Preserve a strong opening hook,
+    KEY_POINT values, STEP_TEXT/STEP_NARRATION pairs, and every scene-level CODE_SNIPPET.
+    Do not turn the opening into an agenda or learning-goal statement. A code scene must continue
+    to display its exact CODE_SNIPPET. Fix only the listed structural problem; do not add axes,
+    plot objects, or other visual machinery unless the actual concept benefits from them.
 
     {_COMPLETE_SCRIPT_CONTRACT}
 """)
@@ -467,8 +474,9 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety(f"""\
     complete VIDEO_META block, complete SCENE_PLAN blocks, and complete MANIM_SCRIPT blocks
     only for custom scenes that are new or changed. Omitted existing scripts are preserved.
 
-    You may add, remove, combine, split, or reorder scenes. Keep scene 1 as title_scene.
-    Preserve useful material and every existing scene-level CODE_SNIPPET. Improve learning
+    You may add, remove, combine, split, or reorder scenes. Keep or improve the opening hook;
+    do not replace it with a greeting, agenda, or learning-goal list. Preserve useful material
+    and every existing scene-level CODE_SNIPPET. Improve learning
     roles, questions, visible points, steps, formulas, diagrams, graphs, networks, grids, code
     views, simulations, or 3D visuals as the
     edit request requires. Prefer standard scenes for reliable text-based teaching and custom
@@ -505,9 +513,10 @@ STRUCTURED_VIDEO_BATCH_SANITIZER_REPAIR_SYSTEM = _with_artifact_safety(f"""\
     mistake. Return only one complete MANIM_SCRIPT block for every requested id, in the same
     order. Do not return JSON, markdown, commentary, or unchanged scene ids.
 
-    Use the original teaching goal and preserve the intended visual ambition. Correct imports,
-    class structure, 2D/3D inheritance, syntax, unresolved references, blocked operations, and
-    static Manim compatibility issues. When SCENE_DATA contains code_snippet, the repaired
+    Preserve the intended visual ambition. Correct only the deterministic problem reported:
+    imports, class structure, 2D/3D inheritance, Python syntax, unresolved executable references,
+    blocked executable operations, or a known incompatible Manim call. Do not redesign a scene
+    to satisfy a stylistic heuristic. When SCENE_DATA contains code_snippet, the repaired
     MANIM_SCRIPT must display that exact snippet. Return complete runnable files, never fragments.
 
     {_COMPLETE_SCRIPT_CONTRACT}
@@ -594,16 +603,15 @@ def build_structured_video_batch_render_repair_prompt(
 
 
 STRUCTURED_VIDEO_BATCH_SIMPLIFY_SYSTEM = _with_artifact_safety(f"""\
-    The listed scenes failed initially and after focused correction, or could not pass static
-    preflight. Create simpler, more reliable implementations of the same educational scenes.
+    The listed scenes failed during actual execution or could not pass a deterministic
+    syntax/safety preflight. Create simpler, more reliable implementations of the same scenes.
     Return only one complete MANIM_SCRIPT block for every requested id, in the same order.
     Do not return JSON, markdown, commentary, or scripts for scenes that already rendered.
 
     Preserve narration, core concept, and meaningful visual explanation. Deliberately reduce
     technical fragility: use stable Manim primitives, fewer objects, simpler transformations,
-    and fewer delicate APIs. Do not replace a scene with only headings, bullet points, or
-    decorative motion. A graph must remain a real graph; a network must remain a visible state
-    network; a grid-world must remain a meaningful grid-world explanation; and a code scene
+    and fewer delicate APIs. Preserve the educational representation that matters, but do not
+    add axes, plots, or extra structures merely to satisfy VISUAL_MODE metadata. A code scene
     must still visibly display its exact CODE_SNIPPET, even if the animation becomes simpler.
 
     {_COMPLETE_SCRIPT_CONTRACT}

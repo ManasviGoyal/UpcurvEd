@@ -101,25 +101,25 @@ def patch_unsafe_latex(src: str) -> str:
 def _disable_latex_mobjects(src: str) -> str:
     if os.getenv("UPCURVED_DISABLE_LATEX", "0") != "1":
         return src
-    out = re.sub(r"\bMathTex\s*\(", "Text(", src)
-    out = re.sub(r"(?<!Math)\bTex\s*\(", "Text(", out)
-    out = re.sub(r"\.set_color_by_tex_to_color_map\([^)]*\)", "", out)
-    out = re.sub(r"\.set_color_by_tex\([^)]*\)", "", out)
-    out = re.sub(r"\.get_parts_by_tex\([^)]*\)", "", out)
-    out = re.sub(r"\.get_part_by_tex\([^)]*\)", "", out)
+    out = _sub_outside_literals(src, r"\bMathTex\s*\(", "Text(")
+    out = _sub_outside_literals(out, r"(?<!Math)\bTex\s*\(", "Text(")
+    out = _sub_outside_literals(out, r"\.set_color_by_tex_to_color_map\([^)]*\)", "")
+    out = _sub_outside_literals(out, r"\.set_color_by_tex\([^)]*\)", "")
+    out = _sub_outside_literals(out, r"\.get_parts_by_tex\([^)]*\)", "")
+    out = _sub_outside_literals(out, r"\.get_part_by_tex\([^)]*\)", "")
     return out
 
 
 def _guard_negative_waits(src: str) -> str:
-    out = re.sub(
+    out = _sub_outside_literals(
+        src,
         r"self\.wait\(\s*tracker\.duration\s*-\s*([^)]+)\)",
         r"self.wait(max(0.1, tracker.duration - \1))",
-        src,
     )
-    out = re.sub(
+    out = _sub_outside_literals(
+        out,
         r"self\.wait\(\s*max\(\s*0(?:\.0)?\s*,\s*([^)]+)\)\s*\)",
         r"self.wait(max(0.1, \1))",
-        out,
     )
 
     def clamp_numeric(match: re.Match[str]) -> str:
@@ -132,7 +132,11 @@ def _guard_negative_waits(src: str) -> str:
             return f"self.wait({max(0.1, value):.3f})"
         return match.group(0)
 
-    return re.sub(r"self\.wait\(\s*(-?\d+(?:\.\d+)?)\s*\)", clamp_numeric, out)
+    return _sub_outside_literals(
+        out,
+        r"self\.wait\(\s*(-?\d+(?:\.\d+)?)\s*\)",
+        clamp_numeric,
+    )
 
 
 def _string_and_comment_spans(src: str) -> list[tuple[int, int]]:
@@ -155,6 +159,48 @@ def _string_and_comment_spans(src: str) -> list[tuple[int, int]]:
     except (tokenize.TokenError, IndentationError):
         pass
     return spans
+
+
+def _sub_outside_literals(
+    src: str,
+    pattern: str | re.Pattern[str],
+    replacement: str | Any,
+    *,
+    flags: int = 0,
+) -> str:
+    """Apply a regex replacement only to executable source, never strings/comments."""
+    compiled = re.compile(pattern, flags) if isinstance(pattern, str) else pattern
+    spans = _string_and_comment_spans(src)
+    matches = [
+        match
+        for match in compiled.finditer(src)
+        if not any(start <= match.start() < end for start, end in spans)
+    ]
+    out = src
+    for match in reversed(matches):
+        value = replacement(match) if callable(replacement) else match.expand(replacement)
+        out = out[: match.start()] + value + out[match.end() :]
+    return out
+
+
+def _uses_3d_ast(src: str) -> bool:
+    """Detect actual executable 3D API usage while ignoring displayed code strings."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return False
+    markers = {
+        "ThreeDScene", "ThreeDAxes", "Surface", "Polyhedron", "Cube", "Sphere",
+        "Prism", "Cone", "Cylinder", "Dot3D", "Line3D", "Arrow3D",
+        "set_camera_orientation", "move_camera", "begin_ambient_camera_rotation",
+        "stop_ambient_camera_rotation",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in markers:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in markers:
+            return True
+    return False
 
 
 def _balanced_call_spans(src: str, call_name: str) -> list[tuple[int, int]]:
@@ -355,55 +401,39 @@ def _sanitize_code_calls(src: str) -> tuple[str, list[str]]:
 
 
 def _code_usage_errors(tree: ast.AST) -> list[str]:
-    """Return deterministic validation errors for fragile or incomplete Code usage."""
+    """Return only deterministic errors for incomplete ``Code(...)`` calls.
+
+    Display and animation choices around a Code mobject are intentionally not validated here.
+    Those choices are best tested by the real Manim render, not guessed statically.
+    """
     errors: list[str] = []
-    code_variables: set[str] = set()
-
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            value = node.value
-            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "Code":
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        code_variables.add(target.id)
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Code":
-            code_kw = next((kw for kw in node.keywords if kw.arg == "code_string"), None)
-            if code_kw is None:
-                errors.append(
-                    "Every Code(...) call must provide learner-facing source with code_string=."
-                )
-            elif isinstance(code_kw.value, ast.Constant) and (
-                not isinstance(code_kw.value.value, str) or not code_kw.value.value.strip()
-            ):
-                errors.append("Code(..., code_string=...) cannot be empty.")
-            if node.args:
-                errors.append("Code(...) must not retain positional arguments after sanitization.")
-            unsupported = [
-                kw.arg
-                for kw in node.keywords
-                if kw.arg not in {"code_string", "language", "add_line_numbers"}
-            ]
-            if unsupported:
-                errors.append(
-                    "Unsupported Code keyword(s) remain: " + ", ".join(sorted(set(unsupported)))
-                )
-
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            if node.value.id in code_variables and node.attr in {"code", "lines"}:
-                errors.append(
-                    f"Do not access Code internals through {node.value.id}.{node.attr}; animate the Code object as a whole."
-                )
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-            if node.value.id in code_variables:
-                errors.append(
-                    f"Do not index Code internals through {node.value.id}[...]; animate the Code object as a whole."
-                )
-
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "Code":
+            continue
+        code_kw = next((kw for kw in node.keywords if kw.arg == "code_string"), None)
+        if code_kw is None:
+            errors.append(
+                "Every Code(...) call must provide learner-facing source with code_string=."
+            )
+        elif isinstance(code_kw.value, ast.Constant) and (
+            not isinstance(code_kw.value.value, str) or not code_kw.value.value.strip()
+        ):
+            errors.append("Code(..., code_string=...) cannot be empty.")
+        if node.args:
+            errors.append("Code(...) must not retain positional arguments after sanitization.")
+        unsupported = [
+            kw.arg
+            for kw in node.keywords
+            if kw.arg not in {"code_string", "language", "add_line_numbers"}
+        ]
+        if unsupported:
+            errors.append(
+                "Unsupported Code keyword(s) remain: "
+                + ", ".join(sorted(set(str(x) for x in unsupported if x)))
+            )
     return list(dict.fromkeys(errors))
-
 
 def _patch_known_manim_compatibility(src: str) -> tuple[str, list[str]]:
     changes: list[str] = []
@@ -419,11 +449,7 @@ def _patch_known_manim_compatibility(src: str) -> tuple[str, list[str]]:
     guarded = _guard_negative_waits(out)
     if guarded != out:
         changes.append("Clamped potentially non-positive self.wait durations")
-    out = guarded
-    latex = patch_unsafe_latex(out)
-    if latex != out:
-        changes.append("Replaced unsupported LaTeX macros")
-    out = _disable_latex_mobjects(latex)
+    out = _disable_latex_mobjects(guarded)
     return out, changes
 
 
@@ -444,95 +470,202 @@ def _imported_names_from_line(line: str) -> tuple[str, list[str]]:
     return stripped, names
 
 
-def _normalize_imports(src: str) -> tuple[str, list[str], list[str], list[str]]:
-    """Remove model imports and rebuild the exact allowed import header.
 
-    A few unambiguous aliases are normalized locally: ``import manim as mn`` becomes the
-    canonical star import with ``mn.`` prefixes removed, and nonstandard NumPy aliases become
-    ``np.``. Other libraries are removed and any remaining references are reported.
+def _replace_prefix_outside_literals(src: str, alias: str, replacement: str) -> tuple[str, bool]:
+    """Replace ``alias.`` without touching displayed source inside strings/comments."""
+    spans = _string_and_comment_spans(src)
+    pattern = re.compile(rf"\b{re.escape(alias)}\.")
+    matches = [
+        match
+        for match in pattern.finditer(src)
+        if not any(start <= match.start() < end for start, end in spans)
+    ]
+    if not matches:
+        return src, False
+    out = src
+    value = f"{replacement}." if replacement else ""
+    for match in reversed(matches):
+        out = out[: match.start()] + value + out[match.end() :]
+    return out, True
+
+
+def _source_offsets(src: str) -> list[int]:
+    offsets = [0]
+    for line in src.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    return offsets
+
+
+def _node_span(src: str, node: ast.AST) -> tuple[int, int] | None:
+    lineno = getattr(node, "lineno", None)
+    end_lineno = getattr(node, "end_lineno", None)
+    col = getattr(node, "col_offset", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if None in {lineno, end_lineno, col, end_col}:
+        return None
+    offsets = _source_offsets(src)
+    try:
+        return offsets[int(lineno) - 1] + int(col), offsets[int(end_lineno) - 1] + int(end_col)
+    except Exception:
+        return None
+
+
+def _root_name(node: ast.AST) -> str:
+    current = node
+    while isinstance(current, ast.Attribute):
+        current = current.value
+    return current.id if isinstance(current, ast.Name) else ""
+
+
+def _find_blocked_operations_ast(src: str) -> list[str]:
+    """Inspect executable AST nodes while ignoring code shown inside string literals."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+
+    blocked: list[str] = []
+    dangerous_calls = {"exec", "eval", "compile", "__import__", "open"}
+    module_categories = {
+        "os": "filesystem/environment",
+        "pathlib": "filesystem",
+        "shutil": "filesystem",
+        "subprocess": "subprocess",
+        "requests": "network",
+        "urllib": "network",
+        "httpx": "network",
+        "socket": "network",
+    }
+    file_method_names = {"read_text", "write_text", "read_bytes", "write_bytes", "unlink", "rmdir"}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in dangerous_calls:
+                blocked.append(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                root = _root_name(node.func)
+                if root in module_categories:
+                    blocked.append(module_categories[root])
+                if node.func.attr in file_method_names:
+                    blocked.append("filesystem")
+        elif isinstance(node, ast.Attribute):
+            root = _root_name(node)
+            if root in module_categories:
+                blocked.append(module_categories[root])
+    return list(dict.fromkeys(blocked))
+
+
+
+def _normalize_imports(src: str) -> tuple[str, list[str], list[str], list[str]]:
+    """Rebuild the small allowed import header without inspecting displayed code strings.
+
+    Earlier line-based normalization could mistake ``import`` statements inside a learner-facing
+    triple-quoted code snippet for executable imports. This implementation uses the Python AST,
+    so educational source code remains byte-for-byte intact.
     """
-    kept_lines: list[str] = []
+    changes: list[str] = []
     removed_imports: list[str] = []
     removed_names: list[str] = []
-    changes: list[str] = []
     numpy_requested = False
     manim_aliases: list[str] = []
     numpy_aliases: list[str] = []
 
-    for line in src.splitlines():
-        stripped = line.strip()
-        if not re.match(r"^(?:from\s+\S+\s+import\s+|import\s+)", stripped):
-            kept_lines.append(line)
-            continue
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        # Do not perform speculative line surgery on malformed code. Compilation will trigger
+        # one evidence-based repair call with the original source preserved.
+        header = "\n".join(_CANONICAL_IMPORTS)
+        return header + "\n\n" + src.strip() + "\n", changes, removed_imports, removed_names
 
-        normalized = re.sub(r"\s+#.*$", "", stripped).strip()
-        if normalized in _ALLOWED_IMPORT_EXACT:
-            if normalized.startswith("import numpy"):
-                numpy_requested = True
-            continue
+    import_nodes = [
+        node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    spans: list[tuple[int, int]] = []
+    for node in import_nodes:
+        segment = ast.get_source_segment(src, node) or ""
+        normalized = re.sub(r"\s+#.*$", "", segment.strip()).strip()
+        span = _node_span(src, node)
+        if span is not None:
+            spans.append(span)
 
-        manim_alias = re.fullmatch(r"import\s+manim(?:\s+as\s+([A-Za-z_]\w*))?", normalized)
-        if manim_alias:
-            alias = manim_alias.group(1) or "manim"
-            manim_aliases.append(alias)
+        if isinstance(node, ast.ImportFrom) and node.module == "manim":
+            if any(alias.name == "*" for alias in node.names):
+                continue
+            for alias in node.names:
+                if alias.asname and alias.asname != alias.name:
+                    removed_names.append(alias.asname)
             changes.append(f"Normalized {normalized} to the canonical Manim star import")
             continue
-        if re.fullmatch(r"from\s+manim\s+import\s+.+", normalized):
-            changes.append(f"Normalized {normalized} to the canonical Manim star import")
+
+        if isinstance(node, ast.ImportFrom) and node.module == "manim_voiceover":
+            continue
+        if isinstance(node, ast.ImportFrom) and node.module == "manim_voiceover.services.gtts":
             continue
 
-        numpy_alias = re.fullmatch(r"import\s+numpy(?:\s+as\s+([A-Za-z_]\w*))?", normalized)
-        if numpy_alias:
-            alias = numpy_alias.group(1) or "numpy"
-            numpy_aliases.append(alias)
-            numpy_requested = True
-            changes.append(f"Normalized {normalized} to import numpy as np")
-            continue
+        if isinstance(node, ast.Import):
+            handled = True
+            for alias in node.names:
+                if alias.name == "manim":
+                    manim_aliases.append(alias.asname or "manim")
+                    changes.append(f"Normalized {normalized} to the canonical Manim star import")
+                elif alias.name == "numpy":
+                    numpy_aliases.append(alias.asname or "numpy")
+                    numpy_requested = True
+                    changes.append(f"Normalized {normalized} to import numpy as np")
+                else:
+                    handled = False
+            if handled:
+                continue
 
-        original, names = _imported_names_from_line(stripped)
-        removed_imports.append(original)
+        original, names = _imported_names_from_line(segment)
+        removed_imports.append(original or normalized)
         removed_names.extend(names)
-        changes.append(f"Removed unsupported import: {original}")
+        changes.append(f"Removed unsupported import: {original or normalized}")
 
-    body = "\n".join(kept_lines).strip()
+    body = src
+    for start, end in sorted(spans, reverse=True):
+        body = body[:start] + body[end:]
+
     for alias in sorted(set(manim_aliases), key=len, reverse=True):
-        replaced = re.sub(rf"\b{re.escape(alias)}\.", "", body)
-        if replaced != body:
+        body, changed = _replace_prefix_outside_literals(body, alias, "")
+        if changed:
             changes.append(f"Removed {alias}. prefixes after normalizing the Manim import")
-        body = replaced
     for alias in sorted(set(numpy_aliases), key=len, reverse=True):
-        replaced = re.sub(rf"\b{re.escape(alias)}\.", "np.", body)
-        if replaced != body:
+        body, changed = _replace_prefix_outside_literals(body, alias, "np")
+        if changed and alias != "np":
             changes.append(f"Normalized {alias}. references to np.")
-        body = replaced
-    if re.search(r"\bnumpy\.", body):
-        body = re.sub(r"\bnumpy\.", "np.", body)
+    body, changed = _replace_prefix_outside_literals(body, "numpy", "np")
+    if changed:
         numpy_requested = True
         changes.append("Normalized numpy. references to np.")
-    if re.search(r"\bnp\.", body):
-        numpy_requested = True
+
+    # Determine executable np usage from the parsed body, not from snippet strings.
+    try:
+        body_tree = ast.parse(body)
+        if any(isinstance(node, ast.Name) and node.id == "np" for node in ast.walk(body_tree)):
+            numpy_requested = True
+    except SyntaxError:
+        pass
 
     header = list(_CANONICAL_IMPORTS)
     if numpy_requested:
         header.append(_NUMPY_IMPORT)
-    source = "\n".join(header) + "\n\n" + body
-    return source.strip() + "\n", changes, removed_imports, removed_names
-
+    source = "\n".join(header) + "\n\n" + body.strip()
+    return source.strip() + "\n", list(dict.fromkeys(changes)), list(dict.fromkeys(removed_imports)), list(dict.fromkeys(removed_names))
 
 def _find_unresolved_removed_names(src: str, names: list[str]) -> list[str]:
-    unresolved: list[str] = []
-    for name in sorted(set(names)):
-        if not name or name in {"VoiceoverScene", "GTTSService", "np"}:
-            continue
-        patterns = (
-            rf"\b{re.escape(name)}\s*\.",
-            rf"\b{re.escape(name)}\s*\(",
-            rf"\b{re.escape(name)}\b",
-        )
-        if any(re.search(pattern, src) for pattern in patterns):
-            unresolved.append(name)
-    return unresolved
-
+    """Find executable references to removed imports, ignoring string literal contents."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    return sorted(
+        name
+        for name in set(names)
+        if name and name not in {"VoiceoverScene", "GTTSService", "np"} and name in used
+    )
 
 def _class_header_span(src: str) -> tuple[re.Match[str] | None, list[re.Match[str]]]:
     pattern = re.compile(
@@ -544,30 +677,60 @@ def _class_header_span(src: str) -> tuple[re.Match[str] | None, list[re.Match[st
 
 
 def _normalize_single_scene_class(src: str, uses_3d: bool) -> tuple[str, list[str], list[str]]:
+    """Normalize the actual scene class while allowing harmless helper classes."""
     changes: list[str] = []
     errors: list[str] = []
-    first, matches = _class_header_span(src)
-    if not matches:
-        errors.append("No scene class was defined. Return exactly one GeneratedScene class.")
-        return src, changes, errors
-    if len(matches) > 1:
-        errors.append("More than one class was defined. Return exactly one GeneratedScene class.")
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
         return src, changes, errors
 
-    assert first is not None
-    desired_bases = "VoiceoverScene, ThreeDScene" if uses_3d else "VoiceoverScene"
-    desired = f"{first.group('indent')}class GeneratedScene({desired_bases}):"
-    current = first.group(0)
-    if current != desired:
-        src = src[: first.start()] + desired + src[first.end() :]
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    generated = [node for node in classes if node.name == "GeneratedScene"]
+    candidate: ast.ClassDef | None = generated[0] if generated else None
+    if candidate is None:
+        scene_like: list[ast.ClassDef] = []
+        for node in classes:
+            base_names = {
+                base.id if isinstance(base, ast.Name) else base.attr
+                for base in node.bases
+                if isinstance(base, (ast.Name, ast.Attribute))
+            }
+            if base_names & {"VoiceoverScene", "ThreeDScene", "Scene"}:
+                scene_like.append(node)
+        if len(scene_like) == 1:
+            candidate = scene_like[0]
+        elif len(classes) == 1:
+            candidate = classes[0]
+
+    if candidate is None:
+        errors.append("No renderable scene class was found. Define GeneratedScene.")
+        return src, changes, errors
+
+    lines = src.splitlines(keepends=True)
+    line_index = int(candidate.lineno) - 1
+    if line_index < 0 or line_index >= len(lines):
+        errors.append("Could not locate the GeneratedScene class header.")
+        return src, changes, errors
+    original_line = lines[line_index]
+    if not re.match(r"^\s*class\s+[A-Za-z_]\w*\s*(?:\([^\n]*\))?\s*:\s*(?:#.*)?$", original_line.rstrip("\n")):
+        errors.append("GeneratedScene must use a single-line class header.")
+        return src, changes, errors
+
+    indent = re.match(r"^\s*", original_line).group(0)
+    bases = "VoiceoverScene, ThreeDScene" if uses_3d else "VoiceoverScene"
+    ending = "\n" if original_line.endswith("\n") else ""
+    desired = f"{indent}class GeneratedScene({bases}):{ending}"
+    if original_line != desired:
+        lines[line_index] = desired
         changes.append(
-            "Normalized scene class to "
+            "Normalized the renderable scene class to "
             + ("GeneratedScene(VoiceoverScene, ThreeDScene)" if uses_3d else "GeneratedScene(VoiceoverScene)")
         )
-    return src, changes, errors
-
+    return "".join(lines), changes, errors
 
 def _validate_scene_ast(src: str, uses_3d: bool) -> tuple[list[str], str | None]:
+    """Validate only conditions known to prevent a safe, voiced scene from running."""
     errors: list[str] = []
     try:
         tree = ast.parse(src)
@@ -578,13 +741,13 @@ def _validate_scene_ast(src: str, uses_3d: bool) -> tuple[list[str], str | None]
     except Exception as exc:
         return errors, f"{type(exc).__name__}: {exc}"
 
-    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
-    if len(classes) != 1:
-        errors.append("Script must define exactly one class.")
+    scene_classes = [
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "GeneratedScene"
+    ]
+    if len(scene_classes) != 1:
+        errors.append("Script must define exactly one top-level GeneratedScene class.")
         return errors, None
-    scene_class = classes[0]
-    if scene_class.name != "GeneratedScene":
-        errors.append("Scene class must be named GeneratedScene.")
+    scene_class = scene_classes[0]
 
     base_names: set[str] = set()
     for base in scene_class.bases:
@@ -595,29 +758,44 @@ def _validate_scene_ast(src: str, uses_3d: bool) -> tuple[list[str], str | None]
     if "VoiceoverScene" not in base_names:
         errors.append("GeneratedScene must inherit VoiceoverScene.")
     if uses_3d and "ThreeDScene" not in base_names:
-        errors.append("3D usage requires GeneratedScene(VoiceoverScene, ThreeDScene).")
+        errors.append("Actual 3D API usage requires ThreeDScene inheritance.")
 
-    methods = [node for node in scene_class.body if isinstance(node, ast.FunctionDef)]
-    constructs = [node for node in methods if node.name == "construct"]
+    constructs = [
+        node for node in scene_class.body if isinstance(node, ast.FunctionDef) and node.name == "construct"
+    ]
     if len(constructs) != 1:
         errors.append("GeneratedScene must define exactly one construct(self) method.")
-    if len(methods) != 1:
-        errors.append("GeneratedScene should define only construct(self); nested helpers may be local functions.")
+        return list(dict.fromkeys(errors)), None
+    construct = constructs[0]
 
-    if "self.set_speech_service" not in src or "GTTSService" not in src:
-        errors.append("construct() must configure GTTSService with self.set_speech_service(...).")
-    if "self.voiceover" not in src:
+    def is_self_call(node: ast.AST, attr: str) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == attr
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        )
+
+    calls = [node for node in ast.walk(construct) if isinstance(node, ast.Call)]
+    if not any(is_self_call(node, "set_speech_service") for node in calls):
+        errors.append("construct() must call self.set_speech_service(...).")
+    if not any(
+        isinstance(node.func, ast.Name) and node.func.id == "GTTSService"
+        for node in calls
+    ):
+        errors.append("construct() must configure GTTSService.")
+    if not any(is_self_call(node, "voiceover") for node in calls):
         errors.append("Creative scene must include at least one self.voiceover block.")
-    if src.count("self.play(") < 2:
-        errors.append("Creative scene should contain at least two self.play(...) calls.")
-    if re.search(r"\b(?:MathTex|Tex)\s*\(", src):
-        errors.append("Tex and MathTex are not allowed; use Text with portable formulas.")
     errors.extend(_code_usage_errors(tree))
     return list(dict.fromkeys(errors)), None
 
-
 def sanitize_manim_script(src: str) -> SanitizeResult:
-    """Sanitize and statically preflight one model-authored complete Manim script."""
+    """Sanitize one model-authored script using hard safety/execution checks only.
+
+    Visual quality, number of animations, graph construction style, and pedagogical choices are
+    intentionally left to the real render and evidence-based repair path.
+    """
     original = str(src or "")
     changes: list[str] = []
     cleaned = strip_code_fences(original)
@@ -630,12 +808,12 @@ def sanitize_manim_script(src: str) -> SanitizeResult:
     cleaned, import_changes, removed_imports, removed_names = _normalize_imports(cleaned)
     changes.extend(import_changes)
 
-    uses_3d = bool(_3D_MARKERS.search(cleaned))
+    uses_3d = _uses_3d_ast(cleaned)
     cleaned, class_changes, structural_errors = _normalize_single_scene_class(cleaned, uses_3d)
     changes.extend(class_changes)
 
     unresolved = _find_unresolved_removed_names(cleaned, removed_names)
-    blocked = [name for name, pattern in _DANGEROUS_PATTERNS if pattern.search(cleaned)]
+    blocked = _find_blocked_operations_ast(cleaned)
     validation_errors, compile_error = _validate_scene_ast(cleaned, uses_3d)
     validation_errors = list(dict.fromkeys(structural_errors + validation_errors))
 
@@ -645,7 +823,7 @@ def sanitize_manim_script(src: str) -> SanitizeResult:
         )
     if blocked:
         validation_errors.append(
-            "Blocked operations remain in the script: " + ", ".join(blocked)
+            "Blocked executable operations remain in the script: " + ", ".join(blocked)
         )
 
     requires_repair = bool(compile_error or validation_errors or unresolved or blocked)
@@ -660,7 +838,6 @@ def sanitize_manim_script(src: str) -> SanitizeResult:
         requires_repair=requires_repair,
         uses_3d=uses_3d,
     )
-
 
 # ---------------------------------------------------------------------------
 # Legacy/minimal sanitizer retained for deterministic wrappers and old paths.

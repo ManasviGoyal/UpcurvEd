@@ -174,16 +174,14 @@ def _safe_python_literal(value: Any) -> str:
 
 
 def build_code_snippet_scene_code(scene: dict[str, Any]) -> str:
-    """Render learner-facing source code without relying on Manim's Code internals.
+    """Render the complete learner-facing snippet with deterministic pagination.
 
-    This domain-neutral renderer is the final reliable path for any code scene. It uses plain
-    Text rows, line numbers, automatic sizing, and no files, syntax highlighters, or external
-    fonts. The exact snippet remains attached to its scene in the structured bundle.
+    The fallback never depends on Manim ``Code`` internals and never drops later lines. Long
+    snippets are split across successive pages while retaining their original line numbers.
     """
     safe_scene = _scene_for_render(scene)
     scene_literal = _safe_python_literal(safe_scene)
     template = r'''
-import re
 import manim as mn
 from manim_voiceover import VoiceoverScene
 from manim_voiceover.services.gtts import GTTSService
@@ -197,10 +195,8 @@ class GeneratedScene(VoiceoverScene):
         narration = str(scene.get("narration") or title_text)
         snippet = str(scene.get("code_snippet") or "").replace("\r\n", "\n").replace("\r", "\n").expandtabs(4).strip("\n")
         raw_lines = snippet.splitlines() if snippet else ["# Code snippet unavailable"]
-        max_visible = 24
-        lines = raw_lines[:max_visible]
-        if len(raw_lines) > max_visible:
-            lines[-1] = "# ... additional lines omitted for display"
+        page_size = 16
+        pages = [raw_lines[index:index + page_size] for index in range(0, len(raw_lines), page_size)]
 
         bg = mn.Rectangle(width=mn.config.frame_width, height=mn.config.frame_height)
         bg.set_fill("#0b1120", opacity=1)
@@ -222,43 +218,70 @@ class GeneratedScene(VoiceoverScene):
         panel.set_fill("#111827", opacity=0.98)
         panel.next_to(title, mn.DOWN, buff=0.28)
 
-        longest = max((len(line) for line in lines), default=1)
-        line_count = max(1, len(lines))
-        font_size = min(23, max(13, int(560 / max(24, longest))))
-        font_size = min(font_size, max(13, int(360 / line_count)))
-
-        rows = mn.VGroup()
-        for index, line in enumerate(lines, start=1):
-            number = mn.Text(f"{index:>2}", font_size=font_size, color=mn.GRAY_B)
-            code = mn.Text(line if line else " ", font_size=font_size, color=mn.WHITE)
-            row = mn.VGroup(number, code).arrange(mn.RIGHT, buff=0.28, aligned_edge=mn.DOWN)
-            rows.add(row)
-        rows.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.08)
-        if rows.width > 10.75:
-            rows.scale_to_fit_width(10.75)
-        if rows.height > 4.8:
-            rows.scale_to_fit_height(4.8)
-        rows.move_to(panel.get_center()).align_to(panel, mn.LEFT).shift(mn.RIGHT * 0.34)
-
-        nonempty_indices = [i for i, line in enumerate(lines) if line.strip()]
-        focus_index = nonempty_indices[min(len(nonempty_indices) - 1, max(0, len(nonempty_indices) // 2))] if nonempty_indices else 0
-        focus = mn.SurroundingRectangle(
-            rows[focus_index], color=mn.YELLOW, buff=0.07, corner_radius=0.05
-        )
+        def build_rows(lines, starting_line):
+            longest = max((len(line) for line in lines), default=1)
+            line_count = max(1, len(lines))
+            font_size = min(23, max(13, int(560 / max(24, longest))))
+            font_size = min(font_size, max(13, int(330 / line_count)))
+            rows = mn.VGroup()
+            for offset, line in enumerate(lines):
+                number = mn.Text(f"{starting_line + offset:>2}", font_size=font_size, color=mn.GRAY_B)
+                code = mn.Text(line if line else " ", font_size=font_size, color=mn.WHITE)
+                row = mn.VGroup(number, code).arrange(mn.RIGHT, buff=0.28, aligned_edge=mn.DOWN)
+                rows.add(row)
+            rows.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.08)
+            if rows.width > 10.75:
+                rows.scale_to_fit_width(10.75)
+            if rows.height > 4.75:
+                rows.scale_to_fit_height(4.75)
+            rows.move_to(panel.get_center()).align_to(panel, mn.LEFT).shift(mn.RIGHT * 0.34)
+            return rows
 
         with self.voiceover(text=narration) as tracker:
             self.play(mn.FadeIn(title, shift=mn.DOWN * 0.08), mn.Create(panel), run_time=0.75)
-            self.play(
-                mn.LaggedStart(*[mn.FadeIn(row, shift=mn.RIGHT * 0.08) for row in rows], lag_ratio=0.035),
-                run_time=min(2.2, max(0.9, 0.09 * len(rows))),
-            )
-            self.play(mn.Create(focus), mn.Indicate(rows[focus_index]), run_time=0.75)
-            used = 1.5 + min(2.2, max(0.9, 0.09 * len(rows)))
+            current_rows = None
+            current_focus = None
+            used = 0.75
+            for page_index, page_lines in enumerate(pages):
+                rows = build_rows(page_lines, page_index * page_size + 1)
+                nonempty = [i for i, line in enumerate(page_lines) if line.strip()]
+                focus_index = nonempty[min(len(nonempty) - 1, len(nonempty) // 2)] if nonempty else 0
+                focus = mn.SurroundingRectangle(
+                    rows[focus_index], color=mn.YELLOW, buff=0.07, corner_radius=0.05
+                )
+                if current_rows is None:
+                    page_time = min(1.8, max(0.8, 0.08 * len(rows)))
+                    self.play(
+                        mn.LaggedStart(
+                            *[mn.FadeIn(row, shift=mn.RIGHT * 0.08) for row in rows],
+                            lag_ratio=0.03,
+                        ),
+                        run_time=page_time,
+                    )
+                else:
+                    page_time = 0.7
+                    self.play(
+                        mn.FadeOut(current_rows, shift=mn.LEFT * 0.12),
+                        mn.FadeOut(current_focus),
+                        mn.FadeIn(rows, shift=mn.RIGHT * 0.12),
+                        run_time=page_time,
+                    )
+                self.play(mn.Create(focus), mn.Indicate(rows[focus_index]), run_time=0.55)
+                used += page_time + 0.55
+                current_rows, current_focus = rows, focus
+                if page_index < len(pages) - 1:
+                    self.wait(0.45)
+                    used += 0.45
             remaining = max(0.15, float(getattr(tracker, "duration", 0) or 0) - used)
             if remaining > 0.15:
                 self.wait(remaining)
-        self.wait(1.2)
-        self.play(mn.FadeOut(focus), mn.FadeOut(rows), mn.FadeOut(panel), mn.FadeOut(title), run_time=0.55)
+        self.wait(1.0)
+        fades = [mn.FadeOut(panel), mn.FadeOut(title)]
+        if current_rows is not None:
+            fades.append(mn.FadeOut(current_rows))
+        if current_focus is not None:
+            fades.append(mn.FadeOut(current_focus))
+        self.play(*fades, run_time=0.55)
         self.wait(0.1)
 '''.strip() + "\n"
     return template.replace("__SCENE_JSON__", scene_literal)
@@ -384,8 +407,8 @@ class GeneratedScene(VoiceoverScene):
         header = fit_text(title_text, 35, mn.WHITE, 10.6).to_edge(mn.UP, buff=0.4)
         self.play(mn.FadeIn(header, shift=mn.DOWN * 0.08), run_time=0.4)
 
-        # Any instructional sequence uses deterministic cumulative pacing. Earlier steps stay
-        # visible, each step receives its own voiceover, and the completed sequence is held.
+        # Instructional sequences use one voice request for the whole scene. This is more
+        # reliable than making a separate gTTS request for every visible step.
         if steps:
             formula = formula_mob(formula_text, 28) if formula_text else None
             if formula is not None:
@@ -404,27 +427,33 @@ class GeneratedScene(VoiceoverScene):
             if step_mobs.get_bottom()[1] < -3.15:
                 step_mobs.shift(mn.UP * (-3.15 - step_mobs.get_bottom()[1]))
 
-            with self.voiceover(text=narration) as tracker:
+            combined_narration = " ".join(
+                [narration] + [
+                    step_narrations[index] if index < len(step_narrations) else steps[index]
+                    for index in range(len(steps))
+                ]
+            ).strip()
+            with self.voiceover(text=combined_narration) as tracker:
+                used = 0.0
                 if formula is not None:
                     self.play(mn.Write(formula), run_time=0.7)
-                    hold_voiceover(tracker, 0.7)
+                    used += 0.7
                 else:
                     self.play(mn.Indicate(header), run_time=0.55)
-                    hold_voiceover(tracker, 0.55)
-
-            for index, step_mob in enumerate(step_mobs):
-                spoken = step_narrations[index] if index < len(step_narrations) else steps[index]
-                with self.voiceover(text=spoken) as tracker:
+                    used += 0.55
+                for step_mob in step_mobs:
                     self.play(mn.Write(step_mob), run_time=0.65)
-                    hold_voiceover(tracker, 0.65)
-                self.wait(0.75)
+                    self.wait(0.55)
+                    used += 1.2
 
-            final_step = step_mobs[-1]
-            completion_box = mn.SurroundingRectangle(
-                final_step, color=mn.GREEN_C, buff=0.16, corner_radius=0.08
-            )
-            self.play(mn.Create(completion_box), mn.Indicate(final_step), run_time=0.75)
-            self.wait(3.0)
+                final_step = step_mobs[-1]
+                completion_box = mn.SurroundingRectangle(
+                    final_step, color=mn.GREEN_C, buff=0.16, corner_radius=0.08
+                )
+                self.play(mn.Create(completion_box), mn.Indicate(final_step), run_time=0.75)
+                used += 0.75
+                hold_voiceover(tracker, used)
+            self.wait(1.5)
             clean_out(bg)
             return
 

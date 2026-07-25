@@ -20,7 +20,7 @@ GENERATION_AUDIT_PATH = STORAGE / "generation_audit.jsonl"
 _INSTALLATION_ID_PATH = STORAGE / ".generation_installation_id"
 _EXPORTS_ROOT = STORAGE / "exports"
 _RETENTION_MARKER = ".diagnostic_retention.json"
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _EXCEPTION_LINE = re.compile(
     r"^(?:[A-Za-z_][\w.]*Error|Exception|RuntimeError|TypeError|ValueError|NameError|"
@@ -61,6 +61,15 @@ def _installation_id() -> str:
 
 def _clean_text(value: Any, limit: int = 300) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:limit]
+
+
+def _clean_error_summary(value: Any, limit: int = 500) -> str:
+    text = _clean_text(value, limit * 2)
+    text = re.sub(r"/(?:Users|home)/[^\s:]+(?:/[^\s:]+)*", "[local path]", text)
+    text = re.sub(r"[A-Za-z]:\\[^\s:]+(?:\\[^\s:]+)*", "[local path]", text)
+    text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[email]", text)
+    text = re.sub(r"sk-[A-Za-z0-9_-]+", "[key]", text)
     return text[:limit]
 
 
@@ -146,6 +155,8 @@ def append_generation_audit(entry: dict[str, Any]) -> dict[str, Any]:
             entry.get("component_fallback_scene_ids")
         ),
         "recovery_stages": _clean_string_list(entry.get("recovery_stages") or []),
+        "voice_retry_count": max(0, int(entry.get("voice_retry_count") or 0)),
+        "transport_salvages": max(0, int(entry.get("transport_salvages") or 0)),
         "local_adjustments": {
             "json_plan_punctuation_repaired": bool(
                 entry.get("local_json_plan_repair")
@@ -161,10 +172,18 @@ def append_generation_audit(entry: dict[str, Any]) -> dict[str, Any]:
     failure_stage = _clean_text(entry.get("failure_stage"), 100)
     if failure_stage:
         payload["failure_stage"] = failure_stage
+    during_stage = _clean_text(entry.get("during_stage"), 100)
+    if during_stage:
+        payload["during_stage"] = during_stage
+    error_category = _clean_text(entry.get("error_category"), 100)
+    if error_category:
+        payload["error_category"] = error_category
+    if entry.get("retryable") is not None:
+        payload["retryable"] = bool(entry.get("retryable"))
     affected = _clean_int_list(entry.get("affected_scenes"))
     if affected:
         payload["affected_scenes"] = affected
-    error_summary = _clean_text(entry.get("error_summary"), 500)
+    error_summary = _clean_error_summary(entry.get("error_summary"), 500)
     if error_summary:
         payload["error_summary"] = error_summary
 
@@ -308,9 +327,13 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         if str(item.get("failure_stage") or "").strip()
     )
     recovery_stages: Counter[str] = Counter()
+    error_categories: Counter[str] = Counter()
+    during_stages: Counter[str] = Counter()
     local_plan_adjustments: Counter[str] = Counter()
     local_script_adjustments: Counter[str] = Counter()
     total_duration = 0.0
+    total_voice_retries = 0
+    total_transport_salvages = 0
     model_rows: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "runs": 0,
@@ -327,6 +350,12 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         duration = max(0.0, float(item.get("duration_seconds") or 0.0))
         total_duration += duration
         recovery_stages.update(str(value) for value in item.get("recovery_stages") or [])
+        if str(item.get("error_category") or "").strip():
+            error_categories[str(item.get("error_category"))] += 1
+        if str(item.get("during_stage") or "").strip():
+            during_stages[str(item.get("during_stage"))] += 1
+        total_voice_retries += int(item.get("voice_retry_count") or 0)
+        total_transport_salvages += int(item.get("transport_salvages") or 0)
         local = item.get("local_adjustments")
         if isinstance(local, dict):
             local_plan_adjustments.update(
@@ -382,7 +411,11 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         "outcomes": dict(sorted(outcomes.items())),
         "providers": dict(sorted(providers.items())),
         "failure_stages": dict(sorted(failure_stages.items())),
+        "during_stages": dict(sorted(during_stages.items())),
+        "error_categories": dict(sorted(error_categories.items())),
         "recovery_stages": dict(sorted(recovery_stages.items())),
+        "voice_retries": total_voice_retries,
+        "transport_salvages": total_transport_salvages,
         "local_plan_adjustments": dict(sorted(local_plan_adjustments.items())),
         "local_script_adjustments": dict(sorted(local_script_adjustments.items())),
         "by_model": by_model,
@@ -410,7 +443,8 @@ user names, email addresses, local filesystem paths, or full tracebacks.
 
 Files:
 - generation_audit.jsonl: one compact JSON record per structured-video generation or edit.
-- generation_summary.json: deterministic aggregate counts by outcome, provider, and model.
+- generation_summary.json: deterministic aggregate counts by outcome, provider, model,
+  failure stage, root error category, service retries, and recovery path.
 """
 
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

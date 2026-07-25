@@ -211,6 +211,7 @@ def run_job_from_code(
     timeout_seconds: int = 600,
     job_id: str | None = None,
     inject_watermark: bool = True,
+    retain_logs: bool = True,
 ) -> dict[str, Any]:
     """Compile, lint, and render one complete Manim script. Never raises."""
     job_id = job_id or str(uuid.uuid4())[:8]
@@ -230,7 +231,8 @@ def run_job_from_code(
     # Distinguish Python syntax/compile failures from Manim runtime failures.
     try:
         compile(code, str(scene_py), "exec")
-        (logs_dir / "compile_ok.txt").write_text("ok\n", encoding="utf-8")
+        if retain_logs:
+            (logs_dir / "compile_ok.txt").write_text("ok\n", encoding="utf-8")
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
         (logs_dir / "compile_error.txt").write_text(detail + "\n", encoding="utf-8")
@@ -269,7 +271,8 @@ def run_job_from_code(
             env=runner_env,
         )
         lint_text = (lint_proc.stdout or "") + (lint_proc.stderr or "")
-        (logs_dir / "lint.txt").write_text(lint_text, encoding="utf-8")
+        if retain_logs or lint_text.strip() or lint_proc.returncode != 0:
+            (logs_dir / "lint.txt").write_text(lint_text, encoding="utf-8")
         if lint_proc.returncode != 0 and os.getenv("LINT_STRICT", "0") == "1":
             return _base_result(
                 ok=False,
@@ -368,13 +371,15 @@ def run_job_from_code(
                 render_command=cmd,
             )
 
-        (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
-        (logs_dir / "manim_stdout.txt").write_text(stdout or "", encoding="utf-8")
-        (logs_dir / "manim_stderr.txt").write_text(stderr or "", encoding="utf-8")
-        (logs_dir / "returncode.txt").write_text(str(proc.returncode), encoding="utf-8")
-
         mp4s = sorted(out_dir.rglob("*.mp4"))
-        if proc.returncode != 0 or not mp4s:
+        failed_render = proc.returncode != 0 or not mp4s
+        if retain_logs or failed_render:
+            (logs_dir / "manim_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
+            (logs_dir / "manim_stdout.txt").write_text(stdout or "", encoding="utf-8")
+            (logs_dir / "manim_stderr.txt").write_text(stderr or "", encoding="utf-8")
+            (logs_dir / "returncode.txt").write_text(str(proc.returncode), encoding="utf-8")
+
+        if failed_render:
             (logs_dir / "out_dir_listing.txt").write_text(
                 "\n".join(str(path) for path in out_dir.rglob("*")),
                 encoding="utf-8",
@@ -432,11 +437,15 @@ def run_job_from_code(
             scene_py=scene_py,
             video_url=to_static_url(final_video),
             compile_log=stdout,
-            logs={
-                "stdout_url": to_static_url(logs_dir / "manim_stdout.txt"),
-                "stderr_url": to_static_url(logs_dir / "manim_stderr.txt"),
-                "cmd_url": to_static_url(logs_dir / "manim_cmd.txt"),
-            },
+            logs=(
+                {
+                    "stdout_url": to_static_url(logs_dir / "manim_stdout.txt"),
+                    "stderr_url": to_static_url(logs_dir / "manim_stderr.txt"),
+                    "cmd_url": to_static_url(logs_dir / "manim_cmd.txt"),
+                }
+                if retain_logs
+                else {"stdout_url": "", "stderr_url": "", "cmd_url": ""}
+            ),
             render_command=cmd,
         )
     except FileNotFoundError as exc:

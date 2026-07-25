@@ -62,6 +62,7 @@ from backend.utils.failure_log import (
     prune_diagnostic_bundles,
     summarize_error,
 )
+from backend.utils.diagnostics import diagnostic_category, diagnostic_retryable, public_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ _RENDER_REPAIR_MAX_TOKENS = int(os.getenv("UPCURVED_VIDEO_RENDER_REPAIR_MAX_TOKE
 _SIMPLIFY_MAX_TOKENS = int(os.getenv("UPCURVED_VIDEO_SIMPLIFY_MAX_TOKENS", "7000"))
 _SCENE_RENDER_TIMEOUT = int(os.getenv("UPCURVED_SCENE_RENDER_TIMEOUT_SECONDS", "300"))
 _MAX_CUSTOM_SCENES = int(os.getenv("UPCURVED_MAX_CUSTOM_SCENES", "3"))
+_VOICE_SYNTHESIS_RETRIES = max(0, int(os.getenv("UPCURVED_VOICE_RETRIES", "2")))
+_VOICE_RETRY_BASE_DELAY = max(0.1, float(os.getenv("UPCURVED_VOICE_RETRY_DELAY_SECONDS", "1.5")))
 
 _ALLOWED_TYPES = {
     "title_scene",
@@ -133,10 +136,24 @@ _GENERIC_LABELS = {
 
 
 class StructuredVideoFailure(RuntimeError):
-    def __init__(self, message: str, *, stage: str, affected_scenes: list[int] | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        affected_scenes: list[int] | None = None,
+        error_category: str | None = None,
+        during_stage: str | None = None,
+        retryable: bool | None = None,
+    ):
         super().__init__(message)
         self.stage = stage
         self.affected_scenes = affected_scenes or []
+        self.error_category = error_category
+        self.during_stage = during_stage or stage
+        self.retryable = retryable
+
+
 def _safe_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, indent=2)
 
@@ -491,19 +508,15 @@ def _clean_code_block(source: Any) -> str:
     return textwrap.dedent(text).strip()
 
 
-def _normalize_code_snippet(value: Any, *, max_lines: int = 30, max_chars: int = 6000) -> str:
-    """Preserve readable learner-facing source code without executing it."""
+def _normalize_code_snippet(value: Any) -> str:
+    """Preserve the complete learner-facing source code without executing it."""
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
     text = re.sub(r"^[ \t]*```(?:[A-Za-z0-9_+-]+)?[ \t]*(?:\n)?", "", text)
     text = re.sub(r"(?:\n)?[ \t]*```[ \t]*$", "", text)
     text = text.strip("\n")
     if not text.strip():
         return ""
-    lines = text.splitlines()[:max_lines]
-    normalized = "\n".join(line.rstrip() for line in lines).rstrip()
-    if len(normalized) > max_chars:
-        normalized = normalized[: max_chars - 4].rstrip() + "\n..."
-    return normalized
+    return "\n".join(line.rstrip() for line in text.splitlines()).rstrip()
 
 
 def _extract_tagged_section(text: str, tag: str) -> str | None:
@@ -719,6 +732,50 @@ def _extract_code_sections(text: str, tag: str) -> dict[str, str]:
     return sections
 
 
+def _extract_ordered_repair_scripts(
+    raw_text: str,
+    requested_refs: list[str],
+) -> tuple[dict[str, str], bool]:
+    """Parse tagged scripts, or safely salvage an exact ordered set of Python fences.
+
+    Salvage is used only when the number of complete GeneratedScene blocks exactly matches the
+    number of requested scene ids. Ambiguous responses are never guessed.
+    """
+    tagged = _extract_code_sections(raw_text, _MANIM_SCRIPT_TAG)
+    if tagged:
+        return tagged, False
+
+    blocks = [
+        _clean_code_block(match.group(1))
+        for match in re.finditer(
+            r"```(?:python|py)?\s*(.*?)```",
+            str(raw_text or ""),
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    ]
+    blocks = [block for block in blocks if "class GeneratedScene" in block]
+    refs = [str(ref or "").strip() for ref in requested_refs if str(ref or "").strip()]
+    if refs and len(blocks) == len(refs):
+        return dict(zip(refs, blocks)), True
+
+    cleaned = _clean_code_block(raw_text)
+    if len(refs) == 1 and "class GeneratedScene" in cleaned:
+        return {refs[0]: cleaned}, True
+    return {}, False
+
+
+def _matching_replacement(
+    replacements: dict[str, str],
+    *,
+    ref: str,
+    scene_id: str,
+    scene_index: int,
+) -> str:
+    candidates = [ref, f"scene_{scene_id}" if scene_id else "", scene_id, f"scene_{scene_index}"]
+    matched = next((value for value in candidates if value and value in replacements), None)
+    return replacements.get(matched, "") if matched else ""
+
+
 def _script_ref_for_scene(scene: dict[str, Any], index: int) -> str:
     existing = str(
         scene.get("manim_script_ref")
@@ -833,36 +890,14 @@ def _write_response_debug_artifacts(
     repaired_plan_text: str | None = None,
     plan_was_repaired: bool = False,
 ) -> None:
+    """Persist only the compact plan transport needed to reconstruct an abnormal run."""
     logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / f"{prefix}_response_raw.txt").write_text(raw_text, encoding="utf-8")
-    (logs_dir / f"{prefix}_plan_transport.txt").write_text(plan_text, encoding="utf-8")
-    try:
-        json.loads(_json_object_candidate(plan_text))
-    except Exception:
-        pass
-    else:
-        (logs_dir / f"{prefix}_plan_raw.json").write_text(plan_text, encoding="utf-8")
+    if plan_text.strip():
+        (logs_dir / f"{prefix}_plan_transport.txt").write_text(plan_text, encoding="utf-8")
     if plan_was_repaired and repaired_plan_text is not None:
         (logs_dir / f"{prefix}_plan_repaired.json").write_text(
-            repaired_plan_text,
-            encoding="utf-8",
+            repaired_plan_text, encoding="utf-8"
         )
-
-    combined: list[str] = []
-    for ref, script in scripts.items():
-        combined.extend([f'<MANIM_SCRIPT id="{ref}">', script, "</MANIM_SCRIPT>", ""])
-        (logs_dir / f"{prefix}_{_safe_ref(ref)}_script.py").write_text(
-            script + "\n", encoding="utf-8"
-        )
-    for ref, body in legacy_bodies.items():
-        combined.extend([f'<MANIM_BODY id="{ref}">', body, "</MANIM_BODY>", ""])
-        (logs_dir / f"{prefix}_{_safe_ref(ref)}_legacy_body.py").write_text(
-            body + "\n", encoding="utf-8"
-        )
-    (logs_dir / f"{prefix}_creative_code_raw.txt").write_text(
-        "\n".join(combined), encoding="utf-8"
-    )
-
 
 def _remember_response_debug_context(
     metrics: dict[str, Any],
@@ -933,6 +968,102 @@ def _record_local_script_adjustments(
     metrics["local_sanitizer_corrections"] = len(adjusted)
 
 
+def _scene_diagnostic_entry(metrics: dict[str, Any], scene_index: int) -> dict[str, Any]:
+    table = metrics.setdefault("_scene_diagnostics", {})
+    return table.setdefault(str(int(scene_index)), {"scene": int(scene_index), "attempts": []})
+
+
+def _record_scene_diagnostic(
+    metrics: dict[str, Any],
+    *,
+    scene_index: int,
+    stage: str,
+    ok: bool,
+    category: str = "",
+    error: str = "",
+    changes: list[str] | None = None,
+    detail_files: list[str] | None = None,
+    voice_retries: int = 0,
+) -> None:
+    entry = _scene_diagnostic_entry(metrics, scene_index)
+    attempt: dict[str, Any] = {"stage": str(stage), "ok": bool(ok)}
+    if category:
+        attempt["category"] = str(category)
+    if error:
+        attempt["error"] = _short_text(error, 500, "")
+    clean_changes = [str(value).strip() for value in (changes or []) if str(value).strip()]
+    if clean_changes:
+        attempt["changes"] = list(dict.fromkeys(clean_changes))
+    clean_files = [str(value).strip() for value in (detail_files or []) if str(value).strip()]
+    if clean_files:
+        attempt["detail_files"] = list(dict.fromkeys(clean_files))
+    if voice_retries:
+        attempt["voice_retries"] = int(voice_retries)
+    entry.setdefault("attempts", []).append(attempt)
+
+
+def _write_scene_diagnostics(metrics: dict[str, Any], logs_dir: pathlib.Path) -> None:
+    values = metrics.get("_scene_diagnostics") or {}
+    if not values:
+        return
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ordered = [values[key] for key in sorted(values, key=lambda value: int(value))]
+    (logs_dir / "scene_diagnostics.json").write_text(
+        _safe_json({"scenes": ordered}), encoding="utf-8"
+    )
+
+
+def _write_unique_detail(
+    metrics: dict[str, Any],
+    logs_dir: pathlib.Path,
+    filename: str,
+    content: str,
+) -> str:
+    """Write a diagnostic detail once and reuse its filename for identical content."""
+    import hashlib
+
+    value = str(content or "")
+    digest = hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+    known = metrics.setdefault("_detail_hashes", {})
+    if digest in known:
+        return str(known[digest])
+    details = logs_dir / "details"
+    details.mkdir(parents=True, exist_ok=True)
+    safe_name = _safe_ref(filename)
+    path = details / safe_name
+    path.write_text(value + ("\n" if value and not value.endswith("\n") else ""), encoding="utf-8")
+    relative = str(path.relative_to(logs_dir))
+    known[digest] = relative
+    return relative
+
+
+def _record_transport_salvage(metrics: dict[str, Any], *, stage: str, refs: list[str]) -> None:
+    metrics["transport_salvages"] = int(metrics.get("transport_salvages") or 0) + 1
+    values = metrics.setdefault("local_plan_adjustments", [])
+    message = f"{stage}: mapped {len(refs)} ordered Python block(s) to requested scene ids locally."
+    if message not in values:
+        values.append(message)
+
+
+def _raise_for_voice_failures(states: dict[int, dict[str, Any]]) -> None:
+    for state in states.values():
+        if state.get("status") != "render_failed":
+            continue
+        if state.get("last_error_category") != "voice_synthesis":
+            continue
+        index = int(state["scene_index"])
+        stage = str((state.get("attempts") or [{}])[-1].get("stage") or "scene_render")
+        raise StructuredVideoFailure(
+            f"Scene {index} could not complete because voice generation was temporarily unavailable: "
+            f"{summarize_error(state.get('last_render_detail'))}",
+            stage=stage,
+            affected_scenes=[index],
+            error_category="voice_synthesis",
+            during_stage=stage,
+            retryable=True,
+        )
+
+
 def _audit_outcome(metrics: dict[str, Any], *, failed: bool) -> str:
     if failed:
         return "failed"
@@ -944,6 +1075,7 @@ def _audit_outcome(metrics: dict[str, Any], *, failed: bool) -> str:
         metrics.get("plan_repaired_by_model")
         or metrics.get("sanitizer_repaired_scene_ids")
         or metrics.get("render_repaired_scene_ids")
+        or int(metrics.get("voice_retry_count") or 0) > 0
     ):
         return "recovered"
     if (
@@ -953,7 +1085,6 @@ def _audit_outcome(metrics: dict[str, Any], *, failed: bool) -> str:
     ):
         return "normalized_locally"
     return "clean_success"
-
 
 def _append_audit_and_cleanup(
     *,
@@ -966,6 +1097,9 @@ def _append_audit_and_cleanup(
     failure_stage: str | None = None,
     affected_scenes: list[int] | None = None,
     error_summary: str | None = None,
+    error_category: str | None = None,
+    during_stage: str | None = None,
+    retryable: bool | None = None,
     has_final_artifact: bool = False,
 ) -> None:
     scenes = plan.get("scenes") if isinstance(plan, dict) else []
@@ -985,6 +1119,7 @@ def _append_audit_and_cleanup(
         or metrics.get("recovery_stages")
         or metrics.get("simplified_scene_ids")
         or metrics.get("component_fallback_scene_ids")
+        or int(metrics.get("voice_retry_count") or 0) > 0
     )
 
     try:
@@ -1008,7 +1143,12 @@ def _append_audit_and_cleanup(
                 "local_json_plan_repair": metrics.get("local_json_plan_repair"),
                 "local_plan_adjustments": metrics.get("local_plan_adjustments"),
                 "local_script_adjustments": metrics.get("local_script_adjustments"),
+                "voice_retry_count": metrics.get("voice_retry_count"),
+                "transport_salvages": metrics.get("transport_salvages"),
                 "failure_stage": failure_stage,
+                "during_stage": during_stage,
+                "error_category": error_category,
+                "retryable": retryable,
                 "affected_scenes": affected_scenes or [],
                 "error_summary": error_summary,
                 "duration_seconds": duration,
@@ -1024,10 +1164,7 @@ def _append_audit_and_cleanup(
             has_final_artifact=has_final_artifact,
         )
     try:
-        cleanup_structured_job_artifacts(
-            job_id,
-            keep_diagnostics=abnormal,
-        )
+        cleanup_structured_job_artifacts(job_id, keep_diagnostics=abnormal)
     except Exception as exc:
         logger.warning("structured_job_cleanup_failed job_id=%s error=%s", job_id, exc)
     try:
@@ -1186,18 +1323,18 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
     if not scenes:
         raise RuntimeError("The model returned no usable video scenes.")
 
-    scenes[0]["type"] = "title_scene"
-    scenes[0]["visual_mode"] = "text"
-    for field in (
-        "manim_script",
-        "manim_script_ref",
-        "manim_body",
-        "manim_body_ref",
-        "code_goal",
-        "code_snippet",
-        "requires_3d",
-    ):
-        scenes[0].pop(field, None)
+    # Preserve a genuine opening hook. The first scene no longer has to be a title card.
+    if scenes[0].get("type") == "title_scene" and scenes[0].get("learner_question"):
+        scenes[0]["type"] = "question_scene"
+        if scenes[0].get("visual_mode") == "text":
+            scenes[0]["visual_mode"] = "diagram"
+
+    # A later title card usually wastes teaching time; render it as a concise recap/concept.
+    for scene_index, scene in enumerate(scenes, start=1):
+        if scene_index > 1 and scene.get("type") == "title_scene":
+            scene["type"] = "concept_scene"
+            if scene.get("visual_mode") == "text":
+                scene["visual_mode"] = "diagram"
 
     # Enforce the agreed maximum while keeping essential graph/3D/code visuals first.
     custom_indices = [index for index, scene in enumerate(scenes) if scene.get("type") == "custom_manim_scene"]
@@ -1253,58 +1390,15 @@ def _looks_like_instruction_instead_of_math(step: str) -> bool:
 
 
 def _plan_quality_errors(plan: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    scenes = plan.get("scenes") or []
-    if not scenes or scenes[0].get("type") != "title_scene":
-        errors.append("Scene 1 must be title_scene.")
+    """Return only structural errors that make the plan unusable.
 
-    for index, scene in enumerate(scenes, start=1):
-        role = str(scene.get("learning_role") or "")
-        mode = str(scene.get("visual_mode") or "")
-        scene_type = str(scene.get("type") or "")
-        formula = str(scene.get("formula") or "").strip()
-        steps = [
-            str(value)
-            for value in (scene.get("steps") or scene.get("calculation_steps") or [])
-            if str(value).strip()
-        ]
-
-        if mode == "graph":
-            if scene_type != "custom_manim_scene":
-                errors.append(f"Scene {index}: visual_mode=graph must use custom_manim_scene.")
-            if not scene.get("required_visual_elements"):
-                errors.append(f"Scene {index}: graph scene needs required_visual_elements.")
-
-        code_snippet = str(scene.get("code_snippet") or "").strip()
-        if mode == "code" or code_snippet:
-            if scene_type != "custom_manim_scene":
-                errors.append(f"Scene {index}: learner-facing code must use custom_manim_scene.")
-            if not code_snippet:
-                errors.append(f"Scene {index}: visual_mode=code requires a non-empty CODE_SNIPPET.")
-
-        if role == "example" and formula:
-            if len(steps) < 3:
-                errors.append(
-                    f"Scene {index}: worked formula example needs at least three explicit "
-                    "STEP_TEXT values: substitution, simplification, and final answer."
-                )
-            else:
-                if sum("=" in step for step in steps) < 2:
-                    errors.append(
-                        f"Scene {index}: worked math STEP_TEXT values must show actual equations."
-                    )
-                if any(_looks_like_instruction_instead_of_math(step) for step in steps):
-                    errors.append(
-                        f"Scene {index}: replace calculation instructions with completed math."
-                    )
-                if "=" not in steps[-1] and not any(
-                    word in steps[-1].lower() for word in ("answer", "therefore", "so ")
-                ):
-                    errors.append(
-                        f"Scene {index}: final worked-math STEP_TEXT must state the answer explicitly."
-                    )
-    return errors
-
+    Pedagogical and visual preferences are prompt guidance. They never trigger speculative
+    repair calls before a scene has had a chance to render.
+    """
+    scenes = plan.get("scenes") if isinstance(plan, dict) else None
+    if not isinstance(scenes, list) or not scenes:
+        return ["The plan contains no scenes."]
+    return []
 
 def _topic_requires_explicit_worked_math(topic: str) -> bool:
     lowered = str(topic or "").lower()
@@ -1323,95 +1417,43 @@ def _topic_requires_explicit_worked_math(topic: str) -> bool:
 
 
 def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list[str]:
+    """Apply only unambiguous transport normalizations without judging visual quality."""
     fixes: list[str] = []
     scenes = plan.get("scenes")
     if not isinstance(scenes, list):
         return fixes
 
-    requires_worked_math = _topic_requires_explicit_worked_math(topic)
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, dict):
             continue
-        visual_mode = str(scene.get("visual_mode") or "")
+        if scene.get("code_snippet"):
+            changed = False
+            if scene.get("visual_mode") != "code":
+                scene["visual_mode"] = "code"
+                changed = True
+            if scene.get("type") != "custom_manim_scene":
+                scene["type"] = "custom_manim_scene"
+                scene["manim_script_ref"] = _script_ref_for_scene(scene, index)
+                changed = True
+            if not scene.get("essential_visual"):
+                scene["essential_visual"] = True
+                changed = True
+            if changed:
+                fixes.append(f"Scene {index}: preserved learner-facing CODE_SNIPPET as a custom code scene.")
 
-        if scene.get("code_snippet") and visual_mode != "code":
-            scene["visual_mode"] = "code"
-            scene["type"] = "custom_manim_scene"
-            scene["essential_visual"] = True
-            fixes.append(f"Scene {index}: normalized a learner-facing code scene locally.")
-            visual_mode = "code"
+        if index > 1 and scene.get("type") == "title_scene":
+            scene["type"] = "concept_scene"
+            if scene.get("visual_mode") == "text":
+                scene["visual_mode"] = "diagram"
+            fixes.append(f"Scene {index}: converted a later title card into a teaching scene.")
 
-        if visual_mode == "graph" and not scene.get("required_visual_elements"):
-            inferred = _short_text(
-                scene.get("visual") or scene.get("learner_question") or scene.get("title"),
-                64,
-                "important graph feature",
-            )
-            scene["required_visual_elements"] = [inferred]
-            fixes.append(f"Scene {index}: inferred a required graph feature locally.")
-
-        if index > 1 and not _scene_has_standard_visible_content(scene):
-            existing_points = [
-                str(value).strip()
-                for value in (scene.get("key_points") or scene.get("labels") or [])
-                if str(value).strip()
-            ]
-            points = list(existing_points)
-            title_norm = re.sub(
-                r"[^a-z0-9]+", " ", str(scene.get("title") or "").lower()
-            ).strip()
-            for point in _derive_display_points(scene.get("narration"), limit=4):
-                normalized = re.sub(r"[^a-z0-9]+", " ", point.lower()).strip()
-                if normalized == title_norm:
-                    continue
-                if normalized not in {
-                    re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-                    for value in points
-                }:
-                    points.append(point)
-                if len(points) >= 3:
-                    break
-            if len(points) < 2:
-                question = _short_text(scene.get("learner_question") or scene.get("subtitle"), 112, "")
-                if question and question.lower() not in {value.lower() for value in points}:
-                    points.append(question)
-            if len(points) < 2:
-                topic_title = str(scene.get("title") or "this idea")
-                points.append(f"See how the parts of {topic_title} connect")
-            scene["key_points"] = points[:4]
-            current_duration = float(scene.get("duration_sec") or 8.0)
-            visual_minimum = (
-                _estimate_speech_seconds(scene.get("narration"))
-                + 1.0
-                + 0.55 * len(scene["key_points"])
-            )
-            scene["duration_sec"] = max(current_duration, min(90.0, visual_minimum))
-            fixes.append(
-                f"Scene {index}: ensured at least two learner-facing display points locally."
-            )
-
-        formula = str(scene.get("formula") or "").strip()
-        steps = [
-            str(value)
-            for value in (scene.get("steps") or scene.get("calculation_steps") or [])
-            if str(value).strip()
-        ]
-        weak_example = (
-            str(scene.get("learning_role") or "") == "example"
-            and formula
-            and (
-                len(steps) < 3
-                or sum("=" in step for step in steps) < 2
-                or any(_looks_like_instruction_instead_of_math(step) for step in steps)
-            )
-        )
-        if weak_example and not requires_worked_math:
-            scene["learning_role"] = "formula"
-            fixes.append(
-                f"Scene {index}: reclassified an incomplete optional example as a formula explanation."
-            )
+        # Standard components need at least one visible idea, but this never affects custom code.
+        if scene.get("type") != "custom_manim_scene" and index > 1 and not _scene_has_standard_visible_content(scene):
+            points = _derive_display_points(scene.get("narration"), limit=3)
+            if points:
+                scene["key_points"] = points
+                fixes.append(f"Scene {index}: derived visible text for the standard renderer.")
     return fixes
-
 
 def _inherit_missing_scene_fields(
     edited_plan: dict[str, Any],
@@ -1485,64 +1527,17 @@ def _repair_plan_if_needed(
     logs_dir: pathlib.Path,
     metrics: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
+    """Normalize the plan locally; never spend an LLM call on quality heuristics."""
     local_fixes = _apply_local_plan_quality_fixes(plan, topic=topic)
     if local_fixes:
         metrics.setdefault("local_plan_adjustments", []).extend(local_fixes)
         logger.info("structured_video_plan_local_fixes fixes=%s", local_fixes)
-
     errors = _plan_quality_errors(plan)
-    if not errors:
-        return plan, False
-
-    _flush_response_debug_contexts(metrics, logs_dir)
-    (logs_dir / "plan_quality_errors.json").write_text(
-        _safe_json(errors), encoding="utf-8"
-    )
-    metrics["llm_calls"] += 1
-    metrics["plan_repaired_by_model"] = True
-    metrics["recovery_stages"].append("plan_repair")
-    raw = call_llm(
-        provider=provider_name,
-        api_key=api_key,
-        model=model,
-        system=STRUCTURED_VIDEO_PLAN_REPAIR_SYSTEM,
-        user=build_structured_video_plan_repair_prompt(plan=plan, errors=errors),
-        temperature=0.08,
-        max_tokens=_PLAN_REPAIR_MAX_TOKENS,
-    )
-    raw_text = _coerce_llm_text(raw)
-    parsed, scripts, bodies, plan_text, repaired_plan_text, plan_was_repaired = (
-        _parse_structured_response(raw_text)
-    )
-    if plan_was_repaired:
-        metrics["local_json_plan_repair"] = True
-    _write_response_debug_artifacts(
-        logs_dir=logs_dir,
-        prefix="plan_repair",
-        raw_text=raw_text,
-        plan_text=plan_text,
-        scripts=scripts,
-        legacy_bodies=bodies,
-        repaired_plan_text=repaired_plan_text,
-        plan_was_repaired=plan_was_repaired,
-    )
-    parsed = _attach_manim_code(parsed, scripts, bodies)
-    parsed = _inherit_missing_scene_fields(parsed, plan)
-    repaired = _normalize_plan(parsed, topic=topic)
-    second_local_fixes = _apply_local_plan_quality_fixes(repaired, topic=topic)
-    if second_local_fixes:
-        metrics.setdefault("local_plan_adjustments", []).extend(second_local_fixes)
-    remaining = _plan_quality_errors(repaired)
-    if remaining:
-        (logs_dir / "plan_repair_remaining_errors.json").write_text(
-            _safe_json(remaining), encoding="utf-8"
-        )
+    if errors:
         raise StructuredVideoFailure(
-            "The model could not produce the required graph or worked math example: "
-            + "; ".join(remaining),
-            stage="plan_repair",
+            "; ".join(errors), stage="plan_structure", error_category="malformed_plan"
         )
-    return repaired, True
+    return plan, False
 
 def _scene_prompt_data(scene: dict[str, Any]) -> dict[str, Any]:
     data = dict(scene)
@@ -1555,59 +1550,8 @@ def _enforce_scene_script_contract(
     scene: dict[str, Any],
     result: SanitizeResult,
 ) -> SanitizeResult:
-    """Add scene-aware static checks after the general complete-script sanitizer."""
-    source = result.source
-    errors: list[str] = []
-    visual_markers = (
-        "Circle(", "Square(", "Rectangle(", "RoundedRectangle(", "Polygon(",
-        "Dot(", "Dot3D(", "Line(", "Line3D(", "Arrow(", "Arrow3D(",
-        "Axes(", "ThreeDAxes(", "NumberPlane(", "NumberLine(", "Surface(",
-        "ParametricFunction(", "FunctionGraph(", "BarChart(", "Code(",
-        "Cube(", "Sphere(", "Prism(", "Cone(", "Cylinder(", "Polyhedron(",
-    )
-    if not any(marker in source for marker in visual_markers):
-        errors.append(
-            "Creative script needs a topic-specific visual object or explanatory structure; "
-            "Text-only scenes should use the standard component renderer."
-        )
-
-    if str(scene.get("visual_mode") or "").lower() == "graph":
-        if not any(marker in source for marker in ("Axes(", "ThreeDAxes(", "NumberPlane(")):
-            errors.append("Graph scene must create Axes, ThreeDAxes, or NumberPlane.")
-        if not any(
-            marker in source
-            for marker in (".plot(", ".plot_line_graph(", ".c2p(", "ParametricFunction(", "FunctionGraph(", "Surface(")
-        ):
-            errors.append("Graph scene must draw a coordinate-based relationship.")
-    code_snippet = str(scene.get("code_snippet") or "").strip()
-    if str(scene.get("visual_mode") or "").lower() == "code" or code_snippet:
-        if not code_snippet:
-            errors.append("Code scene is missing its learner-facing CODE_SNIPPET.")
-        if not any(marker in source for marker in ("Code(", "MarkupText(", "Text(")):
-            errors.append("Code scene must visibly render the scene CODE_SNIPPET.")
-        if code_snippet:
-            identifiers = [
-                token
-                for token in re.findall(r"[A-Za-z_]\w*", code_snippet)
-                if len(token) >= 4
-                and token.lower() not in {
-                    "return", "range", "while", "class", "import", "from",
-                    "true", "false", "none", "self", "value", "values",
-                }
-            ]
-            if identifiers and not any(re.search(rf"\b{re.escape(token)}\b", source) for token in identifiers[:12]):
-                errors.append(
-                    "Code scene MANIM_SCRIPT does not appear to embed the scene CODE_SNIPPET."
-                )
-
-    if _coerce_bool(scene.get("requires_3d")) and not result.uses_3d:
-        errors.append("Scene plan requires 3D, but the script contains no 3D object or camera usage.")
-
-    if errors:
-        result.validation_errors = list(dict.fromkeys(result.validation_errors + errors))
-        result.requires_repair = True
+    """Keep only sanitizer hard errors; do not enforce visual implementation heuristics."""
     return result
-
 
 def _sanitize_error_list(result: SanitizeResult) -> list[str]:
     errors = list(result.validation_errors)
@@ -1627,20 +1571,32 @@ def _write_sanitize_artifacts(
     stage: str,
     original_script: str,
     result: SanitizeResult,
+    metrics: dict[str, Any],
 ) -> None:
-    prefix = f"scene_{scene_index:02d}_{_safe_ref(stage)}"
-    (logs_dir / f"{prefix}_raw.py").write_text(
-        original_script + ("\n" if original_script else ""), encoding="utf-8"
-    )
-    (logs_dir / f"{prefix}_sanitized.py").write_text(result.source, encoding="utf-8")
-    (logs_dir / f"{prefix}_sanitizer.json").write_text(
-        _safe_json(result.to_dict()), encoding="utf-8"
-    )
-    if result.compile_error:
-        (logs_dir / f"{prefix}_compile_error.txt").write_text(
-            result.compile_error + "\n", encoding="utf-8"
+    errors = _sanitize_error_list(result)
+    detail_files: list[str] = []
+    if result.requires_repair:
+        detail_files.append(
+            _write_unique_detail(
+                metrics, logs_dir, f"scene_{scene_index:02d}_{stage}_original.py", original_script
+            )
         )
-
+        if result.source.strip() != str(original_script or "").strip():
+            detail_files.append(
+                _write_unique_detail(
+                    metrics, logs_dir, f"scene_{scene_index:02d}_{stage}_sanitized.py", result.source
+                )
+            )
+    _record_scene_diagnostic(
+        metrics,
+        scene_index=scene_index,
+        stage=f"{stage}_preflight",
+        ok=not result.requires_repair,
+        category="hard_preflight" if result.requires_repair else "",
+        error="; ".join(errors),
+        changes=result.changes,
+        detail_files=detail_files,
+    )
 
 def _legacy_wrapper_preflight(source: str) -> SanitizeResult:
     prepared = sanitize_minimally(source)
@@ -1717,6 +1673,7 @@ def _prepare_custom_states(
                 stage="initial",
                 original_script=original_script,
                 result=sanitize_result,
+                metrics=metrics,
             )
 
         state = {
@@ -1779,10 +1736,12 @@ def _prepare_custom_states(
             max_tokens=_SANITIZER_REPAIR_MAX_TOKENS,
         )
         raw_text = _coerce_llm_text(raw)
-        (logs_dir / "sanitizer_repair_response_raw.txt").write_text(
-            raw_text, encoding="utf-8"
-        )
-        replacements = _extract_code_sections(raw_text, _MANIM_SCRIPT_TAG)
+        requested_refs = [str(state["ref"]) for state in failures]
+        replacements, salvaged = _extract_ordered_repair_scripts(raw_text, requested_refs)
+        if salvaged:
+            _record_transport_salvage(metrics, stage="sanitizer repair", refs=requested_refs)
+        if salvaged or not replacements:
+            _write_unique_detail(metrics, logs_dir, "sanitizer_repair_transport.txt", raw_text)
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
         (logs_dir / "sanitizer_repair_call_error.txt").write_text(
@@ -1794,21 +1753,37 @@ def _prepare_custom_states(
                 "ok": False,
                 "error": summarize_error(detail),
             })
+            _record_scene_diagnostic(
+                metrics,
+                scene_index=int(state["scene_index"]),
+                stage="sanitizer_repair_call",
+                ok=False,
+                category=diagnostic_category(detail),
+                error=summarize_error(detail),
+            )
         return states
 
     for state in failures:
         ref = str(state["ref"])
         index = int(state["scene_index"])
         scene_id = str(state["scene"].get("id") or "").strip()
-        candidates = [ref, f"scene_{scene_id}" if scene_id else "", scene_id, f"scene_{index}"]
-        matched = next((value for value in candidates if value and value in replacements), None)
-        replacement = replacements.get(matched, "") if matched else ""
+        replacement = _matching_replacement(
+            replacements, ref=ref, scene_id=scene_id, scene_index=index
+        )
         if not replacement:
             state["attempts"].append({
                 "stage": "sanitizer_repair",
                 "ok": False,
                 "error": "No matching MANIM_SCRIPT was returned.",
             })
+            _record_scene_diagnostic(
+                metrics,
+                scene_index=index,
+                stage="sanitizer_repair",
+                ok=False,
+                category="repair_transport",
+                error="No matching MANIM_SCRIPT was returned.",
+            )
             continue
         repaired = _enforce_scene_script_contract(
             state["scene"], sanitize_manim_script(replacement)
@@ -1825,6 +1800,7 @@ def _prepare_custom_states(
             stage="sanitizer_repair",
             original_script=replacement,
             result=repaired,
+            metrics=metrics,
         )
         state["current_script"] = repaired.source
         state["sanitize_result"] = repaired
@@ -1861,24 +1837,37 @@ def _render_code_once(
     code: str,
     scene_job_id: str,
 ) -> tuple[pathlib.Path | None, dict[str, Any], str]:
-    result = run_job_from_code(
-        code.strip() + "\n",
-        job_id=scene_job_id,
-        timeout_seconds=_SCENE_RENDER_TIMEOUT,
-        inject_watermark=False,
-    )
-    if result.get("ok") and result.get("video_url"):
-        path = _video_url_to_path(str(result["video_url"]))
-        if path.exists():
-            return path, result, ""
-    detail = str(
-        result.get("error_log")
-        or result.get("compile_log")
-        or result.get("error")
-        or "Manim render failed."
-    )
-    return None, result, detail
-
+    last_result: dict[str, Any] = {}
+    last_detail = ""
+    for attempt in range(_VOICE_SYNTHESIS_RETRIES + 1):
+        actual_job_id = scene_job_id if attempt == 0 else f"{scene_job_id}-voice-retry-{attempt}"
+        result = run_job_from_code(
+            code.strip() + "\n",
+            job_id=actual_job_id,
+            timeout_seconds=_SCENE_RENDER_TIMEOUT,
+            inject_watermark=False,
+            retain_logs=False,
+        )
+        if result.get("ok") and result.get("video_url"):
+            path = _video_url_to_path(str(result["video_url"]))
+            if path.exists():
+                result["voice_retry_count"] = attempt
+                result["error_category"] = ""
+                return path, result, ""
+        detail = str(
+            result.get("error_log")
+            or result.get("compile_log")
+            or result.get("error")
+            or "Manim render failed."
+        )
+        category = diagnostic_category(detail)
+        result["error_category"] = category
+        result["voice_retry_count"] = attempt
+        last_result, last_detail = result, detail
+        if category != "voice_synthesis" or attempt >= _VOICE_SYNTHESIS_RETRIES:
+            break
+        time.sleep(_VOICE_RETRY_BASE_DELAY * (attempt + 1))
+    return None, last_result, last_detail
 
 def _attempt_custom_render(
     state: dict[str, Any],
@@ -1894,38 +1883,62 @@ def _attempt_custom_render(
     stage_slug = _safe_ref(stage)
     scene_job_id = f"{final_job_id}-scene-{index:02d}-{stage_slug}"
     clip, result, detail = _render_code_once(code=code, scene_job_id=scene_job_id)
+    voice_retries = int(result.get("voice_retry_count") or 0)
+    if voice_retries:
+        metrics["voice_retry_count"] = int(metrics.get("voice_retry_count") or 0) + voice_retries
+        if "voice_retry" not in metrics.setdefault("recovery_stages", []):
+            metrics["recovery_stages"].append("voice_retry")
+    category = str(result.get("error_category") or (diagnostic_category(detail) if detail else ""))
     command = result.get("render_command")
-    if isinstance(command, list):
-        command_text = " ".join(str(value) for value in command)
-    else:
-        command_text = str(command or "")
+    command_text = " ".join(str(value) for value in command) if isinstance(command, list) else str(command or "")
     attempt = {
         "stage": stage,
         "ok": clip is not None,
         "job_id": result.get("job_id"),
         "error_code": result.get("error"),
+        "error_category": category,
         "error": "" if clip is not None else summarize_error(detail),
         "render_command": command_text,
+        "voice_retries": voice_retries,
     }
     state["attempts"].append(attempt)
     if clip is None:
         _flush_response_debug_contexts(metrics, logs_dir)
-        (logs_dir / f"scene_{index:02d}_{stage_slug}_executed.py").write_text(
-            code + ("\n" if code else ""), encoding="utf-8"
+        source_file = _write_unique_detail(
+            metrics, logs_dir, f"scene_{index:02d}_{stage_slug}_executed.py", code
+        )
+        error_file = _write_unique_detail(
+            metrics, logs_dir, f"scene_{index:02d}_{stage_slug}_render_error.txt", detail
+        )
+        _record_scene_diagnostic(
+            metrics,
+            scene_index=index,
+            stage=stage,
+            ok=False,
+            category=category or "render",
+            error=summarize_error(detail),
+            detail_files=[source_file, error_file],
+            voice_retries=voice_retries,
         )
         state["status"] = "render_failed"
         state["last_render_detail"] = detail
         state["last_render_result"] = result
-        (logs_dir / f"scene_{index:02d}_{stage_slug}_render_error.txt").write_text(
-            detail + "\n", encoding="utf-8"
-        )
+        state["last_error_category"] = category
         return False
+    _record_scene_diagnostic(
+        metrics,
+        scene_index=index,
+        stage=stage,
+        ok=True,
+        category="voice_synthesis_recovered" if voice_retries else "",
+        voice_retries=voice_retries,
+    )
     state["clip"] = clip
     state["rendered_code"] = code
     state["render_source"] = render_source
     state["status"] = "rendered"
+    state["last_error_category"] = ""
     return True
-
 
 def _render_standard_scene(
     scene: dict[str, Any],
@@ -1940,19 +1953,46 @@ def _render_standard_scene(
         code=code,
         scene_job_id=f"{final_job_id}-scene-{scene_index:02d}-component",
     )
+    voice_retries = int(result.get("voice_retry_count") or 0)
+    if voice_retries:
+        metrics["voice_retry_count"] = int(metrics.get("voice_retry_count") or 0) + voice_retries
+        if "voice_retry" not in metrics.setdefault("recovery_stages", []):
+            metrics["recovery_stages"].append("voice_retry")
     if clip is None:
         _flush_response_debug_contexts(metrics, logs_dir)
-        (logs_dir / f"scene_{scene_index:02d}_component.py").write_text(
-            code, encoding="utf-8"
+        category = str(result.get("error_category") or diagnostic_category(detail))
+        source_file = _write_unique_detail(
+            metrics, logs_dir, f"scene_{scene_index:02d}_component.py", code
         )
-        (logs_dir / f"scene_{scene_index:02d}_component_render_error.txt").write_text(
-            detail + "\n", encoding="utf-8"
+        error_file = _write_unique_detail(
+            metrics, logs_dir, f"scene_{scene_index:02d}_component_render_error.txt", detail
+        )
+        _record_scene_diagnostic(
+            metrics,
+            scene_index=scene_index,
+            stage="component",
+            ok=False,
+            category=category,
+            error=summarize_error(detail),
+            detail_files=[source_file, error_file],
+            voice_retries=voice_retries,
         )
         raise StructuredVideoFailure(
             f"Standard scene {scene_index} failed to render: {summarize_error(detail)}",
             stage="standard_scene_render",
             affected_scenes=[scene_index],
+            error_category=category,
+            during_stage="standard_scene_render",
+            retryable=diagnostic_retryable(detail),
         )
+    _record_scene_diagnostic(
+        metrics,
+        scene_index=scene_index,
+        stage="component",
+        ok=True,
+        category="voice_synthesis_recovered" if voice_retries else "",
+        voice_retries=voice_retries,
+    )
     return clip, {
         "scene_index": scene_index,
         "scene_type": scene.get("type"),
@@ -1961,7 +2001,6 @@ def _render_standard_scene(
         "job_id": result.get("job_id"),
         "attempts": [{"stage": "component", "ok": True, "job_id": result.get("job_id")}],
     }, code
-
 
 def _batch_runtime_repair(
     states: dict[int, dict[str, Any]],
@@ -1977,6 +2016,7 @@ def _batch_runtime_repair(
         state
         for state in states.values()
         if state.get("status") == "render_failed"
+        and state.get("last_error_category") != "voice_synthesis"
         and state.get("attempts")
         and state["attempts"][-1].get("stage") == "initial_render"
     ]
@@ -2009,8 +2049,12 @@ def _batch_runtime_repair(
             max_tokens=_RENDER_REPAIR_MAX_TOKENS,
         )
         raw_text = _coerce_llm_text(raw)
-        (logs_dir / "render_repair_response_raw.txt").write_text(raw_text, encoding="utf-8")
-        replacements = _extract_code_sections(raw_text, _MANIM_SCRIPT_TAG)
+        requested_refs = [str(state["ref"]) for state in failures]
+        replacements, salvaged = _extract_ordered_repair_scripts(raw_text, requested_refs)
+        if salvaged:
+            _record_transport_salvage(metrics, stage="render repair", refs=requested_refs)
+        if salvaged or not replacements:
+            _write_unique_detail(metrics, logs_dir, "render_repair_transport.txt", raw_text)
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
         (logs_dir / "render_repair_call_error.txt").write_text(detail + "\n", encoding="utf-8")
@@ -2020,21 +2064,37 @@ def _batch_runtime_repair(
                 "ok": False,
                 "error": summarize_error(detail),
             })
+            _record_scene_diagnostic(
+                metrics,
+                scene_index=int(state["scene_index"]),
+                stage="render_repair_call",
+                ok=False,
+                category=diagnostic_category(detail),
+                error=summarize_error(detail),
+            )
         return
 
     for state in failures:
         index = int(state["scene_index"])
         ref = str(state["ref"])
         scene_id = str(state["scene"].get("id") or "").strip()
-        candidates = [ref, f"scene_{scene_id}" if scene_id else "", scene_id, f"scene_{index}"]
-        matched = next((value for value in candidates if value and value in replacements), None)
-        replacement = replacements.get(matched, "") if matched else ""
+        replacement = _matching_replacement(
+            replacements, ref=ref, scene_id=scene_id, scene_index=index
+        )
         if not replacement:
             state["attempts"].append({
                 "stage": "focused_render_repair",
                 "ok": False,
                 "error": "No matching MANIM_SCRIPT was returned.",
             })
+            _record_scene_diagnostic(
+                metrics,
+                scene_index=index,
+                stage="focused_render_repair",
+                ok=False,
+                category="repair_transport",
+                error="No matching MANIM_SCRIPT was returned.",
+            )
             continue
         sanitized = _enforce_scene_script_contract(
             state["scene"], sanitize_manim_script(replacement)
@@ -2051,6 +2111,7 @@ def _batch_runtime_repair(
             stage="focused_render_repair",
             original_script=replacement,
             result=sanitized,
+            metrics=metrics,
         )
         if sanitized.requires_repair:
             state["current_script"] = sanitized.source
@@ -2124,8 +2185,12 @@ def _batch_simplify_remaining(
             max_tokens=_SIMPLIFY_MAX_TOKENS,
         )
         raw_text = _coerce_llm_text(raw)
-        (logs_dir / "simpler_scene_response_raw.txt").write_text(raw_text, encoding="utf-8")
-        replacements = _extract_code_sections(raw_text, _MANIM_SCRIPT_TAG)
+        requested_refs = [str(state["ref"]) for state in failures]
+        replacements, salvaged = _extract_ordered_repair_scripts(raw_text, requested_refs)
+        if salvaged:
+            _record_transport_salvage(metrics, stage="simpler scene", refs=requested_refs)
+        if salvaged or not replacements:
+            _write_unique_detail(metrics, logs_dir, "simpler_scene_transport.txt", raw_text)
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
         (logs_dir / "simpler_scene_call_error.txt").write_text(detail + "\n", encoding="utf-8")
@@ -2135,21 +2200,37 @@ def _batch_simplify_remaining(
                 "ok": False,
                 "error": summarize_error(detail),
             })
+            _record_scene_diagnostic(
+                metrics,
+                scene_index=int(state["scene_index"]),
+                stage="simpler_scene_call",
+                ok=False,
+                category=diagnostic_category(detail),
+                error=summarize_error(detail),
+            )
         return
 
     for state in failures:
         index = int(state["scene_index"])
         ref = str(state["ref"])
         scene_id = str(state["scene"].get("id") or "").strip()
-        candidates = [ref, f"scene_{scene_id}" if scene_id else "", scene_id, f"scene_{index}"]
-        matched = next((value for value in candidates if value and value in replacements), None)
-        replacement = replacements.get(matched, "") if matched else ""
+        replacement = _matching_replacement(
+            replacements, ref=ref, scene_id=scene_id, scene_index=index
+        )
         if not replacement:
             state["attempts"].append({
                 "stage": "simpler_scene_retry",
                 "ok": False,
                 "error": "No matching MANIM_SCRIPT was returned.",
             })
+            _record_scene_diagnostic(
+                metrics,
+                scene_index=index,
+                stage="simpler_scene_retry",
+                ok=False,
+                category="repair_transport",
+                error="No matching MANIM_SCRIPT was returned.",
+            )
             continue
         sanitized = _enforce_scene_script_contract(
             state["scene"], sanitize_manim_script(replacement)
@@ -2166,6 +2247,7 @@ def _batch_simplify_remaining(
             stage="simpler_scene",
             original_script=replacement,
             result=sanitized,
+            metrics=metrics,
         )
         if sanitized.requires_repair:
             state["current_script"] = sanitized.source
@@ -2211,9 +2293,6 @@ def _apply_component_fallbacks(
             fallback_source = build_concept_fallback_scene_code(state["scene"])
         fallback_code = sanitize_minimally(fallback_source)
         state["current_script"] = fallback_code
-        (logs_dir / f"scene_{index:02d}_component_fallback.py").write_text(
-            fallback_code, encoding="utf-8"
-        )
         if not _attempt_custom_render(
             state,
             final_job_id=final_job_id,
@@ -2222,17 +2301,22 @@ def _apply_component_fallbacks(
             render_source="component_fallback",
             metrics=metrics,
         ):
+            category = str(state.get("last_error_category") or "render")
             raise StructuredVideoFailure(
                 f"Scene {index} failed after creative repair, simplification, and component fallback: "
                 f"{summarize_error(state.get('last_render_detail'))}",
                 stage="component_fallback",
                 affected_scenes=[index],
+                error_category=category,
+                during_stage="component_fallback",
+                retryable=diagnostic_retryable(state.get("last_render_detail")),
             )
         state["used_fallback"] = True
         fallback_ids = metrics.setdefault("component_fallback_scene_ids", [])
         if index not in fallback_ids:
             fallback_ids.append(index)
         metrics["component_fallbacks"] = len(fallback_ids)
+
 def _find_ffmpeg() -> str:
     for name in ("UPCURVED_FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE", "FFMPEG_BINARY"):
         candidate = str(os.getenv(name) or "").strip()
@@ -2426,23 +2510,22 @@ def _build_generation_diagnostics(
     failed: bool = False,
     failure_stage: str | None = None,
     failure_summary: str | None = None,
+    error_category: str | None = None,
+    retryable: bool | None = None,
+    during_stage: str | None = None,
 ) -> dict[str, Any]:
     scenes = plan.get("scenes") if isinstance(plan, dict) else []
     scenes = scenes if isinstance(scenes, list) else []
     creative = sum(
-        1
-        for scene in scenes
-        if isinstance(scene, dict) and scene.get("type") == "custom_manim_scene"
+        1 for scene in scenes if isinstance(scene, dict) and scene.get("type") == "custom_manim_scene"
     )
-    repaired_ids = sorted(
-        {
-            int(value)
-            for value in (
-                list(metrics.get("sanitizer_repaired_scene_ids") or [])
-                + list(metrics.get("render_repaired_scene_ids") or [])
-            )
-        }
-    )
+    repaired_ids = sorted({
+        int(value)
+        for value in (
+            list(metrics.get("sanitizer_repaired_scene_ids") or [])
+            + list(metrics.get("render_repaired_scene_ids") or [])
+        )
+    })
     fallback_count = len(set(metrics.get("component_fallback_scene_ids") or []))
     simplified_count = len(set(metrics.get("simplified_scene_ids") or []))
     plan_repaired_by_model = bool(metrics.get("plan_repaired_by_model"))
@@ -2472,12 +2555,18 @@ def _build_generation_diagnostics(
         "simplified_scenes": simplified_count,
         "component_fallbacks": fallback_count,
         "recovery_stages": list(dict.fromkeys(metrics.get("recovery_stages") or [])),
+        "voice_retries": int(metrics.get("voice_retry_count") or 0),
         "failure_stage": failure_stage,
     }
+    if error_category:
+        diagnostics["error_category"] = error_category
+    if during_stage:
+        diagnostics["during_stage"] = during_stage
+    if retryable is not None:
+        diagnostics["retryable"] = bool(retryable)
     if failed and failure_summary:
         diagnostics["summary"] = failure_summary
     return diagnostics
-
 
 def _runtime_preflight_result(
     *,
@@ -2503,10 +2592,10 @@ def _runtime_preflight_result(
         metrics=metrics,
         failed=True,
         failure_stage="runtime_dependency_preflight",
-        failure_summary=summary,
-    )
-    (job_dir / "generation_diagnostics.json").write_text(
-        _safe_json(diagnostics), encoding="utf-8"
+        failure_summary=public_error_message(detail),
+        error_category=diagnostic_category(detail),
+        retryable=diagnostic_retryable(detail),
+        during_stage="runtime_dependency_preflight",
     )
     _append_audit_and_cleanup(
         job_id=final_job_id,
@@ -2554,8 +2643,6 @@ def _render_structured_plan(
         logs_dir=logs_dir,
         metrics=metrics,
     )
-    (job_dir / "structured_plan.json").write_text(_safe_json(plan), encoding="utf-8")
-
     scene_assets: dict[int, tuple[pathlib.Path, dict[str, Any], str]] = {}
     for index, scene in enumerate(plan.get("scenes") or [], start=1):
         if scene.get("type") != "custom_manim_scene":
@@ -2584,6 +2671,8 @@ def _render_structured_plan(
         ) and not state.get("sanitizer_repaired"):
             metrics["rendered_initially"] += 1
 
+    _raise_for_voice_failures(custom_states)
+
     _batch_runtime_repair(
         custom_states,
         provider_name=provider_name,
@@ -2593,6 +2682,7 @@ def _render_structured_plan(
         logs_dir=logs_dir,
         metrics=metrics,
     )
+    _raise_for_voice_failures(custom_states)
     _batch_simplify_remaining(
         custom_states,
         provider_name=provider_name,
@@ -2602,6 +2692,7 @@ def _render_structured_plan(
         logs_dir=logs_dir,
         metrics=metrics,
     )
+    _raise_for_voice_failures(custom_states)
     _apply_component_fallbacks(
         custom_states,
         final_job_id=final_job_id,
@@ -2651,9 +2742,6 @@ def _render_structured_plan(
         scene_results.append(metadata)
         scene_codes.append(code)
 
-    (job_dir / "structured_scene_results.json").write_text(
-        _safe_json(scene_results), encoding="utf-8"
-    )
     final_mp4 = job_dir / "video.mp4"
     final_vtt = job_dir / "video.vtt"
     try:
@@ -2674,10 +2762,10 @@ def _render_structured_plan(
         model=model,
         metrics=metrics,
     )
-    (job_dir / "generation_diagnostics.json").write_text(
-        _safe_json(diagnostics), encoding="utf-8"
-    )
     used_fallback = bool(metrics.get("component_fallback_scene_ids"))
+    if metrics.get("recovery_stages") or metrics.get("component_fallback_scene_ids"):
+        _flush_response_debug_contexts(metrics, logs_dir)
+        _write_scene_diagnostics(metrics, logs_dir)
 
     _append_audit_and_cleanup(
         job_id=final_job_id,
@@ -2725,10 +2813,13 @@ def _new_metrics(operation: str = "generate") -> dict[str, Any]:
         "simplified_scene_ids": [],
         "component_fallback_scene_ids": [],
         "recovery_stages": [],
+        "voice_retry_count": 0,
+        "transport_salvages": 0,
         "_response_debug_contexts": [],
         "_debug_contexts_flushed": False,
+        "_scene_diagnostics": {},
+        "_detail_hashes": {},
     }
-
 
 def _failure_result(
     *,
@@ -2742,7 +2833,21 @@ def _failure_result(
     stage = exc.stage if isinstance(exc, StructuredVideoFailure) else "video_generation"
     affected = exc.affected_scenes if isinstance(exc, StructuredVideoFailure) else []
     detail = f"{type(exc).__name__}: {exc}"
-    summary = summarize_error(detail, fallback="Structured video generation failed.")
+    category = (
+        exc.error_category
+        if isinstance(exc, StructuredVideoFailure) and exc.error_category
+        else diagnostic_category(detail)
+    )
+    retryable = (
+        exc.retryable
+        if isinstance(exc, StructuredVideoFailure) and exc.retryable is not None
+        else diagnostic_retryable(detail)
+    )
+    during_stage = (
+        exc.during_stage if isinstance(exc, StructuredVideoFailure) else stage
+    )
+    technical_summary = summarize_error(detail, fallback="Structured video generation failed.")
+    public_summary = public_error_message(detail)
     diagnostics = _build_generation_diagnostics(
         plan,
         provider_name=provider_name,
@@ -2750,15 +2855,29 @@ def _failure_result(
         metrics=metrics,
         failed=True,
         failure_stage=stage,
-        failure_summary=summary,
+        failure_summary=public_summary,
+        error_category=category,
+        retryable=retryable,
+        during_stage=during_stage,
     )
     job_dir = pathlib.Path(STORAGE) / "jobs" / job_id
     logs_dir = job_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     _flush_response_debug_contexts(metrics, logs_dir)
+    _write_scene_diagnostics(metrics, logs_dir)
     (logs_dir / "structured_failure.txt").write_text(detail + "\n", encoding="utf-8")
-    (job_dir / "generation_diagnostics.json").write_text(
-        _safe_json(diagnostics), encoding="utf-8"
+    (logs_dir / "failure_manifest.json").write_text(
+        _safe_json({
+            "stage": stage,
+            "during_stage": during_stage,
+            "error_category": category,
+            "retryable": bool(retryable),
+            "affected_scenes": affected,
+            "llm_calls": int(metrics.get("llm_calls") or 0),
+            "voice_retries": int(metrics.get("voice_retry_count") or 0),
+            "summary": technical_summary,
+        }),
+        encoding="utf-8",
     )
     _append_audit_and_cleanup(
         job_id=job_id,
@@ -2768,22 +2887,27 @@ def _failure_result(
         metrics=metrics,
         failed=True,
         failure_stage=stage,
+        during_stage=during_stage,
+        error_category=category,
+        retryable=retryable,
         affected_scenes=affected,
-        error_summary=summary,
+        error_summary=technical_summary,
         has_final_artifact=False,
     )
-    logger.exception("structured_video_failed job_id=%s stage=%s", job_id, stage)
+    logger.exception("structured_video_failed job_id=%s stage=%s category=%s", job_id, stage, category)
     return {
         "ok": False,
         "status": "error",
         "error": "structured_video_failed",
         "error_detail": detail,
+        "error_category": category,
+        "retryable": bool(retryable),
+        "during_stage": during_stage,
         "job_id": job_id,
         "video_url": None,
         "scene_results": [],
         "generation_diagnostics": diagnostics,
     }
-
 
 def generate_structured_manim_video(
     prompt: str,
@@ -2856,8 +2980,8 @@ def generate_structured_manim_video(
             logs_dir=logs_dir,
             metrics=metrics,
         )
-        metrics["plan_repaired"] = repaired
-        metrics["plan_repaired_by_model"] = repaired
+        metrics["plan_repaired"] = False
+        metrics["plan_repaired_by_model"] = False
         return _render_structured_plan(
             plan,
             provider_name=provider_name,
@@ -2946,8 +3070,8 @@ def edit_structured_manim_video(
             logs_dir=logs_dir,
             metrics=metrics,
         )
-        metrics["plan_repaired"] = repaired
-        metrics["plan_repaired_by_model"] = repaired
+        metrics["plan_repaired"] = False
+        metrics["plan_repaired_by_model"] = False
         return _render_structured_plan(
             plan,
             provider_name=provider_name,

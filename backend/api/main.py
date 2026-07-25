@@ -863,17 +863,27 @@ def _publish_structured_video_result(
             or result.get("message")
             or "Structured video generation failed."
         )
+        root_category = str(result.get("error_category") or "").strip()
+        step = "Voice generation" if root_category == "voice_synthesis" else "Manim scene rendering"
         payload = diagnostic_payload(
             feature="video",
-            step="Manim scene rendering",
+            step=step,
             error=detail,
             provider=provider,
             model=model,
         )
+        if root_category:
+            payload["diagnostics"]["category"] = root_category
+        if result.get("retryable") is not None:
+            payload["diagnostics"]["retryable"] = bool(result.get("retryable"))
+        if result.get("during_stage"):
+            payload["diagnostics"]["during_stage"] = result.get("during_stage")
         payload.update(
             {
                 "video_url": None,
-                "debug_detail": detail[:500],
+                # Keep the frontend-safe field for backward compatibility, but never expose
+                # raw tracebacks or local paths in the chat response.
+                "debug_detail": payload.get("message"),
                 "scene_results": result.get("scene_results"),
                 "used_fallback": result.get("used_fallback"),
                 "generation_diagnostics": result.get(

@@ -46,6 +46,16 @@ _TIMEOUT_PHRASES = (
     "gateway timeout",
 )
 
+_VOICE_SYNTHESIS_PHRASES = (
+    "gtts gave an error",
+    "gttserror",
+    "tts api",
+    "google translate api",
+    "no audio stream",
+    "voice generation",
+    "voice synthesis",
+)
+
 
 @dataclass
 class DiagnosticError(RuntimeError):
@@ -136,6 +146,9 @@ def diagnostic_category(error: Any) -> str:
     if "forbidden" in lowered or "403" in lowered:
         return "provider_blocked"
 
+    if any(phrase in lowered for phrase in _VOICE_SYNTHESIS_PHRASES):
+        return "voice_synthesis"
+
     if any(phrase in lowered for phrase in _TIMEOUT_PHRASES):
         return "timeout"
 
@@ -174,6 +187,7 @@ def diagnostic_retryable(error: Any) -> bool:
         "rate_limit",
         "timeout",
         "unexpected_provider_response",
+        "voice_synthesis",
     }
 
 
@@ -194,6 +208,8 @@ def diagnostic_status_code(error: Any) -> int:
         return 401
     if category == "provider_blocked":
         return 403
+    if category == "voice_synthesis":
+        return 503
     if category == "timeout":
         return 504
     if category == "empty_prompt":
@@ -225,6 +241,10 @@ def public_error_message(error: Any) -> str:
             "The model provider blocked this request. "
             "Try a different model or rephrase the prompt."
         ),
+        "voice_synthesis": (
+            "Voice generation was temporarily unavailable. "
+            "Check your internet connection and try again in a moment."
+        ),
         "timeout": "The request took too long. Try again or switch models.",
         "empty_prompt": "The model received an empty prompt. Try again.",
         "unexpected_provider_response": (
@@ -244,8 +264,7 @@ def public_error_message(error: Any) -> str:
             "Try again, or check the backend terminal for details."
         ),
         "render": (
-            "The video could not be rendered. "
-            "Try again, or check the backend terminal for the failed scene."
+            "The video could not be rendered. Try again in a moment or switch models."
         ),
     }
     if category in messages:
