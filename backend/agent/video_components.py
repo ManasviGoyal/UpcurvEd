@@ -10,9 +10,41 @@ import re
 from typing import Any
 
 
+_PORTABLE_TEXT_REPLACEMENTS = {
+    "\u00ad": "",      # soft hyphen
+    "\u00a0": " ",     # nonbreaking space
+    "\u2010": "-",     # hyphen
+    "\u2011": "-",     # nonbreaking hyphen
+    "\u2012": "-",     # figure dash
+    "\u2013": "-",     # en dash
+    "\u2014": "-",     # em dash
+    "\u2212": "-",     # mathematical minus
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u2026": "...",
+    "\u2190": "<-",
+    "\u2192": "->",
+    "\u21d2": "=>",
+    "\u21d4": "<=>",
+}
+
+
+def portable_display_text(value: Any) -> str:
+    """Normalize common unsupported glyphs while preserving the complete wording."""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    for source, target in _PORTABLE_TEXT_REPLACEMENTS.items():
+        text = text.replace(source, target)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
 def portable_math_text(value: Any) -> str:
     """Convert common model math notation to text that Pango renders reliably."""
-    text = str(value or "").replace("\n", " ").strip()
+    text = portable_display_text(value).replace("\n", " ").strip()
     replacements = {
         "−": "-",
         "–": "-",
@@ -129,25 +161,36 @@ def _has_visible_component_content(scene: dict[str, Any]) -> bool:
 
 def _scene_for_render(scene: dict[str, Any]) -> dict[str, Any]:
     rendered = dict(scene)
+
+    for field in ("title", "heading", "subtitle", "narration", "learner_question"):
+        if rendered.get(field) not in (None, ""):
+            rendered[field] = portable_display_text(rendered[field])
+
     if rendered.get("formula"):
         rendered["formula"] = portable_math_text(rendered["formula"])
 
+    rendered["labels"] = [
+        portable_display_text(value)
+        for value in (rendered.get("labels") or [])
+        if portable_display_text(value)
+    ][:5]
+
     rendered["key_points"] = [
-        str(value).strip()
+        portable_display_text(value)
         for value in (rendered.get("key_points") or [])
-        if str(value).strip()
+        if portable_display_text(value)
     ][:5]
 
     raw_steps = rendered.get("steps") or rendered.get("calculation_steps") or []
     steps = [
-        portable_math_text(step) if _looks_equation_like(step) else str(step).strip()
+        portable_math_text(step) if _looks_equation_like(step) else portable_display_text(step)
         for step in raw_steps
-        if str(step).strip()
+        if portable_display_text(step)
     ][:6]
     provided = [
-        str(value).strip()
+        portable_display_text(value)
         for value in (rendered.get("step_narrations") or [])
-        if str(value).strip()
+        if portable_display_text(value)
     ][:6]
     narrations = [
         provided[index]
@@ -329,8 +372,15 @@ class GeneratedScene(VoiceoverScene):
         def clean_text(text):
             value = str(text or "").replace("\n", " ").strip()
             replacements = {
-                "−": "-", "–": "-", "—": "-", "±": "+/-", "×": "*",
-                "÷": "/", "·": "*", "√": "sqrt", "²": "^2", "³": "^3",
+                "\u00ad": "", "\u00a0": " ",
+                "\u2010": "-", "\u2011": "-", "\u2012": "-",
+                "−": "-", "–": "-", "—": "-",
+                "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+                "\u201c": '"', "\u201d": '"', "\u201e": '"',
+                "\u2026": "...", "\u2190": "<-", "\u2192": "->",
+                "\u21d2": "=>", "\u21d4": "<=>",
+                "±": "+/-", "×": "*", "÷": "/", "·": "*", "√": "sqrt",
+                "²": "^2", "³": "^3",
                 "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
                 "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
             }
@@ -477,32 +527,80 @@ class GeneratedScene(VoiceoverScene):
             if step_mobs.get_bottom()[1] < -3.15:
                 step_mobs.shift(mn.UP * (-3.15 - step_mobs.get_bottom()[1]))
 
-            combined_narration = " ".join(
-                [narration] + [
-                    step_narrations[index] if index < len(step_narrations) else steps[index]
-                    for index in range(len(steps))
-                ]
-            ).strip()
+            spoken_steps = [
+                step_narrations[index] if index < len(step_narrations) else steps[index]
+                for index in range(len(steps))
+            ]
+            narration_segments = [narration] + spoken_steps
+            combined_narration = " ".join(segment for segment in narration_segments if segment).strip()
+
+            def speech_weight(text):
+                # Word count is a stable local approximation of each segment's share of
+                # the single generated audio track. It avoids one TTS request per step.
+                return max(3, len(re.findall(r"[A-Za-z0-9']+", str(text or ""))))
+
             with self.voiceover(text=combined_narration) as tracker:
-                used = 0.0
+                total_duration = max(
+                    1.0, float(getattr(tracker, "duration", 0) or 0)
+                )
+                intro_animation = 0.7 if formula is not None else 0.55
+                step_reveal_time = 0.62
+                focus_change_time = 0.24
+                completion_time = 0.55
+                reserved_animation = (
+                    intro_animation
+                    + len(step_mobs) * (step_reveal_time + focus_change_time)
+                    + completion_time
+                )
+                wait_budget = max(0.0, total_duration - reserved_animation)
+                weights = [speech_weight(segment) for segment in narration_segments]
+                total_weight = max(1, sum(weights))
+
                 if formula is not None:
-                    self.play(mn.Write(formula), run_time=0.7)
-                    used += 0.7
+                    self.play(mn.Write(formula), run_time=intro_animation)
                 else:
-                    self.play(mn.Indicate(header), run_time=0.55)
-                    used += 0.55
-                for step_mob in step_mobs:
-                    self.play(mn.Write(step_mob), run_time=0.65)
-                    self.wait(0.55)
-                    used += 1.2
+                    self.play(mn.Indicate(header), run_time=intro_animation)
+
+                intro_wait = wait_budget * weights[0] / total_weight
+                if intro_wait > 0.08:
+                    self.wait(intro_wait)
+
+                current_focus = None
+                for index, step_mob in enumerate(step_mobs):
+                    focus = mn.SurroundingRectangle(
+                        step_mob,
+                        color=mn.YELLOW,
+                        buff=0.12,
+                        corner_radius=0.07,
+                    )
+                    animations = [mn.Write(step_mob), mn.Create(focus)]
+                    if current_focus is not None:
+                        animations.append(mn.FadeOut(current_focus))
+                    self.play(*animations, run_time=step_reveal_time)
+                    self.play(mn.Indicate(step_mob), run_time=focus_change_time)
+
+                    step_wait = wait_budget * weights[index + 1] / total_weight
+                    if step_wait > 0.08:
+                        self.wait(step_wait)
+                    current_focus = focus
 
                 final_step = step_mobs[-1]
                 completion_box = mn.SurroundingRectangle(
                     final_step, color=mn.GREEN_C, buff=0.16, corner_radius=0.08
                 )
-                self.play(mn.Create(completion_box), mn.Indicate(final_step), run_time=0.75)
-                used += 0.75
-                hold_voiceover(tracker, used)
+                if current_focus is not None:
+                    self.play(
+                        mn.Transform(current_focus, completion_box),
+                        mn.Indicate(final_step),
+                        run_time=completion_time,
+                    )
+                else:
+                    self.play(
+                        mn.Create(completion_box),
+                        mn.Indicate(final_step),
+                        run_time=completion_time,
+                    )
+                hold_voiceover(tracker, total_duration)
             self.wait(1.5)
             clean_out(bg)
             return
@@ -739,8 +837,15 @@ class GeneratedScene(VoiceoverScene):
         def clean_text(text):
             value = str(text or "").replace("\n", " ").strip()
             replacements = {
-                "−": "-", "–": "-", "—": "-", "±": "+/-", "×": "*",
-                "÷": "/", "·": "*", "√": "sqrt", "²": "^2", "³": "^3",
+                "\u00ad": "", "\u00a0": " ",
+                "\u2010": "-", "\u2011": "-", "\u2012": "-",
+                "−": "-", "–": "-", "—": "-",
+                "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+                "\u201c": '"', "\u201d": '"', "\u201e": '"',
+                "\u2026": "...", "\u2190": "<-", "\u2192": "->",
+                "\u21d2": "=>", "\u21d4": "<=>",
+                "±": "+/-", "×": "*", "÷": "/", "·": "*", "√": "sqrt",
+                "²": "^2", "³": "^3",
                 "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
                 "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
             }

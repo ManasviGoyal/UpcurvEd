@@ -195,6 +195,9 @@ Script structure:
   animate repeated updates within one narration block whenever practical.
 - Use stable Manim 0.19 APIs and complete executable Python.
 - Do not use Tex or MathTex. Use Text and portable plain-text formulas instead.
+- Prefer ordinary ASCII punctuation in learner-facing Manim Text. Avoid nonbreaking hyphens,
+  smart quotes, uncommon Unicode arrows, and decorative symbols when a simple ASCII equivalent
+  communicates the same meaning.
 - Keep every important object inside the frame and remove or transform old objects before
   introducing a new dense layout.
 - Preserve the complete wording of learner-facing questions. Wrap long questions across two or
@@ -215,6 +218,11 @@ Creative quality guidance:
   class. A scene labeled graph may use axes, a number plane, a state diagram, a grid, or another
   clear representation when that better teaches the requested relationship.
 - Prefer stable Manim primitives over external graph libraries or fragile internal APIs.
+- When an ordered list or practical steps are the teaching structure, keep the introduction
+  brief and explain the steps in the same order they appear. Reveal or highlight the current
+  step while it is discussed. A step narration should name or closely paraphrase the visible
+  step before adding one concise explanation. Do not force a step format when another visual
+  structure teaches the idea better.
 - Before animating a graph or 3D scene, inspect the full group bounds conceptually and leave a
   comfortable border on every side. A visually ambitious scene is still incomplete if a title,
   curve, surface, arrowhead, or axis label touches or crosses the frame edge.
@@ -352,6 +360,8 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     - Every scene should show meaningful learner-facing content throughout narration.
     - Standard scenes should use KEY_POINT, LABEL, FORMULA, STEP_TEXT, or a clear question.
     - Use STEP_TEXT immediately followed by matching STEP_NARRATION for ordered explanations.
+      Keep the scene introduction brief. Each STEP_NARRATION should identify or closely
+      paraphrase its STEP_TEXT, then add only the explanation needed for that step.
     - Worked mathematics should show completed substitution, simplification, and final answer.
     - Teach meaning before notation when that order helps comprehension.
     - VISUAL_MODE is advisory. Choose the Manim representation that best explains the idea; do
