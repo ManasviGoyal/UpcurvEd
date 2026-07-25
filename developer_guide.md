@@ -2,51 +2,30 @@
 
 Engineering reference for UpcurvEd's current desktop-first architecture.
 
-This guide reflects the **current** supported workflow:
+The supported product path is:
 
-- Electron desktop app as the primary product
-- local FastAPI backend for generation and rendering
+- Electron desktop application
+- local FastAPI backend for generation, rendering, persistence, and artifacts
 - React/Vite frontend for the UI
-- no RAG layer in the active architecture
+- no active RAG or LangGraph generation layer
 
 ## Source of Truth
 
-When project files disagree, use this priority order:
+When documentation and implementation disagree, check the implementation that owns the behavior:
 
-1. `desktop/README.md` and `desktop/main.cjs` for desktop runtime behavior
-2. `backend/api/main.py` and `backend/agent/graph.py` for generation flow
-3. `backend/runner/job_runner.py` for render execution and artifact handling
-4. this guide and the root `README.md` for project-level conventions
+1. `desktop/main.cjs`, `desktop/preload.cjs`, and `desktop/README.md` for desktop startup, secure storage, local ports, and packaging behavior
+2. `backend/api/main.py` for API routing and desktop-local persistence
+3. feature pipeline modules for generation behavior:
+   - `backend/agent/structured_video.py`
+   - `backend/mcp/podcast_logic.py`
+   - `backend/mcp/quiz_logic.py`
+   - `backend/mcp/story_video_logic.py`
+   - `backend/mcp/widget_logic.py`
+4. `backend/runner/job_runner.py` for Manim execution and render-job artifacts
+5. `backend/agent/llm/provider_config.py` and `backend/agent/llm/clients.py` for provider, model, key, and LLM request behavior
+6. `ARCHITECTURE.md` for ownership boundaries and this guide for development conventions
 
-Older docs from earlier iterations should be treated as legacy and not as the current source of truth.
-
-## Current Architecture Summary
-
-### Runtime layers
-
-- `desktop/` runs Electron and bridges secure/local desktop capabilities into the UI
-- `frontend/` contains the React/Vite application
-- `backend/` contains the FastAPI API, generation logic, render runner, and supporting services
-
-### Current generation path
-
-The main prompt-to-video flow is:
-
-1. frontend sends a request to `/generate`
-2. `backend/api/main.py` calls the backend generation path
-3. `backend/agent/graph.py` handles draft → render → failure logging / retry
-4. `backend/runner/job_runner.py` runs Manim, captures logs, writes artifacts, and returns a stable result shape
-
-### Removed architecture pieces
-
-The current architecture does **not** include:
-
-- RAG retrieval
-- ChromaDB
-- a separate rag-service
-- a `rag/` directory
-
-Any remaining references to those systems are stale and should be cleaned as part of ongoing maintenance.
+The root `README.md` is a high-level overview and documentation map, not a workflow source. References to the old `backend/agent/graph.py`, LangGraph nodes, RAG retrieval, ChromaDB, a `rag-service`, or a `rag/` directory are legacy unless current runtime code still imports them.
 
 ## Prerequisites
 
@@ -56,11 +35,11 @@ Recommended local environment:
 - Python 3.12
 - npm
 
-Python 3.12 is especially important for installer builds, because bundled desktop runtime preparation depends on it.
+Python 3.12 is required by the current desktop runtime preparation and installer workflow.
 
 ## Local Setup
 
-From the repo root:
+From the repository root:
 
 ```bash
 npm install
@@ -68,33 +47,32 @@ npm --prefix frontend install
 npm run desktop:dev:setup
 ```
 
-`desktop:dev:setup` installs the Python packages listed in `desktop/requirements-desktop.txt`, which is the dependency set currently used by the desktop workflow.
+`desktop:dev:setup` installs the Python dependencies used by the desktop workflow.
 
-## Primary Development Workflow: Desktop
+## Primary Development Workflow
 
-Run the application in desktop development mode:
+Run the complete desktop application:
 
 ```bash
 npm run desktop:dev
 ```
 
-Expected behavior:
+In development, Electron starts or reuses:
 
-- Electron launches the app shell
-- the backend starts locally
-- the frontend starts locally in Vite dev mode
-- the UI talks to the backend over localhost
+- the FastAPI backend, normally at `127.0.0.1:8000`
+- the Vite frontend, normally at `127.0.0.1:8080`
+- the Electron application window
 
-### Useful desktop environment variables
+Useful environment variables:
 
-- `DESKTOP_BACKEND_RELOAD=1` — enable backend reload/watch mode
-- `DESKTOP_REUSE_EXISTING_SERVERS=0` — fail instead of reusing already-running local services
-- `DESKTOP_API_PORT=<port>` — override the default backend port
-- `PYTHON_BIN=<path>` — force a specific Python interpreter
+- `DESKTOP_BACKEND_RELOAD=1` — enable backend reload mode
+- `DESKTOP_REUSE_EXISTING_SERVERS=0` — fail instead of reusing healthy local backend or frontend services
+- `DESKTOP_API_PORT=<port>` — change the starting backend port
+- `PYTHON_BIN=<path>` — use a specific Python interpreter
 
 ## Backend-Only Development
 
-To work only on the backend API:
+Run the API without Electron:
 
 ```bash
 python -m uvicorn backend.api.main:app --reload --host 127.0.0.1 --port 8000
@@ -106,11 +84,11 @@ Health check:
 curl -s http://127.0.0.1:8000/health
 ```
 
-The backend mounts local static files at `/static`.
+The backend serves local artifacts through `/static` when no cloud bucket is configured.
 
 ## Frontend-Only Development
 
-To work only on the frontend:
+Run the frontend in a browser:
 
 ```bash
 cd frontend
@@ -118,11 +96,11 @@ npm install
 npm run dev -- --host 127.0.0.1 --port 8080
 ```
 
-When running outside Electron, make sure the frontend is pointed at a running backend.
+A backend must also be running, and the frontend API base URL must point to it.
 
 ## Installer Builds
 
-Build the desktop frontend bundle:
+Build the desktop frontend:
 
 ```bash
 npm run desktop:build:frontend
@@ -137,127 +115,76 @@ npm run desktop:dist:mac:arm64
 npm run desktop:dist:linux
 ```
 
-The packaging configuration lives in `electron-builder.yml`.
+Artifacts are written to `release/`. Packaging is configured in `electron-builder.yml`. The bundled Python runtime is prepared by `desktop/scripts/prepare-python-runtime.cjs`; use Python 3.12 for this flow.
 
-### Bundled Python runtime
+## Runtime, State, and Artifacts
 
-Installer builds use `desktop/scripts/prepare-python-runtime.cjs` to construct a bundled runtime.
+Desktop-local mode is the supported application runtime.
 
-That flow:
+Electron starts the backend with `APP_MODE=desktop-local` and redirects local paths into the application user-data directory:
 
-- copies a Python 3.12 runtime
-- installs desktop Python dependencies
-- bundles Playwright Chromium
-- bundles ffmpeg
+- `UPCURVED_STORAGE_DIR` — generated artifacts and job data
+- `UPCURVED_DESKTOP_STATE_DIR` — chat and message state
+- `PLAYWRIGHT_BROWSERS_PATH` — bundled browser files used by story rendering
 
-This is the main reason release builds should be done with Python 3.12.
+When the backend is run directly, artifact storage defaults to `storage/` and desktop state defaults to `.desktop-state/` unless the environment variables are set.
 
-## Runtime Modes
+Render jobs are written under:
 
-### Desktop-local mode
+```text
+<UPCURVED_STORAGE_DIR>/jobs/<job_id>/
+```
 
-Desktop-local mode is the main local runtime path.
+Final structured-video artifacts normally include:
 
-In this mode:
-
-- the frontend behaves as a local desktop app
-- the backend can run in local-first mode for desktop usage
-- chat/message state is stored in a local JSON-backed desktop store
-- generated media is stored locally
-
-UpcurvEd’s supported runtime is **desktop-local**. Documentation and maintenance should optimize for the local Electron + FastAPI + Vite stack.
-
-## State, Storage, and Artifacts
-
-### Local state
-
-Desktop-local chat state is persisted to a JSON file under the desktop state directory.
-
-Relevant environment variables and defaults:
-
-- `UPCURVED_DESKTOP_STATE_DIR` — desktop state directory
-- `UPCURVED_STORAGE_DIR` — artifact storage directory
-
-In packaged desktop builds, Electron redirects these to the app user-data area.
-
-### Render artifacts
-
-`backend/runner/job_runner.py` writes artifacts under:
-
-- `storage/jobs/<job_id>/...` in local/dev workflows
-- the desktop user-data storage area in packaged desktop workflows
-
-Artifacts typically include:
-
-- `scene.py`
-- render logs
 - `video.mp4`
-- optional subtitle files such as `video.vtt`
+- `video.vtt`
+- `scene_bundle.txt`
 
-## Auth and API Keys
+Intermediate scene jobs and verbose diagnostics are cleaned according to the structured-video retention policy. The privacy-safe long-term generation record is stored at:
 
-### Desktop auth behavior
+```text
+<UPCURVED_STORAGE_DIR>/generation_audit.jsonl
+```
 
-In desktop-local mode, the backend can use `X-Desktop-User` and local-user defaults.
+## API Keys
 
-### API key storage
+The Electron runtime uses `keytar` for secure operating-system key storage when available. When secure storage is unavailable, the frontend uses the explicit local settings fallback.
 
-The Electron runtime uses `keytar` when available for secure key storage. If `keytar` is unavailable, the app falls back to local settings storage.
-
-When changing this behavior, preserve the current hierarchy:
+Preserve this order when changing key handling:
 
 1. secure desktop storage when available
-2. explicit local fallback when secure storage is unavailable
+2. local fallback when secure storage is unavailable
 
-## Canonical Files to Check First
+Provider and model behavior is centralized in:
 
-When debugging the current architecture, start here:
-
-### Desktop
-
-- `desktop/main.cjs`
-- `desktop/preload.cjs`
-- `desktop/README.md`
-
-### Backend
-
-- `backend/api/main.py`
-- `backend/agent/graph.py`
-- `backend/runner/job_runner.py`
-- `backend/config.py`
-
-### Frontend
-
-- `frontend/src/App.tsx`
-- `frontend/src/main.tsx`
-- `frontend/package.json`
+- `backend/agent/llm/provider_config.py`
+- `backend/agent/llm/clients.py`
+- `frontend/src/lib/providerConfig.ts`
+- `frontend/src/lib/secureKeys.ts`
 
 ## Testing and Linting
 
-Common local commands:
+Common backend checks:
 
 ```bash
 ruff check backend/ tests/
-ruff format backend/ tests/
-python -m pytest -q
-python -m pytest --cov=backend --cov-report=term-missing -q
+ruff format --check backend/ tests/
+python -m pytest
+python -m pytest --cov=backend --cov-report=term-missing
 ```
 
-If you rely on these tools in CI or pre-commit, make sure they are installed in your current Python environment.
+For changed frontend files, run the relevant TypeScript/Vite checks from `frontend/`. For Electron changes, run a Node syntax check and test both development and packaged paths when possible.
 
 ## Maintenance Rules
 
-When updating the repo, prefer these rules:
-
-1. keep the current folder structure unless there is a clear payoff to moving code
-2. keep one canonical generation path
-3. document desktop-first behavior before any secondary paths
-4. remove stale RAG references instead of explaining them away
-5. keep the desktop-first workflow as the source of truth
+1. keep the desktop Electron + FastAPI + React/Vite path as the supported architecture
+2. route each artifact type directly to its current feature pipeline rather than restoring the old graph layer
+3. keep provider selection centralized
+4. keep `README.md` high level and place operational instructions in this guide or `desktop/README.md`
+5. update `docs/ARCHITECTURE.md` when ownership boundaries or generation pipelines change
+6. remove stale RAG, ChromaDB, LangGraph, and old graph-pipeline references rather than documenting them as current behavior
 
 ## Known Documentation Debt
 
-Still worth cleaning after this doc update:
-
-- stale backend metadata and dependency descriptions
-- any leftover references to `graph_wo_rag_retry`, retrieval, Chroma, or `rag/`
+Remaining cleanup should include stale dependency metadata or comments that still mention LangGraph, retrieval, ChromaDB, `graph_wo_rag_retry`, or the former `backend/agent/graph.py` generation path.

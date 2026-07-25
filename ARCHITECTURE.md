@@ -1,180 +1,47 @@
 # UpcurvEd Architecture
 
-This document defines the current architecture of UpcurvEd after the removal of the old RAG-based stack.
-
-## Architecture Decision
-
-UpcurvEd is a **desktop-first Electron application**.
-
-The current maintained architecture is:
-
-- Electron runtime in `desktop/`
-- React/Vite frontend in `frontend/`
-- FastAPI backend in `backend/`
-- Manim-based render pipeline for video generation
-
-This is the architecture that project docs and future cleanup work should optimize for.
-
-## Design Goals
-
-- keep the existing repository layout with minimal disruption
-- remove outdated assumptions from the prior web-first / RAG version
-- maintain a single understandable generation path
-- preserve a smooth desktop development and packaging workflow
-
-## System Overview
-
-### Desktop runtime
-
-The Electron runtime lives in `desktop/`.
-
-Its responsibilities include:
-
-- starting the backend for local desktop use
-- starting the frontend dev server in development mode
-- loading the built frontend in packaged mode
-- bridging desktop-only features into the renderer through the preload layer
-- managing desktop-local storage and secure key access
-
-Canonical files:
-
-- `desktop/main.cjs`
-- `desktop/preload.cjs`
-- `desktop/scripts/prepare-python-runtime.cjs`
-
-### Frontend
-
-The frontend lives in `frontend/` and is built with React and Vite.
-
-Its responsibilities include:
-
-- rendering the user interface
-- sending generation/edit/media requests to the backend
-- adapting behavior between desktop-local mode and non-desktop/browser mode
-- handling client-side routing, settings, and local UI state
-
-Canonical files:
-
-- `frontend/src/App.tsx`
-- `frontend/src/main.tsx`
-
-### Backend
-
-The backend lives in `backend/` and is implemented as a FastAPI app.
-
-Its responsibilities include:
-
-- handling generation and editing endpoints
-- managing the prompt-to-code flow
-- invoking rendering jobs
-- serving local artifacts
-- supporting desktop-local persistence
-
-Canonical file:
-
-- `backend/api/main.py`
-
-## Current Generation Pipeline
-
-The current pipeline is centered on `backend/agent/graph.py`.
-
-### Logical flow
-
-1. receive user prompt
-2. draft Manim code
-3. render with Manim
-4. if render fails, log failure context
-5. retry until the configured limit or end
-
-This is the active canonical generation graph.
-
-### Render execution
-
-`backend/runner/job_runner.py` is the shared render runner.
-
-Its responsibilities include:
-
-- creating a job directory
-- writing `scene.py`
-- running linting as best effort
-- running Manim render commands
-- capturing stdout/stderr and metadata
-- copying the final output to a stable path
-- returning a consistent result shape to callers
-
-## Storage Model
-
-### Desktop-local storage
-
-For desktop-local workflows:
-
-- desktop state is stored locally on disk
-- job artifacts are stored locally on disk
-- artifacts are served through local backend routes
-
-## Modes of Operation
-
-### 1. Desktop-local mode
-
-This is the main supported runtime.
-
-Characteristics:
-
-- Electron starts local services
-- backend and frontend communicate over localhost
-- desktop-local user state is persisted locally
-- local-first auth behavior is allowed
-
-### 2. Browser/frontend development mode
-
-This is a secondary development mode for UI work.
-
-Characteristics:
-
-- frontend runs directly in the browser
-- backend may still be run locally as a separate process
-- useful for UI iteration without launching the full desktop shell
-
-## Ownership Boundaries
-
-### `desktop/`
-Owns:
-
-- app startup
-- process spawning and lifecycle
-- packaged runtime preparation
-- desktop-specific storage and secure bridge behavior
-
-### `frontend/`
-Owns:
-
-- UI and routing
-- user interactions
-- presentation logic
-- desktop-local vs browser-mode client behavior
-
-### `backend/`
-Owns:
-
-- API endpoints
-- prompt-to-code pipeline
-- render execution
-- artifact lifecycle
-- persistence and artifact storage integrations for the desktop-local runtime
-
-## Cleanup Guidance
-
-When cleaning the repo, prefer these principles:
-
-1. keep the current directory layout unless a move clearly improves clarity
-2. use one canonical generation path
-3. prioritize desktop-first truth in docs and code comments
-4. delete stale RAG references rather than keeping explanatory dead weight
-5. only treat Docker as official once its files reflect the current architecture
+UpcurvEd is a desktop application.
 
 ## Current Documentation Set
 
-- `README.md` — project-level overview
+- `README.md` — high-level project overview and documentation map
 - `developer_guide.md` — engineering setup and maintenance guidance
-- `desktop/README.md` — Electron runtime notes
-- `docs/ARCHITECTURE.md` — this architecture definition
+- `desktop/README.md` — Electron runtime and packaging notes
+- `ARCHITECTURE.md` — this architecture definition
+
+## Summary
+
+The `desktop/` *Electron* runtime starts the local backend and, in development, the frontend dev server. Packaged builds load the built frontend UI. The `frontend/` with *React* and *Vite* owns the UI and routing, sending generation requests to the backend. The `backend/` has *FastAPI* endpoints and handles the feature-specific prompt-to-artifact pipelines, render execution (`backend/runner/job_runner.py` for Manim jobs), artifact lifecycle, local persistence, and desktop-local integrations. Backend and frontend communicate over localhost. Generated artifacts are stored locally under `UPCURVED_STORAGE_DIR`, which defaults to `storage/` when the backend is run directly and is redirected to the Electron user-data storage directory in desktop mode. Desktop chat and message state is stored separately under `UPCURVED_DESKTOP_STATE_DIR`.
+
+## Generation Pipelines
+### Video
+
+1. receive the user prompt
+2. preflight the local Manim runtime and request a tagged scene plan plus complete custom Manim scripts from the selected LLM
+3. normalize the plan, apply hard safety and execution checks, and render standard and custom scenes independently with Manim
+4. retry actual sanitizer or render failures through targeted batch repair, local voice retry, simplification, or deterministic component fallback as needed
+5. concatenate the rendered clips, write captions and the editable scene bundle, store the final artifacts, record the generation audit, and clean intermediate scene jobs
+
+### Podcast
+
+1. receive the user prompt and podcast mode
+2. generate the podcast script with the selected LLM
+3. detect the script language and synthesize speech with gTTS, using the debate voice path when requested and local fallback retries when needed
+4. write the MP3 plus SRT and VTT caption files
+5. return the local artifact URLs to the API layer for persistence and display
+
+### Widget
+
+1. receive the user prompt
+2. generate a self-contained interactive HTML document with the selected LLM
+3. extract, sanitize, and validate the returned HTML
+4. use targeted repair, a simpler LLM fallback, or the deterministic topic fallback when the primary output is unusable
+5. return the final HTML to the API layer for local persistence and download
+
+### Story
+
+1. receive the user prompt and story options
+2. generate and normalize a structured story plan with the selected LLM
+3. generate the scene visuals and use deterministic visual fallbacks when needed
+4. assemble the plan and visuals into a self-contained interactive HTML story slider
+5. return the story plan and HTML artifact to the API layer for local persistence and download
