@@ -133,6 +133,10 @@ Render jobs are written under:
 
 ```text
 <UPCURVED_STORAGE_DIR>/jobs/<job_id>/
+
+for me on the installed app: /Users/isabelayepes/Library/Application Support/upcurved-desktop/storage
+
+for me on the local dev app: /Users/isabelayepes/Library/Application Support/Electron/storage
 ```
 
 Final structured-video artifacts normally include:
