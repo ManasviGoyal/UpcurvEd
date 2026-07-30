@@ -1131,6 +1131,7 @@ def _append_audit_and_cleanup(
     try:
         append_generation_audit(
             {
+                "type": "video",
                 "job_id": job_id,
                 "operation": metrics.get("operation") or "generate",
                 "outcome": _audit_outcome(metrics, failed=failed),

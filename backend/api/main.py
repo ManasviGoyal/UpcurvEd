@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend.agent.llm.clients import call_llm
+from backend.agent.llm.clients import call_llm, track_llm_calls
 from backend.agent.llm.provider_config import (
     ProviderName,
     get_provider_key as _get_provider_key,
@@ -38,6 +38,7 @@ from backend.agent.prompts import (
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
 from backend.utils import app_logging  # noqa: F401
 from backend.utils.diagnostics import diagnostic_error_response, diagnostic_payload
+from backend.utils.failure_log import append_generation_audit, summarize_error
 from backend.utils.html_exports import (
     build_quiz_html,
     make_download_filename,
@@ -63,6 +64,51 @@ _DESKTOP_STATE_FILE = _DESKTOP_STATE_DIR / "desktop_store.json"
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _generation_job_id(value: object | None) -> str:
+    return safe_job_id(str(value or uuid4().hex[:12]))
+
+
+def _append_artifact_generation_audit(
+    *,
+    generation_type: str,
+    job_id: str,
+    operation: str,
+    outcome: str,
+    provider: str | None,
+    model: str | None,
+    llm_calls: int,
+    started_monotonic: float,
+    failure_stage: str | None = None,
+    error_summary: object | None = None,
+) -> None:
+    try:
+        append_generation_audit(
+            {
+                "type": generation_type,
+                "job_id": job_id,
+                "operation": operation,
+                "outcome": outcome,
+                "provider": provider,
+                "model": model,
+                "llm_calls": max(0, int(llm_calls)),
+                "failure_stage": failure_stage,
+                "error_summary": (
+                    summarize_error(error_summary) if error_summary else None
+                ),
+                "duration_seconds": max(
+                    0.0, time.monotonic() - started_monotonic
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "generation_audit_append_failed type=%s job_id=%s error=%s",
+            generation_type,
+            job_id,
+            exc,
+        )
 
 
 def _safe_client_created_at(value: object, fallback_ms: int) -> int:
@@ -1099,6 +1145,115 @@ def _publish_structured_video_result(
 
 @app.post("/generate")
 def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
+    gen_mode = (body.mode or "standard").strip().lower()
+
+    if gen_mode == "story":
+        started = time.monotonic()
+        job_id = _generation_job_id(body.jobId)
+        with track_llm_calls() as llm_counter:
+            try:
+                provider, model = _resolve_provider_model(
+                    body.keys,
+                    body.provider,
+                    body.model,
+                )
+                provider_keys = _provider_keys_with_env(body.keys)
+                logger.info(
+                    "/generate called provider=%s model=%s mode=%s",
+                    provider,
+                    model,
+                    gen_mode,
+                )
+                story_res = _generate_story_slider(
+                    prompt=body.prompt,
+                    provider=provider,
+                    model=model,
+                    provider_keys=provider_keys,
+                    story_options=body.storyOptions or {},
+                )
+                widget_html = story_res.get("widget_html")
+                if story_res.get("status") == "ok" and widget_html:
+                    story_plan = story_res.get("story_plan") or {}
+                    story_title = (
+                        story_plan.get("title")
+                        if isinstance(story_plan, dict)
+                        else body.prompt
+                    )
+                    download_meta = _html_download_payload(
+                        uid=uid,
+                        chat_id=body.chatId,
+                        kind="story",
+                        title=story_title or body.prompt,
+                        html_text=widget_html,
+                        job_id=job_id,
+                    )
+                    _append_artifact_generation_audit(
+                        generation_type="story",
+                        job_id=job_id,
+                        operation="generate",
+                        outcome="clean_success",
+                        provider=provider,
+                        model=model,
+                        llm_calls=llm_counter.count,
+                        started_monotonic=started,
+                    )
+                    return {
+                        "ok": True,
+                        "status": "ok",
+                        "widget_html": widget_html,
+                        "story_plan": story_plan,
+                        "generation_mode": "story",
+                        "message": "Story scene slider generated.",
+                        **download_meta,
+                    }
+
+                detail = (
+                    story_res.get("error_detail")
+                    or story_res.get("error")
+                    or story_res.get("message")
+                    or "Story generation failed."
+                )
+                _append_artifact_generation_audit(
+                    generation_type="story",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="failed",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                    failure_stage="story_generation",
+                    error_summary=detail,
+                )
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": "story_slider_failed",
+                    "message": "Story generation failed.",
+                    "video_url": None,
+                }
+            except Exception as exc:
+                _append_artifact_generation_audit(
+                    generation_type="story",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="failed",
+                    provider=locals().get("provider"),
+                    model=locals().get("model"),
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                    failure_stage="story_generation",
+                    error_summary=exc,
+                )
+                logger.exception("/generate story failed with exception: %s", exc)
+                return diagnostic_error_response(
+                    feature="story",
+                    step="story generation",
+                    error=exc,
+                    provider=locals().get("provider"),
+                    model=locals().get("model"),
+                )
+
     try:
         provider, model = _resolve_provider_model(
             body.keys,
@@ -1106,56 +1261,12 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             body.model,
         )
         provider_keys = _provider_keys_with_env(body.keys)
-        gen_mode = (body.mode or "standard").strip().lower()
         logger.info(
             "/generate called provider=%s model=%s mode=%s",
             provider,
             model,
             gen_mode,
         )
-
-        if gen_mode == "story":
-            story_res = _generate_story_slider(
-                prompt=body.prompt,
-                provider=provider,
-                model=model,
-                provider_keys=provider_keys,
-                story_options=body.storyOptions or {},
-            )
-            widget_html = story_res.get("widget_html")
-            if story_res.get("status") == "ok" and widget_html:
-                story_plan = story_res.get("story_plan") or {}
-                story_title = (
-                    story_plan.get("title")
-                    if isinstance(story_plan, dict)
-                    else body.prompt
-                )
-                download_meta = _html_download_payload(
-                    uid=uid,
-                    chat_id=body.chatId,
-                    kind="story",
-                    title=story_title or body.prompt,
-                    html_text=widget_html,
-                    job_id=body.jobId,
-                )
-                return {
-                    "ok": True,
-                    "status": "ok",
-                    "widget_html": widget_html,
-                    "story_plan": story_plan,
-                    "generation_mode": "story",
-                    "message": "Story scene slider generated.",
-                    **download_meta,
-                }
-
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "story_slider_failed",
-                "message": "Story generation failed.",
-                "video_url": None,
-            }
-
         from backend.agent.structured_video import (
             generate_structured_manim_video,
         )
@@ -1283,259 +1394,359 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
 
 @app.post("/quiz/embedded")
 def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
-    try:
-        provider, model = _resolve_provider_model(
-            body.keys,
-            body.provider,
-            body.model,
-        )
-        provider_keys = _provider_keys_with_env(body.keys)
-        quiz = _generate_quiz_embedded(
-            prompt=body.prompt,
-            num_questions=body.num_questions,
-            difficulty=body.difficulty or "medium",
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-            context=body.context,
-        )
-        quiz_html = build_quiz_html(quiz, source_title=body.prompt)
-        download_meta = _html_download_payload(
-            uid=uid,
-            chat_id=body.chatId,
-            kind="quiz",
-            title=quiz.get("title") or body.prompt,
-            html_text=quiz_html,
-            job_id=body.jobId,
-        )
-        return {"status": "ok", "quiz": quiz, **download_meta}
-    except Exception as exc:
-        logger.exception("/quiz/embedded failed: %s", exc)
-        return diagnostic_error_response(
-            feature="quiz",
-            step="quiz generation",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            quiz = _generate_quiz_embedded(
+                prompt=body.prompt,
+                num_questions=body.num_questions,
+                difficulty=body.difficulty or "medium",
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+                context=body.context,
+            )
+            quiz_html = build_quiz_html(quiz, source_title=body.prompt)
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="quiz",
+                title=quiz.get("title") or body.prompt,
+                html_text=quiz_html,
+                job_id=job_id,
+            )
+            _append_artifact_generation_audit(
+                generation_type="quiz",
+                job_id=job_id,
+                operation="generate",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+            )
+            return {"status": "ok", "quiz": quiz, **download_meta}
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="quiz",
+                job_id=job_id,
+                operation="generate",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="quiz_generation",
+                error_summary=exc,
+            )
+            logger.exception("/quiz/embedded failed: %s", exc)
+            return diagnostic_error_response(
+                feature="quiz",
+                step="quiz generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 @app.post("/quiz/media")
 def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
-    try:
-        transcript = body.get("transcript", "").strip()
-        if not transcript:
-            raise ValueError("Transcript from VTT captions is required")
+    started = time.monotonic()
+    job_id = _generation_job_id(body.get("jobId"))
+    with track_llm_calls() as llm_counter:
+        try:
+            transcript = body.get("transcript", "").strip()
+            if not transcript:
+                raise ValueError("Transcript from VTT captions is required")
 
-        provider_keys = _provider_keys_with_env(
-            body.get("provider_keys", {})
-        )
-        provider, model = _resolve_provider_model(
-            provider_keys,
-            body.get("provider"),
-            body.get("model"),
-            default_provider="gemini",
-        )
-        context = body.get("sceneCode")
-        num_questions = body.get("num_questions", 5)
-        difficulty = body.get("difficulty", "medium")
-        media_prompt = (
-            "Generate quiz questions based ONLY on the following content "
-            "(from captions):\n\n"
-            f"{transcript}"
-        )
-        quiz = _generate_quiz_embedded(
-            prompt=media_prompt,
-            num_questions=num_questions,
-            difficulty=difficulty,
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-            context=context,
-        )
-        quiz_html = build_quiz_html(quiz, source_title="Media quiz")
-        download_meta = _html_download_payload(
-            uid=uid,
-            chat_id=body.get("chatId"),
-            kind="quiz",
-            title=quiz.get("title") or "Media quiz",
-            html_text=quiz_html,
-            job_id=body.get("jobId"),
-        )
-        return {"status": "ok", "quiz": quiz, **download_meta}
-    except Exception as exc:
-        logger.exception("/quiz/media failed: %s", exc)
-        return diagnostic_error_response(
-            feature="quiz",
-            step="quiz from media captions",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+            provider_keys = _provider_keys_with_env(
+                body.get("provider_keys", {})
+            )
+            provider, model = _resolve_provider_model(
+                provider_keys,
+                body.get("provider"),
+                body.get("model"),
+                default_provider="gemini",
+            )
+            context = body.get("sceneCode")
+            num_questions = body.get("num_questions", 5)
+            difficulty = body.get("difficulty", "medium")
+            media_prompt = (
+                "Generate quiz questions based ONLY on the following content "
+                "(from captions):\n\n"
+                f"{transcript}"
+            )
+            quiz = _generate_quiz_embedded(
+                prompt=media_prompt,
+                num_questions=num_questions,
+                difficulty=difficulty,
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+                context=context,
+            )
+            quiz_html = build_quiz_html(quiz, source_title="Media quiz")
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.get("chatId"),
+                kind="quiz",
+                title=quiz.get("title") or "Media quiz",
+                html_text=quiz_html,
+                job_id=job_id,
+            )
+            _append_artifact_generation_audit(
+                generation_type="quiz",
+                job_id=job_id,
+                operation="generate",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+            )
+            return {"status": "ok", "quiz": quiz, **download_meta}
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="quiz",
+                job_id=job_id,
+                operation="generate",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="quiz_media_generation",
+                error_summary=exc,
+            )
+            logger.exception("/quiz/media failed: %s", exc)
+            return diagnostic_error_response(
+                feature="quiz",
+                step="quiz from media captions",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 @app.post("/podcast")
 def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
-    try:
-        provider, model = _resolve_provider_model(
-            body.keys,
-            body.provider,
-            body.model,
-        )
-        provider_keys = _provider_keys_with_env(body.keys)
-        result = _generate_podcast(
-            prompt=body.prompt,
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-            mode=body.mode or "standard",
-            job_id=body.jobId,
-        )
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            result = _generate_podcast(
+                prompt=body.prompt,
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+                mode=body.mode or "standard",
+                job_id=job_id,
+            )
 
-        gcs_bucket = _get_bucket_name()
-        if gcs_bucket and result.get("video_url"):
-            try:
-                job_id = result.get("job_id", "unknown")
-                relative_path = result["video_url"].replace("/static/", "")
-                path = pathlib.Path(STORAGE) / relative_path
-                if path.exists():
-                    data = path.read_bytes()
-                    content_type = (
-                        mimetypes.guess_type(path.name)[0]
-                        or "audio/mpeg"
-                    )
-                    gcs_path = (
-                        f"{uid}/chats/{body.chatId or 'uncategorized'}/"
-                        f"podcast_{job_id}.mp3"
-                    )
-                    _upload_bytes(
-                        gcs_bucket,
-                        gcs_path,
-                        data,
-                        content_type,
-                    )
-                    result["signed_video_url"] = _sign_url(
-                        gcs_bucket,
-                        gcs_path,
-                    )
-                    result["gcs_path"] = gcs_path
-                    result["artifact_id"] = _save_artifact(
-                        uid,
-                        body.chatId,
-                        "podcast",
-                        gcs_path,
-                        len(data),
-                        content_type,
-                        derived=False,
-                    )
-
-                    if result.get("script"):
-                        script_bytes = result["script"].encode("utf-8")
-                        chat_path = body.chatId or "uncategorized"
-                        script_gcs_path = (
-                            f"{uid}/chats/{chat_path}/"
-                            f"podcast_{job_id}_script.txt"
+            gcs_bucket = _get_bucket_name()
+            if gcs_bucket and result.get("video_url"):
+                try:
+                    result_job_id = result.get("job_id", job_id)
+                    relative_path = result["video_url"].replace("/static/", "")
+                    path = pathlib.Path(STORAGE) / relative_path
+                    if path.exists():
+                        data = path.read_bytes()
+                        content_type = (
+                            mimetypes.guess_type(path.name)[0]
+                            or "audio/mpeg"
+                        )
+                        gcs_path = (
+                            f"{uid}/chats/{body.chatId or 'uncategorized'}/"
+                            f"podcast_{result_job_id}.mp3"
                         )
                         _upload_bytes(
                             gcs_bucket,
-                            script_gcs_path,
-                            script_bytes,
-                            "text/plain",
+                            gcs_path,
+                            data,
+                            content_type,
                         )
-                        result["script_gcs_path"] = script_gcs_path
-                        _save_artifact(
+                        result["signed_video_url"] = _sign_url(
+                            gcs_bucket,
+                            gcs_path,
+                        )
+                        result["gcs_path"] = gcs_path
+                        result["artifact_id"] = _save_artifact(
                             uid,
                             body.chatId,
-                            "script",
-                            script_gcs_path,
-                            len(script_bytes),
-                            "text/plain",
-                            derived=True,
+                            "podcast",
+                            gcs_path,
+                            len(data),
+                            content_type,
+                            derived=False,
                         )
 
-                    vtt_path_local = None
-                    if result.get("vtt_url"):
-                        vtt_relative = result["vtt_url"].replace(
-                            "/static/",
-                            "",
-                        )
-                        vtt_path_local = pathlib.Path(STORAGE) / vtt_relative
-                        if vtt_path_local.exists():
-                            vtt_data = vtt_path_local.read_bytes()
+                        if result.get("script"):
+                            script_bytes = result["script"].encode("utf-8")
                             chat_path = body.chatId or "uncategorized"
-                            vtt_gcs_path = (
+                            script_gcs_path = (
                                 f"{uid}/chats/{chat_path}/"
-                                f"podcast_{job_id}.vtt"
+                                f"podcast_{result_job_id}_script.txt"
                             )
                             _upload_bytes(
                                 gcs_bucket,
-                                vtt_gcs_path,
-                                vtt_data,
-                                "text/vtt",
+                                script_gcs_path,
+                                script_bytes,
+                                "text/plain",
                             )
-                            result["signed_subtitle_url"] = _sign_url(
-                                gcs_bucket,
-                                vtt_gcs_path,
-                            )
+                            result["script_gcs_path"] = script_gcs_path
                             _save_artifact(
                                 uid,
                                 body.chatId,
-                                "subtitle",
-                                vtt_gcs_path,
-                                len(vtt_data),
-                                "text/vtt",
+                                "script",
+                                script_gcs_path,
+                                len(script_bytes),
+                                "text/plain",
                                 derived=True,
                             )
 
-                    if result.get("signed_video_url"):
-                        try:
-                            if path.exists():
-                                path.unlink()
-                            if (
-                                result.get("signed_subtitle_url")
-                                and vtt_path_local is not None
-                                and vtt_path_local.exists()
-                            ):
-                                vtt_path_local.unlink()
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to clean up local podcast files: %s",
-                                exc,
+                        vtt_path_local = None
+                        if result.get("vtt_url"):
+                            vtt_relative = result["vtt_url"].replace(
+                                "/static/",
+                                "",
                             )
-            except Exception as exc:
-                logger.warning("GCS podcast upload failed: %s", exc)
-                if gcs_bucket:
+                            vtt_path_local = pathlib.Path(STORAGE) / vtt_relative
+                            if vtt_path_local.exists():
+                                vtt_data = vtt_path_local.read_bytes()
+                                chat_path = body.chatId or "uncategorized"
+                                vtt_gcs_path = (
+                                    f"{uid}/chats/{chat_path}/"
+                                    f"podcast_{result_job_id}.vtt"
+                                )
+                                _upload_bytes(
+                                    gcs_bucket,
+                                    vtt_gcs_path,
+                                    vtt_data,
+                                    "text/vtt",
+                                )
+                                result["signed_subtitle_url"] = _sign_url(
+                                    gcs_bucket,
+                                    vtt_gcs_path,
+                                )
+                                _save_artifact(
+                                    uid,
+                                    body.chatId,
+                                    "subtitle",
+                                    vtt_gcs_path,
+                                    len(vtt_data),
+                                    "text/vtt",
+                                    derived=True,
+                                )
+
+                        if result.get("signed_video_url"):
+                            try:
+                                if path.exists():
+                                    path.unlink()
+                                if (
+                                    result.get("signed_subtitle_url")
+                                    and vtt_path_local is not None
+                                    and vtt_path_local.exists()
+                                ):
+                                    vtt_path_local.unlink()
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to clean up local podcast files: %s",
+                                    exc,
+                                )
+                except Exception as exc:
+                    logger.warning("GCS podcast upload failed: %s", exc)
+                    if gcs_bucket:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=(
+                                "Podcast generated but GCS upload failed. "
+                                "Please try again."
+                            ),
+                        ) from exc
+            elif result.get("vtt_url"):
+                result["signed_subtitle_url"] = result["vtt_url"]
+
+            if gcs_bucket:
+                if not result.get("signed_video_url"):
                     raise HTTPException(
                         status_code=500,
                         detail=(
-                            "Podcast generated but GCS upload failed. "
+                            "GCS bucket configured but upload failed. "
                             "Please try again."
                         ),
-                    ) from exc
-        elif result.get("vtt_url"):
-            result["signed_subtitle_url"] = result["vtt_url"]
+                    )
+                result["video_url"] = result["signed_video_url"]
 
-        if gcs_bucket:
-            if not result.get("signed_video_url"):
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "GCS bucket configured but upload failed. "
-                        "Please try again."
-                    ),
+            succeeded = bool(
+                result.get("ok") is True
+                or result.get("status") == "ok"
+                or result.get("video_url")
+            )
+            if succeeded:
+                _append_artifact_generation_audit(
+                    generation_type="podcast",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="clean_success",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
                 )
-            result["video_url"] = result["signed_video_url"]
-
-        return result
-    except Exception as exc:
-        logger.exception("/podcast failed: %s", exc)
-        return diagnostic_error_response(
-            feature="podcast",
-            step="podcast generation",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+            else:
+                detail = (
+                    result.get("error_detail")
+                    or result.get("error")
+                    or result.get("message")
+                    or "Podcast generation failed."
+                )
+                _append_artifact_generation_audit(
+                    generation_type="podcast",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="failed",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                    failure_stage="podcast_generation",
+                    error_summary=detail,
+                )
+            return result
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="podcast",
+                job_id=job_id,
+                operation="generate",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="podcast_generation",
+                error_summary=exc,
+            )
+            logger.exception("/podcast failed: %s", exc)
+            return diagnostic_error_response(
+                feature="podcast",
+                step="podcast generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 def _extract_complete_html_document(raw: str) -> str:
@@ -1905,49 +2116,73 @@ def _edit_story_html(
 
 @app.post("/widget")
 def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
-    provider, model = _resolve_provider_model(
-        body.keys,
-        body.provider,
-        body.model,
-    )
-    provider_keys = _provider_keys_with_env(body.keys)
-    logger.info("/widget called provider=%s model=%s", provider, model)
-
-    try:
-        result = _generate_widget(
-            prompt=body.prompt,
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-        )
-        widget_html = result["widget_html"]
-        download_meta = _html_download_payload(
-            uid=uid,
-            chat_id=body.chatId,
-            kind="widget",
-            title=body.prompt,
-            html_text=widget_html,
-            job_id=body.jobId,
-        )
-        logger.info(
-            "/widget completed: ok, html_len=%d",
-            len(widget_html),
-        )
-        return {
-            "ok": True,
-            "status": "ok",
-            "widget_html": widget_html,
-            **download_meta,
-        }
-    except Exception as exc:
-        logger.exception("/widget failed: %s", exc)
-        return diagnostic_error_response(
-            feature="widget",
-            step="widget generation",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            logger.info("/widget called provider=%s model=%s", provider, model)
+            result = _generate_widget(
+                prompt=body.prompt,
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+            )
+            widget_html = result["widget_html"]
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="widget",
+                title=body.prompt,
+                html_text=widget_html,
+                job_id=job_id,
+            )
+            _append_artifact_generation_audit(
+                generation_type="widget",
+                job_id=job_id,
+                operation="generate",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+            )
+            logger.info(
+                "/widget completed: ok, html_len=%d",
+                len(widget_html),
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "widget_html": widget_html,
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="widget",
+                job_id=job_id,
+                operation="generate",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="widget_generation",
+                error_summary=exc,
+            )
+            logger.exception("/widget failed: %s", exc)
+            return diagnostic_error_response(
+                feature="widget",
+                step="widget generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 @app.post("/edit/widget")
@@ -1955,47 +2190,71 @@ def edit_widget_endpoint(
     body: EditWidgetIn,
     uid: str = Depends(require_firebase_user),
 ):
-    provider, model = _resolve_provider_model(
-        body.keys,
-        body.provider,
-        body.model,
-    )
-    provider_keys = _provider_keys_with_env(body.keys)
-    logger.info("/edit/widget called provider=%s model=%s", provider, model)
-
-    try:
-        result = _edit_widget(
-            original_html=body.original_html,
-            edit_instructions=body.edit_instructions,
-            original_title=body.original_title,
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-        )
-        widget_html = result["widget_html"]
-        download_meta = _html_download_payload(
-            uid=uid,
-            chat_id=body.chatId,
-            kind="widget",
-            title=body.original_title or "Edited widget",
-            html_text=widget_html,
-            job_id=body.jobId,
-        )
-        return {
-            "ok": True,
-            "status": "ok",
-            "widget_html": widget_html,
-            **download_meta,
-        }
-    except Exception as exc:
-        logger.exception("/edit/widget failed: %s", exc)
-        return diagnostic_error_response(
-            feature="widget",
-            step="widget editing",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            logger.info("/edit/widget called provider=%s model=%s", provider, model)
+            result = _edit_widget(
+                original_html=body.original_html,
+                edit_instructions=body.edit_instructions,
+                original_title=body.original_title,
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+            )
+            widget_html = result["widget_html"]
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="widget",
+                title=body.original_title or "Edited widget",
+                html_text=widget_html,
+                job_id=job_id,
+            )
+            _append_artifact_generation_audit(
+                generation_type="widget",
+                job_id=job_id,
+                operation="edit",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "widget_html": widget_html,
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="widget",
+                job_id=job_id,
+                operation="edit",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="widget_edit",
+                error_summary=exc,
+            )
+            logger.exception("/edit/widget failed: %s", exc)
+            return diagnostic_error_response(
+                feature="widget",
+                step="widget editing",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 @app.post("/edit/story")
@@ -2003,48 +2262,72 @@ def edit_story_endpoint(
     body: EditStoryIn,
     uid: str = Depends(require_firebase_user),
 ):
-    provider, model = _resolve_provider_model(
-        body.keys,
-        body.provider,
-        body.model,
-    )
-    provider_keys = _provider_keys_with_env(body.keys)
-    logger.info("/edit/story called provider=%s model=%s", provider, model)
-
-    try:
-        story_html = _edit_story_html(
-            original_html=body.original_html,
-            edit_instructions=body.edit_instructions,
-            original_title=body.original_title,
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-        )
-        download_meta = _html_download_payload(
-            uid=uid,
-            chat_id=body.chatId,
-            kind="story",
-            title=body.original_title or "Edited story",
-            html_text=story_html,
-            job_id=body.jobId,
-        )
-        return {
-            "ok": True,
-            "status": "ok",
-            "widget_html": story_html,
-            "generation_mode": "story",
-            "message": "Story edited successfully.",
-            **download_meta,
-        }
-    except Exception as exc:
-        logger.exception("/edit/story failed: %s", exc)
-        return diagnostic_error_response(
-            feature="story",
-            step="story editing",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            logger.info("/edit/story called provider=%s model=%s", provider, model)
+            story_html = _edit_story_html(
+                original_html=body.original_html,
+                edit_instructions=body.edit_instructions,
+                original_title=body.original_title,
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+            )
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="story",
+                title=body.original_title or "Edited story",
+                html_text=story_html,
+                job_id=job_id,
+            )
+            _append_artifact_generation_audit(
+                generation_type="story",
+                job_id=job_id,
+                operation="edit",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "widget_html": story_html,
+                "generation_mode": "story",
+                "message": "Story edited successfully.",
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="story",
+                job_id=job_id,
+                operation="edit",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="story_edit",
+                error_summary=exc,
+            )
+            logger.exception("/edit/story failed: %s", exc)
+            return diagnostic_error_response(
+                feature="story",
+                step="story editing",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 @app.post("/edit/quiz")
@@ -2052,50 +2335,74 @@ def edit_quiz_endpoint(
     body: EditQuizIn,
     uid: str = Depends(require_firebase_user),
 ):
-    provider, model = _resolve_provider_model(
-        body.keys,
-        body.provider,
-        body.model,
-    )
-    provider_keys = _provider_keys_with_env(body.keys)
-    logger.info("/edit/quiz called provider=%s model=%s", provider, model)
-
-    try:
-        quiz = _edit_quiz_embedded(
-            original_quiz=body.original_quiz,
-            edit_instructions=body.edit_instructions,
-            num_questions=body.num_questions,
-            difficulty=body.difficulty or "medium",
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-        )
-        quiz_html = build_quiz_html(
-            quiz,
-            source_title=(
-                quiz.get("title")
-                or body.original_quiz.get("title")
-                or "Edited quiz"
-            ),
-        )
-        download_meta = _html_download_payload(
-            uid=uid,
-            chat_id=body.chatId,
-            kind="quiz",
-            title=quiz.get("title") or "Edited quiz",
-            html_text=quiz_html,
-            job_id=body.jobId,
-        )
-        return {"status": "ok", "quiz": quiz, **download_meta}
-    except Exception as exc:
-        logger.exception("/edit/quiz failed: %s", exc)
-        return diagnostic_error_response(
-            feature="quiz",
-            step="quiz editing",
-            error=exc,
-            provider=locals().get("provider"),
-            model=locals().get("model"),
-        )
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            logger.info("/edit/quiz called provider=%s model=%s", provider, model)
+            quiz = _edit_quiz_embedded(
+                original_quiz=body.original_quiz,
+                edit_instructions=body.edit_instructions,
+                num_questions=body.num_questions,
+                difficulty=body.difficulty or "medium",
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+            )
+            quiz_html = build_quiz_html(
+                quiz,
+                source_title=(
+                    quiz.get("title")
+                    or body.original_quiz.get("title")
+                    or "Edited quiz"
+                ),
+            )
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="quiz",
+                title=quiz.get("title") or "Edited quiz",
+                html_text=quiz_html,
+                job_id=job_id,
+            )
+            _append_artifact_generation_audit(
+                generation_type="quiz",
+                job_id=job_id,
+                operation="edit",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+            )
+            return {"status": "ok", "quiz": quiz, **download_meta}
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="quiz",
+                job_id=job_id,
+                operation="edit",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="quiz_edit",
+                error_summary=exc,
+            )
+            logger.exception("/edit/quiz failed: %s", exc)
+            return diagnostic_error_response(
+                feature="quiz",
+                step="quiz editing",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
 
 
 def _chat_doc(uid: str, chat_id: str):

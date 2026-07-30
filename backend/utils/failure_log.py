@@ -20,7 +20,8 @@ GENERATION_AUDIT_PATH = STORAGE / "generation_audit.jsonl"
 _INSTALLATION_ID_PATH = STORAGE / ".generation_installation_id"
 _EXPORTS_ROOT = STORAGE / "exports"
 _RETENTION_MARKER = ".diagnostic_retention.json"
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
+_ALLOWED_GENERATION_TYPES = {"video", "story", "podcast", "quiz", "widget"}
 
 _EXCEPTION_LINE = re.compile(
     r"^(?:[A-Za-z_][\w.]*Error|Exception|RuntimeError|TypeError|ValueError|NameError|"
@@ -62,6 +63,17 @@ def _installation_id() -> str:
 def _clean_text(value: Any, limit: int = 300) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:limit]
+
+
+def _validate_generation_type(value: Any) -> str:
+    generation_type = _clean_text(value, 40).lower()
+    if generation_type not in _ALLOWED_GENERATION_TYPES:
+        allowed = ", ".join(sorted(_ALLOWED_GENERATION_TYPES))
+        raise ValueError(
+            f"Generation audit type must be one of: {allowed}. "
+            f"Received: {generation_type or '(missing)'}"
+        )
+    return generation_type
 
 
 def _clean_error_summary(value: Any, limit: int = 500) -> str:
@@ -136,6 +148,7 @@ def append_generation_audit(entry: dict[str, Any]) -> dict[str, Any]:
             os.getenv("UPCURVED_APP_VERSION") or os.getenv("APP_VERSION") or "unknown",
             80,
         ),
+        "type": _validate_generation_type(entry.get("type")),
         "job_id": _clean_text(entry.get("job_id"), 100),
         "operation": _clean_text(entry.get("operation") or "generate", 40),
         "outcome": _clean_text(entry.get("outcome") or "unknown", 80),
@@ -315,10 +328,31 @@ def _read_audit_entries() -> list[dict[str, Any]]:
     return entries
 
 
+def _summarize_outcomes(values: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    counts = Counter(str(item.get("outcome") or "unknown") for item in values)
+    summary: dict[str, dict[str, Any]] = {}
+    for outcome, count in sorted(counts.items()):
+        row: dict[str, Any] = {"count": int(count)}
+        if outcome == "failed":
+            row["job_ids"] = sorted(
+                {
+                    str(item.get("job_id") or "").strip()
+                    for item in values
+                    if str(item.get("outcome") or "unknown") == "failed"
+                    and str(item.get("job_id") or "").strip()
+                }
+            )
+        summary[outcome] = row
+    return summary
+
+
 def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Build a deterministic aggregate summary from audit records."""
+    """Build a deterministic aggregate summary from strict typed audit records."""
     values = entries if entries is not None else _read_audit_entries()
-    outcomes = Counter(str(item.get("outcome") or "unknown") for item in values)
+    rows_by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in values:
+        rows_by_type[_validate_generation_type(item.get("type"))].append(item)
+
     operations = Counter(str(item.get("operation") or "generate") for item in values)
     providers = Counter(str(item.get("provider") or "unknown") for item in values)
     failure_stages = Counter(
@@ -332,6 +366,7 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
     local_plan_adjustments: Counter[str] = Counter()
     local_script_adjustments: Counter[str] = Counter()
     total_duration = 0.0
+    total_llm_calls = 0
     total_voice_retries = 0
     total_transport_salvages = 0
     model_rows: dict[str, dict[str, Any]] = defaultdict(
@@ -340,6 +375,7 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
             "llm_calls": 0,
             "duration_seconds": 0.0,
             "outcomes": Counter(),
+            "failed_job_ids": set(),
             "creative_scenes": 0,
             "fallback_scenes": 0,
             "simplified_scenes": 0,
@@ -348,7 +384,9 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
 
     for item in values:
         duration = max(0.0, float(item.get("duration_seconds") or 0.0))
+        llm_calls = max(0, int(item.get("llm_calls") or 0))
         total_duration += duration
+        total_llm_calls += llm_calls
         recovery_stages.update(str(value) for value in item.get("recovery_stages") or [])
         if str(item.get("error_category") or "").strip():
             error_categories[str(item.get("error_category"))] += 1
@@ -375,22 +413,32 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         key = f"{provider}::{model}"
         row = model_rows[key]
         row["runs"] += 1
-        row["llm_calls"] += int(item.get("llm_calls") or 0)
+        row["llm_calls"] += llm_calls
         row["duration_seconds"] += duration
         row["creative_scenes"] += int(item.get("creative_scenes") or 0)
         row["fallback_scenes"] += len(item.get("component_fallback_scene_ids") or [])
         row["simplified_scenes"] += len(item.get("simplified_scene_ids") or [])
-        row["outcomes"][str(item.get("outcome") or "unknown")] += 1
+        outcome = str(item.get("outcome") or "unknown")
+        row["outcomes"][outcome] += 1
+        if outcome == "failed" and str(item.get("job_id") or "").strip():
+            row["failed_job_ids"].add(str(item.get("job_id")).strip())
 
     by_model: list[dict[str, Any]] = []
     for key, row in sorted(model_rows.items()):
         provider, model = key.split("::", 1)
         runs = int(row["runs"])
+        model_outcomes: dict[str, dict[str, Any]] = {
+            outcome: {"count": int(count)}
+            for outcome, count in sorted(row["outcomes"].items())
+        }
+        if "failed" in model_outcomes:
+            model_outcomes["failed"]["job_ids"] = sorted(row["failed_job_ids"])
         by_model.append(
             {
                 "provider": provider,
                 "model": model,
                 "runs": runs,
+                "total_llm_calls": int(row["llm_calls"]),
                 "average_llm_calls": round(row["llm_calls"] / runs, 3) if runs else 0.0,
                 "average_duration_seconds": (
                     round(row["duration_seconds"] / runs, 3) if runs else 0.0
@@ -398,17 +446,38 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
                 "creative_scenes": int(row["creative_scenes"]),
                 "fallback_scenes": int(row["fallback_scenes"]),
                 "simplified_scenes": int(row["simplified_scenes"]),
-                "outcomes": dict(sorted(row["outcomes"].items())),
+                "outcomes": model_outcomes,
             }
         )
+
+    by_type: dict[str, dict[str, Any]] = {}
+    for generation_type, rows in sorted(rows_by_type.items()):
+        type_duration = sum(max(0.0, float(item.get("duration_seconds") or 0.0)) for item in rows)
+        type_llm_calls = sum(max(0, int(item.get("llm_calls") or 0)) for item in rows)
+        type_operations = Counter(str(item.get("operation") or "generate") for item in rows)
+        by_type[generation_type] = {
+            "total_runs": len(rows),
+            "total_llm_calls": type_llm_calls,
+            "average_llm_calls": round(type_llm_calls / len(rows), 3) if rows else 0.0,
+            "average_duration_seconds": round(type_duration / len(rows), 3) if rows else 0.0,
+            "operations": dict(sorted(type_operations.items())),
+            "outcomes": _summarize_outcomes(rows),
+        }
 
     return {
         "schema_version": _SCHEMA_VERSION,
         "generated_at": _now_iso(),
         "total_runs": len(values),
+        "total_llm_calls": total_llm_calls,
+        "average_llm_calls": round(total_llm_calls / len(values), 3) if values else 0.0,
         "average_duration_seconds": round(total_duration / len(values), 3) if values else 0.0,
+        "runs_by_type": {
+            generation_type: len(rows)
+            for generation_type, rows in sorted(rows_by_type.items())
+        },
+        "by_type": by_type,
         "operations": dict(sorted(operations.items())),
-        "outcomes": dict(sorted(outcomes.items())),
+        "outcomes": _summarize_outcomes(values),
         "providers": dict(sorted(providers.items())),
         "failure_stages": dict(sorted(failure_stages.items())),
         "during_stages": dict(sorted(during_stages.items())),
@@ -442,9 +511,9 @@ It does not include prompts, chat messages, narration, generated scripts, API ke
 user names, email addresses, local filesystem paths, or full tracebacks.
 
 Files:
-- generation_audit.jsonl: one compact JSON record per structured-video generation or edit.
-- generation_summary.json: deterministic aggregate counts by outcome, provider, model,
-  failure stage, root error category, service retries, and recovery path.
+- generation_audit.jsonl: one compact JSON record per video, story, podcast, quiz, or widget generation/edit.
+- generation_summary.json: deterministic aggregate counts by type, outcome, provider, model,
+  exact LLM calls, failure stage, root error category, service retries, and recovery path.
 """
 
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

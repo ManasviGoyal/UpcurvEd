@@ -404,14 +404,15 @@ function startBackend() {
     const backendEnv = {
       ...process.env,
       PATH: backendPath,
-      VIRTUAL_ENV: process.env.VIRTUAL_ENV,
       UPCURVED_FFMPEG_PATH: bundledFfmpeg || process.env.UPCURVED_FFMPEG_PATH,
       IMAGEIO_FFMPEG_EXE: bundledFfmpeg || process.env.IMAGEIO_FFMPEG_EXE,
       FFMPEG_BINARY: bundledFfmpeg || process.env.FFMPEG_BINARY,
       UPCURVED_DISABLE_LATEX: process.env.UPCURVED_DISABLE_LATEX || "1",
-      PYTHONPATH: process.env.PYTHONPATH
-        ? `${BACKEND_ROOT_DIR}${path.delimiter}${process.env.PYTHONPATH}`
-        : BACKEND_ROOT_DIR,
+      PYTHONPATH: isUsingBundledPython
+        ? BACKEND_ROOT_DIR
+        : process.env.PYTHONPATH
+          ? `${BACKEND_ROOT_DIR}${path.delimiter}${process.env.PYTHONPATH}`
+          : BACKEND_ROOT_DIR,
       APP_MODE: process.env.APP_MODE || "desktop-local",
       UPCURVED_STORAGE_DIR: process.env.UPCURVED_STORAGE_DIR || storageDir,
       UPCURVED_DESKTOP_STATE_DIR: process.env.UPCURVED_DESKTOP_STATE_DIR || desktopStateDir,
@@ -420,9 +421,37 @@ function startBackend() {
     };
 
     if (isUsingBundledPython) {
+      // Force the packaged interpreter to use only its own stdlib and site-packages.
+      backendEnv.PYTHONHOME = PYTHON_RUNTIME_PYTHON_DIR;
+      backendEnv.PYTHONNOUSERSITE = "1";
+      backendEnv.PYTHONSAFEPATH = "1";
+      delete backendEnv.VIRTUAL_ENV;
+      delete backendEnv.__PYVENV_LAUNCHER__;
+      delete backendEnv.PYTHONEXECUTABLE;
+
+      const preflightCode = [
+        "import sys, pathlib, ctypes, _ctypes",
+        "import numpy, scipy, manim, manim_voiceover",
+        "from manim_voiceover.services.gtts import GTTSService",
+        "import backend.api.main as backend_main",
+        "root = pathlib.Path(sys.executable).resolve().parent if sys.platform == 'win32' else pathlib.Path(sys.executable).resolve().parents[1]",
+        "inside = lambda value: pathlib.Path(value).resolve() == root or root in pathlib.Path(value).resolve().parents",
+        "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",
+        "assert pathlib.Path(sys.base_prefix).resolve() == root, (sys.base_prefix, root)",
+        "modules = {'_ctypes': _ctypes, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
+        "bad = {name: module.__file__ for name, module in modules.items() if not inside(module.__file__)}",
+        "assert not bad, bad",
+        "outside_site = [p for p in sys.path if p and 'site-packages' in p and not inside(p)]",
+        "assert not outside_site, outside_site",
+        "print(sys.version)",
+        "print('executable', sys.executable)",
+        "print('prefix', sys.prefix)",
+        "print('scipy', scipy.__file__)",
+        "print('backend_ok', bool(backend_main))",
+      ].join("; ");
       const preflight = runCapture(
         python,
-        ["-c", "import sys; import backend.api.main as m; print(sys.version); print('backend_ok', bool(m))"],
+        ["-c", preflightCode],
         { cwd: BACKEND_ROOT_DIR, env: backendEnv }
       );
       if (preflight.status !== 0) {

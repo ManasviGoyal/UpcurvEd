@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any, Iterator
 
 import requests
 
@@ -18,6 +21,36 @@ Provider = ProviderName
 
 class LLMError(RuntimeError):
     pass
+
+
+@dataclass
+class LLMCallCounter:
+    """Request-local count of attempted model calls."""
+
+    count: int = 0
+
+
+_ACTIVE_LLM_CALL_COUNTER: ContextVar[LLMCallCounter | None] = ContextVar(
+    "upcurved_llm_call_counter",
+    default=None,
+)
+
+
+@contextmanager
+def track_llm_calls() -> Iterator[LLMCallCounter]:
+    """Track every ``call_llm`` invocation in the current request context."""
+    counter = LLMCallCounter()
+    token = _ACTIVE_LLM_CALL_COUNTER.set(counter)
+    try:
+        yield counter
+    finally:
+        _ACTIVE_LLM_CALL_COUNTER.reset(token)
+
+
+def _record_llm_call() -> None:
+    counter = _ACTIVE_LLM_CALL_COUNTER.get()
+    if counter is not None:
+        counter.count += 1
 
 
 def _require_prompt(user: str) -> str:
@@ -391,6 +424,7 @@ def call_llm(
     """Dispatch to the selected provider using centralized model defaults."""
     resolved_model = str(model or get_default_model(provider) or "").strip()
     output_limit = max_tokens or max_output_tokens
+    _record_llm_call()
 
     if provider == "claude":
         return call_claude(
