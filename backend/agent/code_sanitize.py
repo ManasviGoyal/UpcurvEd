@@ -22,17 +22,25 @@ RE_FROM_MANIM_STAR = re.compile(
     re.MULTILINE,
 )
 
+# Scenes are authored against manim-voiceover's GTTSService because that is the
+# idiom the model reliably produces, but they render with edge-tts neural voices.
+# Rewriting the import here (rather than in the prompt) keeps the generated code,
+# its AST validation, and the scene body identical while swapping the engine.
+_LEGACY_SERVICE_IMPORT = "from manim_voiceover.services.gtts import GTTSService"
+VOICEOVER_SERVICE_IMPORT = "from backend.tts.manim_service import EdgeTTSService as GTTSService"
+_SERVICE_IMPORT_MODULE = "backend.tts.manim_service"
+
 VOICEOVER_HEADER = dedent(
-    """\
+    f"""\
     from manim_voiceover import VoiceoverScene
-    from manim_voiceover.services.gtts import GTTSService
+    {VOICEOVER_SERVICE_IMPORT}
     """
 )
 
 _CANONICAL_IMPORTS = (
     "from manim import *  # noqa: F403,F405",
     "from manim_voiceover import VoiceoverScene",
-    "from manim_voiceover.services.gtts import GTTSService",
+    VOICEOVER_SERVICE_IMPORT,
 )
 _NUMPY_IMPORT = "import numpy as np"
 
@@ -60,7 +68,8 @@ _ALLOWED_IMPORT_EXACT = {
     "from manim import *",
     "from manim import *  # noqa: F403,F405",
     "from manim_voiceover import VoiceoverScene",
-    "from manim_voiceover.services.gtts import GTTSService",
+    _LEGACY_SERVICE_IMPORT,
+    VOICEOVER_SERVICE_IMPORT,
     "import numpy as np",
 }
 
@@ -600,7 +609,11 @@ def _normalize_imports(src: str) -> tuple[str, list[str], list[str], list[str]]:
 
         if isinstance(node, ast.ImportFrom) and node.module == "manim_voiceover":
             continue
-        if isinstance(node, ast.ImportFrom) and node.module == "manim_voiceover.services.gtts":
+        if isinstance(node, ast.ImportFrom) and node.module in {
+            "manim_voiceover.services.gtts",
+            _SERVICE_IMPORT_MODULE,
+        }:
+            # Either spelling is dropped here and replaced by _CANONICAL_IMPORTS.
             continue
 
         if isinstance(node, ast.Import):
@@ -846,7 +859,8 @@ def sanitize_manim_script(src: str) -> SanitizeResult:
 
 def ensure_voiceover_header(src: str) -> str:
     out = src.replace("from manim_voiceover import VoiceoverScene", "")
-    out = out.replace("from manim_voiceover.services.gtts import GTTSService", "")
+    out = out.replace(_LEGACY_SERVICE_IMPORT, "")
+    out = out.replace(VOICEOVER_SERVICE_IMPORT, "")
     return VOICEOVER_HEADER + "\n" + out.lstrip()
 
 

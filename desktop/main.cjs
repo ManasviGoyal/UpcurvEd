@@ -161,13 +161,23 @@ function httpGetJson(url, timeoutMs = 1200) {
   });
 }
 
-async function isHealthyBackendRunning() {
+async function probeBackendHealth() {
   try {
     const payload = await httpGetJson(`http://${API_HOST}:${API_PORT}/health`, 1200);
-    return Boolean(payload && payload.ok === true);
+    return payload && payload.ok === true ? payload : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+// A healthy backend is only safe to adopt when it runs on this same OS. WSL2 mirrors
+// localhost into Windows, so an installed Windows app will otherwise silently attach to a
+// `desktop:dev` backend running in WSL and use its Python instead of the bundled runtime.
+function canAdoptBackend(payload) {
+  const reported = typeof payload.platform === "string" ? payload.platform : "";
+  // Backend predating the identity fields: trust it in dev, never in a packaged app.
+  if (!reported) return IS_DEV;
+  return reported === process.platform;
 }
 
 function isPortOpen(port, host, timeoutMs = 600) {
@@ -334,29 +344,36 @@ function spawnManagedProcess(command, args, name, options = {}) {
 function startBackend() {
   return (async () => {
     if (await isPortOpen(API_PORT, API_HOST, 500)) {
-      const healthy = await isHealthyBackendRunning();
-      if (!healthy) {
-        if (IS_DEV) {
-          const fallbackPort = await findOpenPort(API_PORT + 1, API_HOST);
-          console.warn(
-            `[desktop] port ${API_PORT} is busy with a non-UpcurvEd process; switching backend to ${API_HOST}:${fallbackPort}`
-          );
-          API_PORT = fallbackPort;
-        } else {
-          throw new Error(
-            `Port ${API_PORT} is occupied by a non-UpcurvEd or unhealthy process. Stop whatever is using ${API_HOST}:${API_PORT} and rerun desktop.`
-          );
-        }
+      const health = await probeBackendHealth();
+      const adoptable = Boolean(health) && canAdoptBackend(health);
+
+      if (health && !adoptable) {
+        console.warn(
+          `[desktop] backend at ${API_HOST}:${API_PORT} reports platform '${
+            health.platform || "unknown"
+          }' (interpreter ${health.interpreter || "unknown"}), but this app is '${
+            process.platform
+          }'; refusing to adopt it.`
+        );
       }
-      if (healthy && IS_DEV && !REUSE_EXISTING_SERVERS) {
+
+      if (adoptable && IS_DEV && !REUSE_EXISTING_SERVERS) {
         throw new Error(
           `Backend port ${API_PORT} is already in use. Close existing dev servers and rerun desktop:dev, or set DESKTOP_REUSE_EXISTING_SERVERS=1 to allow reuse.`
         );
       }
-      if (healthy) {
+
+      if (adoptable) {
         console.log(`[desktop] reusing backend at ${API_HOST}:${API_PORT}`);
         return;
       }
+
+      // Foreign, unhealthy, or cross-OS occupant: leave it alone and take our own port.
+      const fallbackPort = await findOpenPort(API_PORT + 1, API_HOST);
+      console.warn(
+        `[desktop] port ${API_PORT} is not usable by this app; starting our own backend on ${API_HOST}:${fallbackPort}`
+      );
+      API_PORT = fallbackPort;
     }
 
     // Final guard against bind races.
@@ -432,7 +449,8 @@ function startBackend() {
       const preflightCode = [
         "import sys, pathlib, ctypes, _ctypes",
         "import numpy, scipy, manim, manim_voiceover",
-        "from manim_voiceover.services.gtts import GTTSService",
+        "import edge_tts",
+        "from backend.tts.manim_service import EdgeTTSService",
         "import backend.api.main as backend_main",
         "root = pathlib.Path(sys.executable).resolve().parent if sys.platform == 'win32' else pathlib.Path(sys.executable).resolve().parents[1]",
         "inside = lambda value: pathlib.Path(value).resolve() == root or root in pathlib.Path(value).resolve().parents",

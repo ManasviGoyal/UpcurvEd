@@ -55,7 +55,15 @@ export const PROVIDER_CONFIG: Record<ProviderId, ProviderUiConfig> = {
     label: "OpenAI",
     keyLabel: "OpenAI API Key",
     keyPlaceholder: "Enter your OpenAI API key",
-    models: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6"],
+    models: [
+      "gpt-5.6",
+      "gpt-5.5",
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.4-nano",
+      "gpt-5.4-pro",
+    ],
     help: "Choose an OpenAI model, or type another exact OpenAI model ID.",
   },
   openrouter: {

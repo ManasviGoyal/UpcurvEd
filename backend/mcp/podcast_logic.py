@@ -12,6 +12,7 @@ from backend.agent.llm.provider_config import (
 )
 from backend.agent.prompts import ARTIFACT_SAFETY_INSTRUCTION
 from backend.runner.job_runner import STORAGE, to_static_url
+from backend.tts import engine as tts_engine
 from backend.utils.diagnostics import DiagnosticError
 
 # Import to trigger app-level logging configuration (handlers, format, level).
@@ -288,6 +289,9 @@ def _voice_kwargs_for_speaker(speaker: str, lang: str) -> dict:
     """
     Build gTTS kwargs for each speaker so Expert A / Expert B sound distinct.
     For English we vary region voice; for other languages we vary speed.
+
+    Only used on the gTTS fallback path; edge-tts gives each role a genuinely
+    different neural voice instead (see backend.tts.engine).
     """
     sp = (speaker or "").strip().lower()
     kwargs = {"lang": lang, "slow": False}
@@ -310,6 +314,57 @@ def _voice_kwargs_for_speaker(speaker: str, lang: str) -> dict:
     return kwargs
 
 
+def _synthesize_single_voice(script: str, lang: str, out_mp3_path) -> None:
+    """Narrate a single-speaker script, preferring edge-tts over gTTS."""
+    try:
+        voice = tts_engine.synthesize_edge(script, out_mp3_path, lang=lang)
+    except tts_engine.TTSUnavailable as exc:
+        logger.info("podcast: edge-tts unavailable (%s); using gTTS", exc)
+    else:
+        logger.info("podcast: edge-tts narration succeeded (voice=%s)", voice)
+        return
+
+    gTTS(text=script, lang=lang).save(str(out_mp3_path))
+
+
+def _render_debate_segments(segments, lang: str, out_mp3_path, *, use_edge: bool) -> None:
+    """Render each labeled segment to a clip and concatenate into one mp3."""
+    from pydub import AudioSegment
+
+    merged = AudioSegment.silent(duration=0)
+    gap = AudioSegment.silent(duration=180)
+    temp_files = []
+    try:
+        for speaker, text in segments:
+            if not text.strip():
+                continue
+            with NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                temp_files.append(tmp.name)
+                if use_edge:
+                    # Any failure here aborts the whole edge attempt so the
+                    # fallback re-renders every segment with one engine, rather
+                    # than splicing two different voices into one episode.
+                    tts_engine.synthesize_edge(text, tmp.name, lang=lang, role=speaker)
+                else:
+                    tts_kwargs = _voice_kwargs_for_speaker(speaker, lang)
+                    try:
+                        gTTS(text=text, **tts_kwargs).save(tmp.name)
+                    except Exception:
+                        # Fallback voice per segment if region/speed combo unsupported.
+                        gTTS(text=text, lang=lang).save(tmp.name)
+            clip = AudioSegment.from_file(temp_files[-1], format="mp3")
+            merged += clip + gap
+        merged.export(str(out_mp3_path), format="mp3")
+    finally:
+        from pathlib import Path as _Path
+
+        for p in temp_files:
+            try:
+                _Path(p).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def _synthesize_debate_multivoice(script: str, lang: str, out_mp3_path) -> None:
     """
     Synthesize debate script with distinct voices for Expert A and Expert B,
@@ -323,34 +378,16 @@ def _synthesize_debate_multivoice(script: str, lang: str, out_mp3_path) -> None:
     if not any(sp.lower() == "expert b" for sp, _ in segments):
         raise RuntimeError("Debate script missing Expert B lines.")
 
-    from pydub import AudioSegment
+    if tts_engine.edge_enabled():
+        try:
+            _render_debate_segments(segments, lang, out_mp3_path, use_edge=True)
+        except tts_engine.TTSUnavailable as exc:
+            logger.info("podcast: edge-tts unavailable for debate (%s); using gTTS", exc)
+        else:
+            logger.info("podcast: edge-tts debate synthesis succeeded")
+            return
 
-    merged = AudioSegment.silent(duration=0)
-    gap = AudioSegment.silent(duration=180)
-    temp_files = []
-    try:
-        for speaker, text in segments:
-            if not text.strip():
-                continue
-            with NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-                temp_files.append(tmp.name)
-                tts_kwargs = _voice_kwargs_for_speaker(speaker, lang)
-                try:
-                    gTTS(text=text, **tts_kwargs).save(tmp.name)
-                except Exception:
-                    # Fallback voice per segment if region/speed combo unsupported.
-                    gTTS(text=text, lang=lang).save(tmp.name)
-            clip = AudioSegment.from_file(temp_files[-1], format="mp3")
-            merged += clip + gap
-        merged.export(str(out_mp3_path), format="mp3")
-    finally:
-        from pathlib import Path as _Path
-
-        for p in temp_files:
-            try:
-                _Path(p).unlink(missing_ok=True)
-            except Exception:
-                pass
+    _render_debate_segments(segments, lang, out_mp3_path, use_edge=False)
 
 
 def generate_podcast(
@@ -434,8 +471,7 @@ def generate_podcast(
             _synthesize_debate_multivoice(script, lang, mp3_path)
         else:
             logger.info("podcast: synthesizing TTS mp3 (lang=%s)", lang)
-            tts = gTTS(text=script, lang=lang)
-            tts.save(str(mp3_path))
+            _synthesize_single_voice(script, lang, mp3_path)
     except Exception as e:
         # Retry once with English (or fallback single-voice for debate) if TTS fails.
         msg = str(e) if str(e) else type(e).__name__
@@ -450,9 +486,8 @@ def generate_podcast(
                 _synthesize_debate_multivoice(script, "en", mp3_path)
                 logger.info("podcast: debate fallback multi-voice synthesis in 'en' succeeded")
             else:
-                tts = gTTS(text=script, lang="en")
-                tts.save(str(mp3_path))
-                logger.info("podcast: gTTS fallback to 'en' succeeded")
+                _synthesize_single_voice(script, "en", mp3_path)
+                logger.info("podcast: fallback to 'en' succeeded")
         except Exception as e2:
             logger.warning("podcast: fallback TTS failed (%s), trying final single-voice 'en'", e2)
             try:

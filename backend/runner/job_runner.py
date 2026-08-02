@@ -28,6 +28,26 @@ except Exception:
 ACTIVE_PROCS: dict[str, subprocess.Popen[str]] = {}
 _RUNTIME_PREFLIGHT_SUCCESS: dict[str, Any] | None = None
 MAX_LOG_BYTES = int(os.getenv("MAX_LOG_BYTES", "200000"))
+PREFLIGHT_TIMEOUT_SECONDS = int(os.getenv("UPCURVED_PREFLIGHT_TIMEOUT_SECONDS", "180"))
+
+# Repo root: <root>/backend/runner/job_runner.py
+BACKEND_IMPORT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Environment for child processes that must be able to ``import backend``.
+
+    Generated scenes import backend.tts.manim_service for narration. The desktop
+    build sets PYTHONSAFEPATH=1, which stops Python from putting the working
+    directory on sys.path, so the import has to be guaranteed explicitly rather
+    than inherited from cwd.
+    """
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    root = str(BACKEND_IMPORT_ROOT)
+    if root not in existing.split(os.pathsep):
+        env["PYTHONPATH"] = f"{root}{os.pathsep}{existing}" if existing else root
+    return env
 
 
 def to_static_url(path: Path) -> str:
@@ -60,12 +80,19 @@ def _runner_metadata(job_dir: Path, scene_py: Path | None = None) -> dict[str, s
     }
 
 
-def check_manim_runtime(timeout_seconds: int = 40) -> dict[str, Any]:
+def check_manim_runtime(timeout_seconds: int | None = None) -> dict[str, Any]:
     """Verify the exact interpreter used by the runner can load the render stack.
 
     This is deliberately independent of generated scene code. A missing or broken Manim,
-    plugin, voiceover, or GTTS installation should be reported before an LLM call is spent.
+    plugin, voiceover, or TTS installation should be reported before an LLM call is spent.
+
+    The import costs a couple of seconds warm, but a first launch on Windows can be an
+    order of magnitude slower while the antivirus scans the freshly unpacked runtime.
+    Only success is cached, so a timeout here re-runs on every job and no video can ever
+    be produced -- the ceiling has to clear a cold start, not a warm one.
     """
+    if timeout_seconds is None:
+        timeout_seconds = PREFLIGHT_TIMEOUT_SECONDS
     global _RUNTIME_PREFLIGHT_SUCCESS
     if _RUNTIME_PREFLIGHT_SUCCESS is not None:
         return dict(_RUNTIME_PREFLIGHT_SUCCESS)
@@ -75,7 +102,7 @@ def check_manim_runtime(timeout_seconds: int = 40) -> dict[str, Any]:
         "-c",
         (
             "import manim; import manim_voiceover; "
-            "from manim_voiceover.services.gtts import GTTSService; "
+            "from backend.tts.manim_service import EdgeTTSService; "
             "print('Manim runtime OK')"
         ),
     ]
@@ -85,7 +112,7 @@ def check_manim_runtime(timeout_seconds: int = 40) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
-            env=os.environ.copy(),
+            env=_subprocess_env(),
         )
         result = {
             "ok": completed.returncode == 0,
@@ -253,7 +280,7 @@ def run_job_from_code(
             compile_error_url=to_static_url(logs_dir / "compile_error.txt"),
         )
 
-    runner_env = os.environ.copy()
+    runner_env = _subprocess_env()
     ffmpeg_path = runner_env.get("UPCURVED_FFMPEG_PATH", "").strip()
     if ffmpeg_path:
         ffmpeg_dir = str(Path(ffmpeg_path).parent)

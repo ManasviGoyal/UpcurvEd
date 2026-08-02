@@ -20,7 +20,10 @@ class TestHealthEndpoint:
         response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
-        assert data == {"ok": True}
+        assert data["ok"] is True
+        # Identity fields let the desktop shell refuse a backend from another OS.
+        assert data["platform"]
+        assert data["interpreter"]
 
     def test_health_no_auth_required(self, client):
         """Health endpoint should not require authentication."""

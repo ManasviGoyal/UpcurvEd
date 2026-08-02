@@ -201,6 +201,7 @@ function validateBundledRuntime(python) {
     "import sys, pathlib, ctypes, _ctypes",
     "import numpy, scipy, manim, manim_voiceover",
     "from manim_voiceover.services.gtts import GTTSService",
+    "import edge_tts",
     "root = pathlib.Path(sys.executable).resolve().parent if sys.platform == 'win32' else pathlib.Path(sys.executable).resolve().parents[1]",
     "inside = lambda value: pathlib.Path(value).resolve() == root or root in pathlib.Path(value).resolve().parents",
     "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",

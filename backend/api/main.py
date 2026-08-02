@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -584,7 +585,17 @@ class ChatDetailOut(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "mode": APP_MODE}
+    # platform/interpreter let a desktop shell tell its own backend apart from an
+    # unrelated one already holding the port. WSL2 mirrors localhost into Windows, so a
+    # `desktop:dev` backend in WSL is otherwise indistinguishable from the installed
+    # Windows app's own bundled runtime.
+    return {
+        "ok": True,
+        "mode": APP_MODE,
+        "platform": sys.platform,
+        "interpreter": sys.executable,
+        "pid": os.getpid(),
+    }
 
 
 @app.get("/diagnostics/generation-export")

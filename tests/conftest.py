@@ -14,6 +14,11 @@ if str(ROOT) not in sys.path:
 
 os.environ["GCP_PROJECT"] = os.environ.get("GCP_PROJECT", "dummy_project")
 
+# edge-tts is the production default but it is a live network call. Pin the test
+# suite to gTTS so podcast tests stay offline and deterministic; tests that cover
+# the edge path opt back in explicitly via monkeypatch.
+os.environ.setdefault("UPCURVED_TTS_ENGINE", "gtts")
+
 
 @pytest.fixture(autouse=True)
 def mock_dependencies(monkeypatch):

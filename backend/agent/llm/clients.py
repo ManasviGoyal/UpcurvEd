@@ -225,9 +225,12 @@ def _call_openai(
     # reasoning off is appropriate for UpcurvEd's format-sensitive generation
     # calls and avoids spending output budget on hidden reasoning.
     if model.startswith("gpt-5"):
-        payload["reasoning"] = {
-            "effort": os.environ.get("OPENAI_REASONING_EFFORT", "none")
-        }
+        # The -pro variants always reason and reject an explicit effort override,
+        # so leave the request alone and let the API apply its own default.
+        if not model.endswith("-pro"):
+            payload["reasoning"] = {
+                "effort": os.environ.get("OPENAI_REASONING_EFFORT", "none")
+            }
     else:
         payload["temperature"] = float(temperature)
 

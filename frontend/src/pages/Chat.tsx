@@ -77,6 +77,7 @@ import {
   apiUrl,
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { buildDownloadFilename } from "@/lib/downloadName";
 import { isDesktopLocalMode } from "@/lib/runtime";
 import { clearApiKeysForUser, persistApiKeysForUser } from "@/lib/secureKeys";
 import {
@@ -526,7 +527,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
 
   const [vttUrl, setVttUrl] = useState<string | null>(null); // object URL for converted WebVTT captions
-  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget'; artifactKind?: ArtifactKind } | null>(null);
+  // `title` carries the prompt/episode name so downloads get a meaningful filename.
+  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget'; artifactKind?: ArtifactKind; title?: string } | null>(null);
   type PersistedMediaSelection = {
     chatId: string;
     messageId?: string;
@@ -1051,6 +1053,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       gcsPath: media.gcsPath,
       type: media.type,
       artifactKind: normalizeArtifactKind(media, message),
+      title: media.title,
     });
     setVttUrl(null);
     setSrtText(null);
@@ -1112,6 +1115,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         artifactId: currentMediaMeta.artifactId,
         gcsPath: currentMediaMeta.gcsPath,
         subtitleUrl: vttUrl || undefined,
+        // Without this the restore path rebuilds media with no title, which then
+        // flows back into currentMediaMeta and downloads lose their prompt name.
+        title: currentMediaMeta.title,
         updatedAt: Date.now(),
       });
     }
@@ -2333,7 +2339,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Use signed URL if available, otherwise use regular URL
         const audioUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(audioUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio', artifactKind: 'podcast' });
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio', artifactKind: 'podcast', title: prompt });
         setSubtitleLang((data.lang as string) || undefined);
 
 
@@ -3463,7 +3469,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Use signed URL if available, otherwise use regular URL
         const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video' });
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video', title: prompt });
         setSubtitleLang((data.lang as string) || undefined);
 
         // Debug subtitle URL
@@ -4096,7 +4102,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       if (res.ok && data?.status === "ok" && data?.video_url) {
         const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video' });
+        // An edit keeps the original video's name; the new artifact id keeps it distinct.
+        setCurrentMediaMeta((prev) => ({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video', title: prev?.title || editInstructions }));
         setSubtitleLang((data.lang as string) || undefined);
 
         const mediaAttachment: import('@/types').MediaAttachment = {
@@ -4657,12 +4664,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const handleDownload = async () => {
     if (!videoUrl) return;
 
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const artifactId = currentMediaMeta?.artifactId ? `_${currentMediaMeta.artifactId}` : '';
-    let fileName = currentMediaMeta?.type === 'video'
-      ? `upcurved_video_${dateStr}${artifactId}.mp4`
-      : `upcurved_podcast_${dateStr}${artifactId}.mp3`;
+    // Lead with the prompt/episode title so a folder of downloads is readable, and
+    // suffix the artifact id so separate generations never collide. A date stamp
+    // alone produced upcurved_podcast_<today>.mp3 for everything made that day.
+    let fileName = buildDownloadFilename({
+      title: currentMediaMeta?.title,
+      url: videoUrl,
+      type: currentMediaMeta?.type === 'video' ? 'video' : 'audio',
+      suffix: currentMediaMeta?.artifactId,
+    });
     let downloadSource = videoUrl;
 
     try {
@@ -4696,7 +4706,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           duration: 5000,
         });
 
-        const captionedFilename = fileName.replace(/\.mp4$/i, '_captions.mp4');
+        const captionedFilename = fileName.replace(/\.mp4$/i, '-captions.mp4');
         const burnResponse = await apiFetch('/api/media/burn-captions', {
           method: 'POST',
           body: JSON.stringify({
@@ -4729,7 +4739,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           duration: 5000,
         });
 
-        const packageFilename = fileName.replace(/\.[a-z0-9]+$/i, '_captions.zip');
+        const packageFilename = fileName.replace(/\.[a-z0-9]+$/i, '-captions.zip');
         const packageResponse = await apiFetch('/api/media/audio-package', {
           method: 'POST',
           body: JSON.stringify({

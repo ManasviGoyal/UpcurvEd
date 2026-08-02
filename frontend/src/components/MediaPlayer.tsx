@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { buildDownloadFilename } from '@/lib/downloadName';
 import {
   Play,
   Pause,
@@ -149,14 +150,41 @@ export const MediaPlayer = ({
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
-  const handleDownload = () => {
-    if (!mediaUrl) return;
+  const triggerDownload = (href: string, filename: string) => {
     const link = document.createElement('a');
-    link.href = mediaUrl;
-    link.download = title || (isVideo ? 'video.mp4' : 'audio.mp3');
+    link.href = href;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleDownload = async () => {
+    if (!mediaUrl) return;
+    const filename = buildDownloadFilename({
+      title,
+      url: mediaUrl,
+      type: isVideo ? 'video' : 'audio',
+    });
+
+    // Browsers ignore the download attribute on cross-origin hrefs, and the UI
+    // and API are served from different ports, so linking straight at mediaUrl
+    // saves the URL's own name (always podcast.mp3 / video.mp4). Fetching the
+    // bytes first makes the href a same-origin blob, which honours the name.
+    try {
+      const response = await fetch(mediaUrl);
+      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+      const objectUrl = URL.createObjectURL(await response.blob());
+      try {
+        triggerDownload(objectUrl, filename);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch {
+      // CORS or network failure: fall back to the direct link so the user still
+      // gets the file, even if the browser picks the name.
+      triggerDownload(mediaUrl, filename);
+    }
   };
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;

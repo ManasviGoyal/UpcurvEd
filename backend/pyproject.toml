@@ -11,6 +11,8 @@ dependencies = [
   # Manim + voiceover
   "manim>=0.19.0",
   "manim-voiceover[gtts]>=0.3.7",
+  # edge-tts is the default voice; gTTS stays as the offline-of-last-resort fallback.
+  "edge-tts>=7.0.0",
   "gTTS>=2.5.1",
   "setuptools>=68,<81",
 
