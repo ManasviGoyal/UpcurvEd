@@ -9,7 +9,7 @@ import shutil
 import uuid
 import zipfile
 from collections import Counter, defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -41,7 +41,7 @@ def summarize_error(error_text: Any, fallback: str = "Generation failed.", limit
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now().astimezone().isoformat()
 
 
 def _installation_id() -> str:

@@ -51,6 +51,71 @@ logger = logging.getLogger(f"app.{__name__}")
 APP_MODE = os.environ.get("APP_MODE", "cloud").strip().lower()
 DESKTOP_LOCAL_MODE = APP_MODE == "desktop-local"
 
+AudienceLevel = Literal[
+    "auto",
+    "early_learning",
+    "elementary",
+    "middle_school",
+    "high_school",
+    "university",
+]
+
+_AUDIENCE_GUIDANCE: dict[str, str] = {
+    "early_learning": (
+        "Target audience: Early learning learners. Use very simple, concrete language, short "
+        "sentences, familiar examples, playful repetition, and one idea at a time."
+    ),
+    "elementary": (
+        "Target audience: Elementary learners. Use clear, concrete language, short explanations, "
+        "and relatable examples. Introduce ideas step by step and avoid unnecessary abstraction."
+    ),
+    "middle_school": (
+        "Target audience: Middle school learners. Use clear language, scaffold multi-step ideas, "
+        "define key terms, and connect concepts to practical examples."
+    ),
+    "high_school": (
+        "Target audience: High school learners. Use age-appropriate vocabulary, structured "
+        "reasoning, and enough technical detail to support understanding without being overwhelming."
+    ),
+    "university": (
+        "Target audience: University learners. Use precise academic terminology, explain "
+        "important assumptions, include appropriate mathematical or technical depth, and "
+        "assume a solid introductory foundation unless the topic says otherwise."
+    ),
+}
+
+
+def _normalize_audience(audience: object | None) -> str | None:
+    """Normalize the supported learner-level values and ignore unsupported input."""
+    if audience is None:
+        return None
+
+    value = str(audience).strip().lower()
+    if not value or value in {"auto", "none"}:
+        return None
+    if value in _AUDIENCE_GUIDANCE:
+        return value
+    return None
+
+
+def _with_audience_guidance(text: str, audience: object | None) -> str:
+    """Attach trusted learner-level guidance without changing the saved user prompt."""
+    normalized = _normalize_audience(audience)
+    if not normalized:
+        return text
+
+    guidance = _AUDIENCE_GUIDANCE.get(normalized)
+    if not guidance:
+        return text
+    return (
+        f"{text.rstrip()}\n\n"
+        "<LEARNER_LEVEL_REQUIREMENTS>\n"
+        f"{guidance}\n"
+        "Keep the material factually complete for the topic while adapting its vocabulary, "
+        "examples, pacing, visuals, interactions, and assessment difficulty to this audience.\n"
+        "</LEARNER_LEVEL_REQUIREMENTS>"
+    )
+
 try:
     from google.cloud import firestore as gcf  # type: ignore
 except Exception:  # pragma: no cover
@@ -399,6 +464,7 @@ class GenerateIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     mode: Literal["standard", "story"] | None = "standard"
+    audience: str | None = "auto"
     storyOptions: dict | None = None
     jobId: str | None = None
     chatId: str | None = None
@@ -413,6 +479,7 @@ class QuizIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     context: str | None = None
+    audience: str | None = "auto"
     userEmail: str | None = None
     jobId: str | None = None
     chatId: str | None = None
@@ -425,6 +492,7 @@ class PodcastIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     mode: Literal["standard", "debate"] | None = "standard"
+    audience: str | None = "auto"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -435,6 +503,7 @@ class WidgetIn(BaseModel):
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
+    audience: str | None = "auto"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -446,6 +515,7 @@ class EditVideoIn(BaseModel):
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
+    audience: str | None = "auto"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -458,6 +528,7 @@ class EditWidgetIn(BaseModel):
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
+    audience: str | None = "auto"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -471,6 +542,7 @@ class EditStoryIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     storyOptions: dict | None = None
+    audience: str | None = "auto"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -484,6 +556,7 @@ class EditQuizIn(BaseModel):
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
+    audience: str | None = "auto"
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -1177,7 +1250,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     gen_mode,
                 )
                 story_res = _generate_story_slider(
-                    prompt=body.prompt,
+                    prompt=_with_audience_guidance(body.prompt, body.audience),
                     provider=provider,
                     model=model,
                     provider_keys=provider_keys,
@@ -1284,7 +1357,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
         )
 
         result = generate_structured_manim_video(
-            prompt=body.prompt,
+            prompt=_with_audience_guidance(body.prompt, body.audience),
             provider_keys=provider_keys,
             provider=provider,
             model=model,
@@ -1370,7 +1443,10 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
     try:
         result = edit_structured_manim_video(
             original_bundle=body.original_code,
-            edit_instructions=body.edit_instructions,
+            edit_instructions=_with_audience_guidance(
+                body.edit_instructions,
+                body.audience,
+            ),
             provider=provider,
             model=model,
             provider_keys=provider_keys,
@@ -1417,7 +1493,7 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
             )
             provider_keys = _provider_keys_with_env(body.keys)
             quiz = _generate_quiz_embedded(
-                prompt=body.prompt,
+                prompt=_with_audience_guidance(body.prompt, body.audience),
                 num_questions=body.num_questions,
                 difficulty=body.difficulty or "medium",
                 provider=provider,
@@ -1495,6 +1571,10 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                 "(from captions):\n\n"
                 f"{transcript}"
             )
+            media_prompt = _with_audience_guidance(
+                media_prompt,
+                body.get("audience"),
+            )
             quiz = _generate_quiz_embedded(
                 prompt=media_prompt,
                 num_questions=num_questions,
@@ -1560,7 +1640,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
             )
             provider_keys = _provider_keys_with_env(body.keys)
             result = _generate_podcast(
-                prompt=body.prompt,
+                prompt=_with_audience_guidance(body.prompt, body.audience),
                 provider=provider,
                 model=model,
                 provider_keys=provider_keys,
@@ -2140,7 +2220,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             provider_keys = _provider_keys_with_env(body.keys)
             logger.info("/widget called provider=%s model=%s", provider, model)
             result = _generate_widget(
-                prompt=body.prompt,
+                prompt=_with_audience_guidance(body.prompt, body.audience),
                 provider=provider,
                 model=model,
                 provider_keys=provider_keys,
@@ -2215,7 +2295,10 @@ def edit_widget_endpoint(
             logger.info("/edit/widget called provider=%s model=%s", provider, model)
             result = _edit_widget(
                 original_html=body.original_html,
-                edit_instructions=body.edit_instructions,
+                edit_instructions=_with_audience_guidance(
+                    body.edit_instructions,
+                    body.audience,
+                ),
                 original_title=body.original_title,
                 provider=provider,
                 model=model,
@@ -2287,7 +2370,10 @@ def edit_story_endpoint(
             logger.info("/edit/story called provider=%s model=%s", provider, model)
             story_html = _edit_story_html(
                 original_html=body.original_html,
-                edit_instructions=body.edit_instructions,
+                edit_instructions=_with_audience_guidance(
+                    body.edit_instructions,
+                    body.audience,
+                ),
                 original_title=body.original_title,
                 provider=provider,
                 model=model,
@@ -2360,7 +2446,10 @@ def edit_quiz_endpoint(
             logger.info("/edit/quiz called provider=%s model=%s", provider, model)
             quiz = _edit_quiz_embedded(
                 original_quiz=body.original_quiz,
-                edit_instructions=body.edit_instructions,
+                edit_instructions=_with_audience_guidance(
+                    body.edit_instructions,
+                    body.audience,
+                ),
                 num_questions=body.num_questions,
                 difficulty=body.difficulty or "medium",
                 provider=provider,

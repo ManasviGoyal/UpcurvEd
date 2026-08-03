@@ -123,7 +123,38 @@ function copyPythonRuntime(command, prefixArgs) {
 
   // Dereference symlinks so packaged app bundles do not contain host-specific link targets.
   fs.cpSync(basePrefix, PYTHON_DIR, { recursive: true, force: true, dereference: true });
+  removeExternallyManagedMarkers();
   return basePrefix;
+}
+
+// PEP 668 marker files travel with the copy when the base interpreter is managed by a distro
+// or by uv, and they make `ensurepip`/`pip install` refuse to touch the runtime. The copy is a
+// private bundle that nothing else shares, so the marker has no meaning here -- dropping it is
+// the correct scope, unlike --break-system-packages which would also apply to the base install.
+//
+// Deliberately Linux-only: the mac and Windows bundles are built from interpreters that ship no
+// marker, so this is a no-op there and is scoped out to keep those paths byte-identical. A mac
+// bundle built from Homebrew's python@3.12 would carry a marker and fail at ensurepip; widen the
+// guard rather than reaching for pip's --break-system-packages if that ever comes up.
+function removeExternallyManagedMarkers() {
+  if (process.platform !== "linux") return;
+
+  const libDir = path.join(PYTHON_DIR, "lib");
+  if (!fs.existsSync(libDir)) return;
+
+  const candidates = [path.join(PYTHON_DIR, "EXTERNALLY-MANAGED")];
+  for (const entry of fs.readdirSync(libDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith("python")) {
+      candidates.push(path.join(libDir, entry.name, "EXTERNALLY-MANAGED"));
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { force: true });
+      console.log(`[desktop] removed PEP 668 marker from bundled runtime: ${candidate}`);
+    }
+  }
 }
 
 function walkRuntimeBinaryCandidates(rootDir) {
@@ -199,14 +230,17 @@ function patchMacPythonFrameworkLinks() {
 function validateBundledRuntime(python) {
   const validationCode = [
     "import sys, pathlib, ctypes, _ctypes",
-    "import numpy, scipy, manim, manim_voiceover",
+    "import cairo, numpy, scipy, manim, manim_voiceover",
     "from manim_voiceover.services.gtts import GTTSService",
     "import edge_tts",
+    "surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)",
+    "tee = cairo.TeeSurface(surface)",
+    "tee.index(0)",
     "root = pathlib.Path(sys.executable).resolve().parent if sys.platform == 'win32' else pathlib.Path(sys.executable).resolve().parents[1]",
     "inside = lambda value: pathlib.Path(value).resolve() == root or root in pathlib.Path(value).resolve().parents",
     "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",
     "assert pathlib.Path(sys.base_prefix).resolve() == root, (sys.base_prefix, root)",
-    "modules = {'_ctypes': _ctypes, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
+    "modules = {'_ctypes': _ctypes, 'cairo': cairo, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
     "bad = {name: module.__file__ for name, module in modules.items() if not inside(module.__file__)}",
     "assert not bad, bad",
     "outside_site = [p for p in sys.path if p and 'site-packages' in p and not inside(p)]",

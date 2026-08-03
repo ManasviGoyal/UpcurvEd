@@ -1,6 +1,49 @@
 from backend.runner import job_runner
 
 
+def test_appimage_loader_paths_are_removed_for_linux_python_children():
+    original = {
+        "APPIMAGE": "/tmp/UpcurvEd.AppImage",
+        "APPDIR": "/tmp/.mount_upcurved",
+        "LD_LIBRARY_PATH": "/tmp/.mount_upcurved/usr/lib",
+        "LD_PRELOAD": "/tmp/.mount_upcurved/usr/lib/injected.so",
+        "PATH": "/usr/bin",
+    }
+
+    sanitized = job_runner._sanitize_appimage_loader_env(original, platform="linux")
+
+    assert "LD_LIBRARY_PATH" not in sanitized
+    assert "LD_PRELOAD" not in sanitized
+    assert sanitized["PATH"] == "/usr/bin"
+    assert original["LD_LIBRARY_PATH"] == "/tmp/.mount_upcurved/usr/lib"
+
+
+def test_native_loader_paths_are_preserved_outside_linux_appimage():
+    ordinary_linux = {"LD_LIBRARY_PATH": "/opt/custom/lib", "PATH": "/usr/bin"}
+    mac_app = {
+        "APPIMAGE": "/tmp/UpcurvEd.AppImage",
+        "LD_LIBRARY_PATH": "/opt/custom/lib",
+    }
+
+    assert job_runner._sanitize_appimage_loader_env(
+        ordinary_linux, platform="linux"
+    ) == ordinary_linux
+    assert job_runner._sanitize_appimage_loader_env(mac_app, platform="darwin") == mac_app
+
+
+def test_desktop_runtime_flag_sanitizes_linux_descendants():
+    environment = {
+        "UPCURVED_CLEAN_LINUX_LOADER_ENV": "1",
+        "LD_LIBRARY_PATH": "/opt/electron/lib",
+        "PATH": "/usr/bin",
+    }
+
+    sanitized = job_runner._sanitize_appimage_loader_env(environment, platform="linux")
+
+    assert "LD_LIBRARY_PATH" not in sanitized
+    assert sanitized["UPCURVED_CLEAN_LINUX_LOADER_ENV"] == "1"
+
+
 def test_to_static_url_and_truncate(tmp_path):
     # create a file under STORAGE and verify static mapping
     p = job_runner.STORAGE / "jobs" / "tst" / "f.txt"

@@ -34,6 +34,31 @@ PREFLIGHT_TIMEOUT_SECONDS = int(os.getenv("UPCURVED_PREFLIGHT_TIMEOUT_SECONDS", 
 BACKEND_IMPORT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _sanitize_appimage_loader_env(
+    env: dict[str, str],
+    *,
+    platform: str | None = None,
+) -> dict[str, str]:
+    """Keep AppImage's native libraries out of bundled Python subprocesses.
+
+    AppImage launchers prepend their own library directory to ``LD_LIBRARY_PATH``. That is
+    appropriate for Electron itself, but it can make Pycairo load Electron's incompatible Cairo
+    build and fail with errors such as ``undefined symbol: cairo_tee_surface_index``. The bundled
+    Python has its own RPATH and Manim's native dependencies should resolve from the host system.
+    """
+    output = dict(env)
+    current_platform = platform or sys.platform
+    should_clean = (
+        output.get("UPCURVED_CLEAN_LINUX_LOADER_ENV") == "1"
+        or output.get("APPIMAGE")
+        or output.get("APPDIR")
+    )
+    if current_platform.startswith("linux") and should_clean:
+        output.pop("LD_LIBRARY_PATH", None)
+        output.pop("LD_PRELOAD", None)
+    return output
+
+
 def _subprocess_env() -> dict[str, str]:
     """Environment for child processes that must be able to ``import backend``.
 
@@ -42,7 +67,7 @@ def _subprocess_env() -> dict[str, str]:
     directory on sys.path, so the import has to be guaranteed explicitly rather
     than inherited from cwd.
     """
-    env = os.environ.copy()
+    env = _sanitize_appimage_loader_env(os.environ.copy())
     existing = env.get("PYTHONPATH", "")
     root = str(BACKEND_IMPORT_ROOT)
     if root not in existing.split(os.pathsep):
@@ -101,8 +126,10 @@ def check_manim_runtime(timeout_seconds: int | None = None) -> dict[str, Any]:
         sys.executable,
         "-c",
         (
-            "import manim; import manim_voiceover; "
+            "import cairo; import manim; import manim_voiceover; "
             "from backend.tts.manim_service import EdgeTTSService; "
+            "surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1); "
+            "tee = cairo.TeeSurface(surface); tee.index(0); "
             "print('Manim runtime OK')"
         ),
     ]

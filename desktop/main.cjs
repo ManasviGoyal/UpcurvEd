@@ -437,6 +437,17 @@ function startBackend() {
         process.env.PLAYWRIGHT_BROWSERS_PATH || PLAYWRIGHT_BROWSERS_DIR,
     };
 
+    // AppImage's launcher puts its native libraries first in LD_LIBRARY_PATH. Those libraries
+    // are meant for Electron, and allowing bundled Python to inherit them can make Pycairo bind
+    // to an incompatible Cairo build (for example: undefined symbol cairo_tee_surface_index).
+    // Python's packaged executable has its own RPATH, while Manim's Cairo/Pango dependencies
+    // should resolve from the Linux host.
+    if (process.platform === "linux" && isUsingBundledPython) {
+      delete backendEnv.LD_LIBRARY_PATH;
+      delete backendEnv.LD_PRELOAD;
+      backendEnv.UPCURVED_CLEAN_LINUX_LOADER_ENV = "1";
+    }
+
     if (isUsingBundledPython) {
       // Force the packaged interpreter to use only its own stdlib and site-packages.
       backendEnv.PYTHONHOME = PYTHON_RUNTIME_PYTHON_DIR;
@@ -448,15 +459,18 @@ function startBackend() {
 
       const preflightCode = [
         "import sys, pathlib, ctypes, _ctypes",
-        "import numpy, scipy, manim, manim_voiceover",
+        "import cairo, numpy, scipy, manim, manim_voiceover",
         "import edge_tts",
         "from backend.tts.manim_service import EdgeTTSService",
         "import backend.api.main as backend_main",
+        "surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)",
+        "tee = cairo.TeeSurface(surface)",
+        "tee.index(0)",
         "root = pathlib.Path(sys.executable).resolve().parent if sys.platform == 'win32' else pathlib.Path(sys.executable).resolve().parents[1]",
         "inside = lambda value: pathlib.Path(value).resolve() == root or root in pathlib.Path(value).resolve().parents",
         "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",
         "assert pathlib.Path(sys.base_prefix).resolve() == root, (sys.base_prefix, root)",
-        "modules = {'_ctypes': _ctypes, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
+        "modules = {'_ctypes': _ctypes, 'cairo': cairo, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
         "bad = {name: module.__file__ for name, module in modules.items() if not inside(module.__file__)}",
         "assert not bad, bad",
         "outside_site = [p for p in sys.path if p and 'site-packages' in p and not inside(p)]",

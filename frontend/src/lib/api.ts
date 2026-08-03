@@ -1,5 +1,6 @@
 // API wrapper that injects Firebase ID token when available
 import { isDesktopLocalMode } from "@/lib/runtime";
+import type { AudienceLevel } from "@/types";
 
 const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '';
 const DESKTOP_LOCAL_DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
@@ -255,6 +256,7 @@ export async function apiQuiz(body: {
   provider_keys?: Record<string, string>;
   num_questions?: number;
   difficulty?: string;
+  audience?: AudienceLevel;
 }, signal?: AbortSignal) {
   const res = await apiFetch('/quiz/media', {
     method: 'POST',
@@ -272,6 +274,7 @@ export async function apiWidget(body: {
   model?: string;
   keys?: Record<string, string>;
   chatId?: string;
+  audience?: AudienceLevel;
 }, signal?: AbortSignal) {
   const res = await apiFetch('/widget', {
     method: 'POST',
@@ -281,6 +284,7 @@ export async function apiWidget(body: {
       model: body.model,
       keys: body.keys || {},
       chatId: body.chatId,
+      audience: body.audience,
     }),
     signal,
   });

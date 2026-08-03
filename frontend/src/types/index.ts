@@ -2,6 +2,14 @@
 
 export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'quiz';
 
+export type AudienceLevel =
+  | 'auto'
+  | 'early_learning'
+  | 'elementary'
+  | 'middle_school'
+  | 'high_school'
+  | 'university';
+
 export type GenerationQualityStatus =
   | 'standard'
   | 'full_quality'

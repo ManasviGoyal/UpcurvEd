@@ -52,6 +52,7 @@ import {
 import type {
   User,
   Chat,
+  AudienceLevel,
   ColorTheme,
   Theme,
   ApiKeys,
@@ -372,6 +373,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const podcastProgressTimer = useRef<number | null>(null);
   const [podcastMode, setPodcastMode] = useState<"standard" | "debate">("standard");
   const [videoMode, setVideoMode] = useState<"standard" | "story">("standard");
+  const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("auto");
   const [storyConfigOpen, setStoryConfigOpen] = useState(false);
   const [storyHostChoice, setStoryHostChoice] = useState<"auto" | "scientist" | "friendly_robot" | "animal_guide" | "explorer" | "artist" | "athlete">("auto");
   const [storyThemeChoice, setStoryThemeChoice] = useState<"auto" | "space" | "jungle" | "ocean" | "city_lab" | "sunset_farm" | "meadow">("auto");
@@ -2268,6 +2270,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
     // Gate before posting user prompt into chat.
     if (!ensureLlmKey("podcast")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
     // Persist (may migrate draft) BEFORE adding message so user prompt always visible
     let persistedId = await ensurePersistedActiveChat(prompt);
@@ -2283,10 +2286,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     // Now clear the query input AFTER message is added
     setQuery("");
     // Pass the chat ID to generatePodcast to avoid duplicate chat creation
-    generatePodcast(prompt, finalChatId);
+    generatePodcast(prompt, finalChatId, requestAudience);
   };
 
-  async function generatePodcast(prompt: string, chatIdOverride?: string | number | null) {
+  async function generatePodcast(
+    prompt: string,
+    chatIdOverride?: string | number | null,
+    requestAudience: AudienceLevel | undefined = undefined,
+  ) {
     setPodcastLoading(true);
     setApiError(null);
     // Reset current media
@@ -2324,6 +2331,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider: llmConfig.provider,
         model: llmConfig.model,
         mode: podcastMode,
+        audience: requestAudience,
         sessionId,
       };
       const controller = new AbortController();
@@ -2427,6 +2435,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
     // Gate before posting user prompt into chat.
     if (!ensureLlmKey("video")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
     // Persist (may migrate draft) BEFORE adding message so user prompt always visible
     let persistedId = await ensurePersistedActiveChat(prompt);
     // Use persistedId or activeChatId, or let processAndAddMessage create a local one
@@ -2441,7 +2450,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     // Now clear the query input AFTER message is added
     setQuery("");
     // Pass the chat ID to generateVideo to avoid duplicate chat creation
-    generateVideo(prompt, finalChatId, storyOptions);
+    generateVideo(prompt, finalChatId, storyOptions, requestAudience);
   };
 
   const getLastUserPrompt = () => {
@@ -2486,6 +2495,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
     if (!ensureLlmKey('quiz')) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
     setQuizLoading(true);
     let persistedId: string | undefined;
     try {
@@ -2505,7 +2515,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const llmConfig = buildLlmRequestConfig(apiKeys);
       const sessionId = ensureChatSessionId();
   const jobId = makeJobId();
-  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: llmConfig.keys, provider: llmConfig.provider, model: llmConfig.model, sessionId, jobId, chatId: String(finalChatId) };
+  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: llmConfig.keys, provider: llmConfig.provider, model: llmConfig.model, audience: requestAudience, sessionId, jobId, chatId: String(finalChatId) };
       console.debug('POST /quiz/embedded', body);
       const controller = new AbortController();
       quizAbortRef.current = controller;
@@ -2572,6 +2582,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
     if (!ensureLlmKey("widget")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
     setWidgetLoading(true);
     setWidgetProgress(5);
@@ -2606,6 +2617,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         model: llmConfig.model,
         keys: llmConfig.keys,
         chatId: String(finalChatId),
+        audience: requestAudience,
       }, controller.signal);
 
       if (data?.status === "ok" && data?.widget_html) {
@@ -3355,7 +3367,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   async function generateVideo(
     prompt: string,
     chatIdOverride?: string | number | null,
-    storyOptions?: { host_character?: string; theme?: string }
+    storyOptions?: { host_character?: string; theme?: string },
+    requestAudience: AudienceLevel | undefined = undefined,
   ) {
     // if already busy, treat as cancel
     if (busy && videoAbortRef.current) {
@@ -3412,6 +3425,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider: llmConfig.provider, // "" -> undefined
         model: llmConfig.model,
         mode: videoMode,
+        audience: requestAudience,
         storyOptions: videoMode === "story" ? (storyOptions || {}) : undefined,
         jobId,
         sessionId,
@@ -3617,6 +3631,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     if (!ensureLlmKey("quiz")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
     stopPlayback();
     setQuizLoading(true);
@@ -3717,6 +3732,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider_keys: llmConfig.keys,
         chatId: String(finalChatId),
         jobId: makeJobId(),
+        audience: requestAudience,
       } as any, videoAbort.signal);
 
       // Store quiz data like embedded quiz for interactive UI
@@ -3779,6 +3795,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     if (!ensureLlmKey("quiz")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
     stopPlayback();
     setQuizLoading(true);
@@ -3812,6 +3829,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider_keys: llmConfig.keys,
         chatId: String(finalChatId),
         jobId: makeJobId(),
+        audience: requestAudience,
       } as any, controller.signal);
 
       const quizChatId = persistedId || activeChatId;
@@ -3869,6 +3887,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     if (!ensureLlmKey("edit")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
     const llmConfig = buildLlmRequestConfig(apiKeys);
 
@@ -3906,6 +3925,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             keys: llmConfig.keys,
             provider: llmConfig.provider,
             model: llmConfig.model,
+            audience: requestAudience,
             sessionId: ensureChatSessionId(),
             jobId: makeJobId(),
             chatId: String(chatIdForGeneration),
@@ -3958,6 +3978,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             keys: llmConfig.keys,
             provider: llmConfig.provider,
             model: llmConfig.model,
+            audience: requestAudience,
             sessionId: ensureChatSessionId(),
             jobId: makeJobId(),
             chatId: String(chatIdForGeneration),
@@ -4038,6 +4059,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     if (!ensureLlmKey("edit")) return;
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
     // Cancel toggle if already busy
     if (busy && videoAbortRef.current) {
@@ -4082,6 +4104,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         keys: llmConfig.keys,
         provider: llmConfig.provider,
         model: llmConfig.model,
+        audience: requestAudience,
         jobId,
         sessionId,
         chatId: chatIdForGeneration,
@@ -5401,7 +5424,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               </div>
             </div>
             <div className="mt-2 flex justify-end">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <Button
                   variant={videoMode === "story" ? "secondary" : "outline"}
                   size="sm"
@@ -5424,6 +5447,22 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 >
                   Debate Mode: {podcastMode === "debate" ? "On" : "Off"}
                 </Button>
+                <select
+                  aria-label="Target learner level"
+                  title="Choose the learner level for the next generation"
+                  value={audienceLevel}
+                  onChange={(event) =>
+                    setAudienceLevel(event.target.value as AudienceLevel)
+                  }
+                  className="h-7 max-w-[11rem] rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="auto">Learner level: Auto</option>
+                  <option value="early_learning">Learner level: Early learning</option>
+                  <option value="elementary">Learner level: Elementary</option>
+                  <option value="middle_school">Learner level: Middle school</option>
+                  <option value="high_school">Learner level: High school</option>
+                  <option value="university">Learner level: University</option>
+                </select>
               </div>
             </div>
           </div>
