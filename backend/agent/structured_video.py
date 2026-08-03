@@ -2441,19 +2441,166 @@ def _format_vtt_ts(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
-def _write_vtt_from_plan(plan: dict[str, Any], out_path: pathlib.Path) -> None:
-    lines = ["WEBVTT", ""]
+def _format_srt_ts(seconds: float) -> str:
+    return _format_vtt_ts(seconds).replace(".", ",")
+
+
+_VTT_TIMING_RE = re.compile(
+    r"^(?P<start>\d{2,}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*"
+    r"(?P<end>\d{2,}:\d{2}:\d{2}[.,]\d{3})(?:\s+.*)?$"
+)
+
+
+def _caption_timestamp_seconds(value: str) -> float:
+    hours, minutes, rest = value.replace(",", ".").split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(rest)
+
+
+def _read_vtt_cues(path: pathlib.Path) -> list[tuple[float, float, str]]:
+    """Read cue timing and payload from a scene-level WebVTT sidecar."""
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n").split("\n")
+    cues: list[tuple[float, float, str]] = []
+    index = 0
+    while index < len(lines):
+        match = _VTT_TIMING_RE.match(lines[index].strip())
+        if not match:
+            index += 1
+            continue
+        start = _caption_timestamp_seconds(match.group("start"))
+        end = _caption_timestamp_seconds(match.group("end"))
+        index += 1
+        payload: list[str] = []
+        while index < len(lines) and lines[index].strip():
+            payload.append(lines[index].strip())
+            index += 1
+        text = "\n".join(payload).strip()
+        if text and end > start:
+            cues.append((start, end, text))
+    return cues
+
+
+def _scene_audio_script(scene: dict[str, Any]) -> str:
+    """Return the exact plan text spoken by the deterministic scene renderer."""
+    narration = str(scene.get("narration") or "").strip()
+    steps = scene.get("steps") or scene.get("calculation_steps") or []
+    step_narrations = scene.get("step_narrations") or []
+    spoken_steps = [
+        str(step_narrations[index]).strip()
+        for index in range(min(len(steps), len(step_narrations)))
+        if str(step_narrations[index]).strip()
+    ]
+    return " ".join(value for value in [narration, *spoken_steps] if value).strip()
+
+
+def _split_caption_sentences(value: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+|\n+", str(value or "").strip())
+    return [part.strip() for part in parts if part and part.strip()]
+
+
+def _fallback_scene_cues(
+    scene: dict[str, Any],
+    duration: float,
+) -> list[tuple[float, float, str]]:
+    """Time the complete audio script proportionally, matching the podcast fallback."""
+    sentences = _split_caption_sentences(_scene_audio_script(scene))
+    if not sentences:
+        return []
+    weights = [
+        max(1, len(sentence.split())) + 0.5 * len(re.findall(r"[,:;]", sentence))
+        for sentence in sentences
+    ]
+    total_weight = sum(weights) or 1.0
     cursor = 0.0
-    for scene in plan.get("scenes") or []:
-        duration = max(1.0, float(scene.get("duration_sec") or 8))
-        start = _format_vtt_ts(cursor)
-        end = _format_vtt_ts(cursor + duration)
-        heading = _short_text(scene.get("title"), 80, "")
-        narration = _short_text(scene.get("narration"), 180, "")
-        caption = f"{heading}: {narration}" if heading and narration else narration or heading
-        lines.extend([f"{start} --> {end}", caption[:180], ""])
-        cursor += duration
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    cues: list[tuple[float, float, str]] = []
+    for index, (sentence, weight) in enumerate(zip(sentences, weights, strict=False)):
+        end = duration if index == len(sentences) - 1 else cursor + duration * weight / total_weight
+        cues.append((cursor, max(cursor + 0.001, end), sentence))
+        cursor = end
+    return cues
+
+
+def _media_duration_seconds(path: pathlib.Path, fallback: float) -> float:
+    """Read an actual rendered clip duration, falling back to plan metadata."""
+    try:
+        from mutagen.mp4 import MP4
+
+        duration = float(MP4(str(path)).info.length)
+        if duration > 0:
+            return duration
+    except Exception:
+        pass
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            completed = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            duration = float((completed.stdout or "").strip())
+            if completed.returncode == 0 and duration > 0:
+                return duration
+        except Exception:
+            pass
+    return max(1.0, fallback)
+
+
+def _write_subtitles_from_scenes(
+    plan: dict[str, Any],
+    clips: list[pathlib.Path],
+    srt_path: pathlib.Path,
+    vtt_path: pathlib.Path,
+) -> None:
+    """Merge actual voiceover captions and write standards-compliant SRT and WebVTT."""
+    cues: list[tuple[float, float, str]] = []
+    timeline_offset = 0.0
+    scenes = plan.get("scenes") or []
+    for index, scene in enumerate(scenes):
+        try:
+            planned_duration = max(1.0, float(scene.get("duration_sec") or 8))
+        except (TypeError, ValueError):
+            planned_duration = 8.0
+        clip = clips[index] if index < len(clips) else None
+        duration = _media_duration_seconds(clip, planned_duration) if clip else planned_duration
+        scene_cues = _read_vtt_cues(clip.with_suffix(".vtt")) if clip else []
+        if not scene_cues:
+            scene_cues = _fallback_scene_cues(scene, duration)
+        cues.extend(
+            (timeline_offset + start, timeline_offset + end, text)
+            for start, end, text in scene_cues
+        )
+        timeline_offset += duration
+
+    srt_lines: list[str] = []
+    vtt_lines = ["WEBVTT", ""]
+    for cue_index, (start, end, text) in enumerate(cues, start=1):
+        srt_lines.extend(
+            [str(cue_index), f"{_format_srt_ts(start)} --> {_format_srt_ts(end)}", text, ""]
+        )
+        vtt_lines.extend([f"{_format_vtt_ts(start)} --> {_format_vtt_ts(end)}", text, ""])
+
+    srt_text = "\n".join(srt_lines).rstrip()
+    vtt_text = "\n".join(vtt_lines).rstrip()
+    srt_path.write_text((srt_text + "\n") if srt_text else "", encoding="utf-8")
+    vtt_path.write_text(vtt_text + ("\n" if cues else "\n\n"), encoding="utf-8")
+
+
+def _write_vtt_from_plan(plan: dict[str, Any], out_path: pathlib.Path) -> None:
+    """Compatibility wrapper for callers without rendered scene sidecars."""
+    _write_subtitles_from_scenes(plan, [], out_path.with_suffix(".srt"), out_path)
 
 
 
@@ -2750,11 +2897,12 @@ def _render_structured_plan(
         scene_codes.append(code)
 
     final_mp4 = job_dir / "video.mp4"
+    final_srt = job_dir / "video.srt"
     final_vtt = job_dir / "video.vtt"
     try:
         _concat_clips(clips, final_mp4, logs_dir)
         _apply_final_watermark(final_mp4, logs_dir)
-        _write_vtt_from_plan(plan, final_vtt)
+        _write_subtitles_from_scenes(plan, clips, final_srt, final_vtt)
     except Exception as exc:
         raise StructuredVideoFailure(
             f"Final video assembly failed: {exc}",
@@ -2789,6 +2937,7 @@ def _render_structured_plan(
         "status": "ok",
         "job_id": final_job_id,
         "video_url": to_static_url(final_mp4),
+        "srt_url": to_static_url(final_srt),
         "vtt_url": to_static_url(final_vtt),
         "scene_code": scene_bundle,
         "scene_plan": plan,

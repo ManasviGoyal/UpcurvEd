@@ -1140,6 +1140,7 @@ def _publish_structured_video_result(
         "video_url": final_video_url,
         "signed_video_url": signed_video_url,
         "signed_subtitle_url": signed_subtitle_url,
+        "srt_url": result.get("srt_url"),
         "artifact_id": saved_artifact_id,
         "gcs_path": gcs_path,
         "scene_code": scene_code,
