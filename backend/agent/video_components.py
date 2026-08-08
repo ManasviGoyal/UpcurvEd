@@ -391,6 +391,13 @@ class GeneratedScene(VoiceoverScene):
             value = value.replace("{", "(").replace("}", ")")
             return re.sub(r"\s+", " ", value).strip()
 
+        def strip_leading_spoken_text(full_text, leading_text):
+            full = clean_text(full_text)
+            leading = clean_text(leading_text)
+            if leading and full.lower().startswith(leading.lower()):
+                return full[len(leading):].lstrip(" .?!:;-")
+            return full
+
         def safe_label(text, limit=70):
             value = clean_text(text)
             if len(value) > limit:
@@ -606,10 +613,10 @@ class GeneratedScene(VoiceoverScene):
             return
 
         formula = formula_mob(formula_text) if formula_text else None
-        if formula is not None:
+        if formula is not None and scene_type != "question_scene":
             formula.next_to(header, mn.DOWN, buff=0.25)
             self.play(mn.Write(formula), run_time=0.65)
-        content_top = formula if formula is not None else header
+        content_top = formula if formula is not None and scene_type != "question_scene" else header
 
         if scene_type == "question_scene":
             question_text = subtitle_text or learner_question or title_text
@@ -623,15 +630,49 @@ class GeneratedScene(VoiceoverScene):
                 line_buff=0.11,
             ).next_to(content_top, mn.DOWN, buff=0.48)
             mark = mn.Text("?", font_size=78, color=mn.BLUE_C).next_to(q, mn.LEFT, buff=0.24)
+
+            question_voice = clean_text(question_text)
+            answer_voice = strip_leading_spoken_text(narration, question_voice)
+
+            # Give the question its own spoken beat before any answer content appears.
+            with self.voiceover(text=question_voice) as question_tracker:
+                self.play(mn.FadeIn(mark, scale=0.75), mn.Write(q), run_time=1.0)
+                hold_voiceover(question_tracker, 1.0)
+            self.wait(0.4)
+
+            if formula is not None:
+                formula.next_to(q, mn.DOWN, buff=0.34)
+            detail_anchor = formula if formula is not None else q
             details = mn.VGroup(*[fit_text(x, 22, mn.WHITE, 8.5) for x in labels[:3]])
             if len(details):
-                details.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.18).next_to(q, mn.DOWN, buff=0.45)
-            with self.voiceover(text=narration) as tracker:
-                self.play(mn.FadeIn(mark, scale=0.75), mn.Write(q), run_time=1.0)
+                details.arrange(mn.DOWN, aligned_edge=mn.LEFT, buff=0.18).next_to(
+                    detail_anchor, mn.DOWN, buff=0.38
+                )
+
+            if answer_voice:
+                with self.voiceover(text=answer_voice) as tracker:
+                    used = 0.0
+                    if formula is not None:
+                        self.play(mn.Write(formula), run_time=0.7)
+                        used += 0.7
+                    if len(details):
+                        self.play(
+                            mn.LaggedStart(*[mn.FadeIn(x) for x in details], lag_ratio=0.12),
+                            run_time=0.9,
+                        )
+                        used += 0.9
+                    target = formula if formula is not None else q
+                    self.play(mn.Indicate(target), run_time=0.65)
+                    used += 0.65
+                    hold_voiceover(tracker, used)
+            else:
+                if formula is not None:
+                    self.play(mn.Write(formula), run_time=0.7)
                 if len(details):
-                    self.play(mn.LaggedStart(*[mn.FadeIn(x) for x in details], lag_ratio=0.12), run_time=0.9)
-                self.play(mn.Indicate(formula if formula is not None else q), run_time=0.65)
-                hold_voiceover(tracker, 2.95)
+                    self.play(
+                        mn.LaggedStart(*[mn.FadeIn(x) for x in details], lag_ratio=0.12),
+                        run_time=0.9,
+                    )
 
         elif scene_type == "process_scene" and labels:
             names = labels[:3]
@@ -701,22 +742,36 @@ class GeneratedScene(VoiceoverScene):
                     cards.shift(mn.UP * (-3.2 - cards.get_bottom()[1]))
 
                 with self.voiceover(text=narration) as tracker:
-                    used = 0.4
+                    total_duration = max(1.0, float(getattr(tracker, "duration", 0) or 0))
+                    main_time = 0.65 if main is not None else 0.0
+                    reveal_time = 0.48
+                    focus_time = 0.24
+                    reserved_animation = main_time + len(cards) * (reveal_time + focus_time)
+                    wait_budget = max(0.0, total_duration - reserved_animation)
+
                     if main is not None:
-                        self.play(mn.FadeIn(main, shift=mn.UP * 0.12), run_time=0.65)
-                        used += 0.65
-                    self.play(
-                        mn.LaggedStart(
-                            *[mn.FadeIn(card, shift=mn.RIGHT * 0.18) for card in cards],
-                            lag_ratio=0.16,
-                        ),
-                        run_time=max(1.0, 0.42 * len(cards)),
-                    )
-                    used += max(1.0, 0.42 * len(cards))
+                        self.play(mn.FadeIn(main, shift=mn.UP * 0.12), run_time=main_time)
+
+                    # Reveal one point at a time and keep the current point visually focused.
+                    # The planning prompt requires narration to discuss points in this same order,
+                    # so this keeps the viewer's eyes and ears approximately synchronized without
+                    # requiring a separate TTS request for every bullet.
+                    current_focus = None
+                    per_point_wait = wait_budget / max(1, len(cards))
                     for card in cards:
-                        self.play(mn.Indicate(card[0], scale_factor=1.015), run_time=0.35)
-                        used += 0.35
-                    hold_voiceover(tracker, used)
+                        focus = mn.SurroundingRectangle(
+                            card[0], color=mn.YELLOW, buff=0.08, corner_radius=0.08
+                        )
+                        animations = [mn.FadeIn(card, shift=mn.RIGHT * 0.18), mn.Create(focus)]
+                        if current_focus is not None:
+                            animations.append(mn.FadeOut(current_focus))
+                        self.play(*animations, run_time=reveal_time)
+                        self.play(mn.Indicate(card[1], scale_factor=1.015), run_time=focus_time)
+                        if per_point_wait > 0.08:
+                            self.wait(per_point_wait)
+                        current_focus = focus
+
+                    hold_voiceover(tracker, total_duration)
             else:
                 label_mobs = mn.VGroup(*[
                     fit_text(item, 22, mn.WHITE, 3.0).set_z_index(2)
