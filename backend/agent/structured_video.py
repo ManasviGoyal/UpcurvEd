@@ -184,6 +184,17 @@ def _complete_display_text(value: Any, default: str = "") -> str:
     return text or default
 
 
+def _strip_spoken_question_prefix(narration: Any, question: Any) -> str:
+    """Keep NARRATION answer-only when a model redundantly starts it with LEARNER_QUESTION."""
+    full = re.sub(r"\s+", " ", str(narration or "")).strip()
+    leading = re.sub(r"\s+", " ", str(question or "")).strip()
+    if leading and full.lower().startswith(leading.lower()):
+        remainder = full[len(leading):].lstrip(" .?!:;-")
+        if remainder:
+            return remainder
+    return full
+
+
 def _normalize_math(value: Any, limit: int = 220) -> str:
     return _short_text(portable_math_text(value), limit, "")
 
@@ -1330,11 +1341,26 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
     if not scenes:
         raise RuntimeError("The model returned no usable video scenes.")
 
-    # Preserve a genuine opening hook. The first scene no longer has to be a title card.
-    if scenes[0].get("type") == "title_scene" and scenes[0].get("learner_question"):
-        scenes[0]["type"] = "question_scene"
-        if scenes[0].get("visual_mode") == "text":
-            scenes[0]["visual_mode"] = "diagram"
+    # Make an opening learner question deterministic. Model-authored custom/concept scenes can
+    # visibly show LEARNER_QUESTION while speaking only NARRATION, so route a non-code opening
+    # question through the standard question component where the question gets its own voice beat.
+    opening = scenes[0]
+    if str(opening.get("learner_question") or "").strip():
+        if opening.get("type") != "question_scene":
+            opening["type"] = "question_scene"
+        opening["visual_mode"] = "code" if opening.get("code_snippet") else "diagram"
+        opening["narration"] = _strip_spoken_question_prefix(
+            opening.get("narration"), opening.get("learner_question")
+        )
+        for field in (
+            "manim_script",
+            "manim_script_ref",
+            "manim_body",
+            "manim_body_ref",
+            "code_goal",
+            "requires_3d",
+        ):
+            opening.pop(field, None)
 
     # A later title card usually wastes teaching time; render it as a concise recap/concept.
     for scene_index, scene in enumerate(scenes, start=1):
@@ -1438,7 +1464,12 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
             if scene.get("visual_mode") != "code":
                 scene["visual_mode"] = "code"
                 changed = True
-            if scene.get("type") != "custom_manim_scene":
+            opening_question_code = (
+                index == 1
+                and str(scene.get("learner_question") or "").strip()
+                and scene.get("type") == "question_scene"
+            )
+            if not opening_question_code and scene.get("type") != "custom_manim_scene":
                 scene["type"] = "custom_manim_scene"
                 scene["manim_script_ref"] = _script_ref_for_scene(scene, index)
                 changed = True
@@ -1446,13 +1477,34 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
                 scene["essential_visual"] = True
                 changed = True
             if changed:
-                fixes.append(f"Scene {index}: preserved learner-facing CODE_SNIPPET as a custom code scene.")
+                if opening_question_code:
+                    fixes.append(
+                        f"Scene {index}: preserved CODE_SNIPPET in the deterministic opening question renderer."
+                    )
+                else:
+                    fixes.append(
+                        f"Scene {index}: preserved learner-facing CODE_SNIPPET as a custom code scene."
+                    )
 
         if index > 1 and scene.get("type") == "title_scene":
             scene["type"] = "concept_scene"
             if scene.get("visual_mode") == "text":
                 scene["visual_mode"] = "diagram"
             fixes.append(f"Scene {index}: converted a later title card into a teaching scene.")
+
+        # A comparison supported only by two category names leaves the narration visually empty.
+        # Derive concise comparison takeaways locally when the model omitted KEY_POINT values.
+        if (
+            scene.get("type") == "comparison_scene"
+            and not [value for value in (scene.get("key_points") or []) if str(value).strip()]
+            and str(scene.get("narration") or "").strip()
+        ):
+            points = _derive_display_points(scene.get("narration"), limit=3)
+            if points:
+                scene["key_points"] = points
+                fixes.append(
+                    f"Scene {index}: derived visible comparison points from the narration."
+                )
 
         # Standard components need at least one visible idea, but this never affects custom code.
         if scene.get("type") != "custom_manim_scene" and index > 1 and not _scene_has_standard_visible_content(scene):
@@ -2484,6 +2536,21 @@ def _read_vtt_cues(path: pathlib.Path) -> list[tuple[float, float, str]]:
 def _scene_audio_script(scene: dict[str, Any]) -> str:
     """Return the exact plan text spoken by the deterministic scene renderer."""
     narration = str(scene.get("narration") or "").strip()
+    prefix: list[str] = []
+    if str(scene.get("type") or "") == "question_scene":
+        question = str(
+            scene.get("learner_question")
+            or scene.get("subtitle")
+            or scene.get("title")
+            or ""
+        ).strip()
+        if question:
+            prefix.append(question)
+            normalized_question = re.sub(r"\s+", " ", question).strip()
+            normalized_narration = re.sub(r"\s+", " ", narration).strip()
+            if normalized_narration.lower().startswith(normalized_question.lower()):
+                narration = normalized_narration[len(normalized_question):].lstrip(" .?!:;-")
+
     steps = scene.get("steps") or scene.get("calculation_steps") or []
     step_narrations = scene.get("step_narrations") or []
     spoken_steps = [
@@ -2491,7 +2558,7 @@ def _scene_audio_script(scene: dict[str, Any]) -> str:
         for index in range(min(len(steps), len(step_narrations)))
         if str(step_narrations[index]).strip()
     ]
-    return " ".join(value for value in [narration, *spoken_steps] if value).strip()
+    return " ".join(value for value in [*prefix, narration, *spoken_steps] if value).strip()
 
 
 def _split_caption_sentences(value: str) -> list[str]:

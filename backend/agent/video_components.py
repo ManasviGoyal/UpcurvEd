@@ -234,8 +234,10 @@ class GeneratedScene(VoiceoverScene):
     def construct(self):
         self.set_speech_service(GTTSService(lang="en"))
         scene = __SCENE_JSON__
+        scene_type = str(scene.get("type") or "concept_scene")
         title_text = str(scene.get("title") or "Code example")
         narration = str(scene.get("narration") or title_text)
+        question_text = str(scene.get("learner_question") or "").strip()
         snippet = str(scene.get("code_snippet") or "").replace("\r\n", "\n").replace("\r", "\n").expandtabs(4).strip("\n")
         raw_lines = snippet.splitlines() if snippet else ["# Code snippet unavailable"]
         page_size = 16
@@ -261,6 +263,37 @@ class GeneratedScene(VoiceoverScene):
         panel.set_fill("#111827", opacity=0.98)
         panel.next_to(title, mn.DOWN, buff=0.28)
 
+        def build_question(text):
+            words = str(text or "").split()
+            lines = []
+            current = ""
+            for word in words:
+                candidate = word if not current else f"{current} {word}"
+                if len(candidate) <= 52:
+                    current = candidate
+                else:
+                    if current:
+                        lines.append(current)
+                    current = word
+            if current:
+                lines.append(current)
+            lines = lines or [str(text or "")]
+            mob = mn.VGroup(*[mn.Text(line, font_size=31, color=mn.YELLOW) for line in lines])
+            mob.arrange(mn.DOWN, buff=0.1)
+            if mob.width > 9.7:
+                mob.scale_to_fit_width(9.7)
+            if mob.height > 2.5:
+                mob.scale_to_fit_height(2.5)
+            mob.move_to(mn.ORIGIN)
+            return mob
+
+        def strip_question_prefix(full_text, question):
+            full = " ".join(str(full_text or "").split())
+            leading = " ".join(str(question or "").split())
+            if leading and full.lower().startswith(leading.lower()):
+                return full[len(leading):].lstrip(" .?!:;-")
+            return full
+
         def build_rows(lines, starting_line):
             longest = max((len(line) for line in lines), default=1)
             line_count = max(1, len(lines))
@@ -280,11 +313,40 @@ class GeneratedScene(VoiceoverScene):
             rows.move_to(panel.get_center()).align_to(panel, mn.LEFT).shift(mn.RIGHT * 0.34)
             return rows
 
-        with self.voiceover(text=narration) as tracker:
+        answer_text = strip_question_prefix(narration, question_text) if question_text else narration
+        if question_text and not answer_text:
+            answer_text = title_text
+        spoken_text = " ".join(
+            value for value in [question_text if scene_type == "question_scene" else "", answer_text]
+            if str(value or "").strip()
+        ).strip() or title_text
+
+        # One TTS request for the whole scene is more reliable across providers than stitching
+        # separate question and answer voiceovers. Visual timing follows the question's share of
+        # the combined speech so the answer does not appear before the question has been heard.
+        with self.voiceover(text=spoken_text) as tracker:
+            total_duration = max(1.0, float(getattr(tracker, "duration", 0) or 0))
+            used = 0.0
+            if scene_type == "question_scene" and question_text:
+                question = build_question(question_text)
+                mark = mn.Text("?", font_size=76, color=mn.BLUE_C).next_to(question, mn.LEFT, buff=0.24)
+                self.play(mn.FadeIn(mark, scale=0.75), mn.Write(question), run_time=1.0)
+                used += 1.0
+                q_weight = max(3, len(str(question_text).split()))
+                a_weight = max(3, len(str(answer_text).split())) if answer_text else 0
+                question_target = total_duration * q_weight / max(1, q_weight + a_weight)
+                if question_target > used:
+                    self.wait(question_target - used)
+                    used = question_target
+                self.wait(0.22)
+                used += 0.22
+                self.play(mn.FadeOut(mark), mn.FadeOut(question), run_time=0.38)
+                used += 0.38
+
             self.play(mn.FadeIn(title, shift=mn.DOWN * 0.08), mn.Create(panel), run_time=0.75)
             current_rows = None
             current_focus = None
-            used = 0.75
+            used += 0.75
             for page_index, page_lines in enumerate(pages):
                 rows = build_rows(page_lines, page_index * page_size + 1)
                 nonempty = [i for i, line in enumerate(page_lines) if line.strip()]
@@ -568,9 +630,15 @@ class GeneratedScene(VoiceoverScene):
                 else:
                     self.play(mn.Indicate(header), run_time=intro_animation)
 
-                intro_wait = wait_budget * weights[0] / total_weight
+                # Do not leave a title-only slide on screen for a long spoken introduction.
+                # Show the first substantive step quickly, then let the remaining voiceover time
+                # live with the visible teaching content instead of an empty header.
+                intro_share = wait_budget * weights[0] / total_weight
+                intro_wait = min(1.4, intro_share)
                 if intro_wait > 0.08:
                     self.wait(intro_wait)
+                remaining_step_wait = max(0.0, wait_budget - intro_wait)
+                step_weight_total = max(1, sum(weights[1:]))
 
                 current_focus = None
                 for index, step_mob in enumerate(step_mobs):
@@ -586,7 +654,7 @@ class GeneratedScene(VoiceoverScene):
                     self.play(*animations, run_time=step_reveal_time)
                     self.play(mn.Indicate(step_mob), run_time=focus_change_time)
 
-                    step_wait = wait_budget * weights[index + 1] / total_weight
+                    step_wait = remaining_step_wait * weights[index + 1] / step_weight_total
                     if step_wait > 0.08:
                         self.wait(step_wait)
                     current_focus = focus
@@ -619,7 +687,7 @@ class GeneratedScene(VoiceoverScene):
         content_top = formula if formula is not None and scene_type != "question_scene" else header
 
         if scene_type == "question_scene":
-            question_text = subtitle_text or learner_question or title_text
+            question_text = learner_question or subtitle_text or title_text
             q = fit_wrapped_text(
                 question_text,
                 size=33,
@@ -633,12 +701,9 @@ class GeneratedScene(VoiceoverScene):
 
             question_voice = clean_text(question_text)
             answer_voice = strip_leading_spoken_text(narration, question_voice)
-
-            # Give the question its own spoken beat before any answer content appears.
-            with self.voiceover(text=question_voice) as question_tracker:
-                self.play(mn.FadeIn(mark, scale=0.75), mn.Write(q), run_time=1.0)
-                hold_voiceover(question_tracker, 1.0)
-            self.wait(0.4)
+            spoken_text = " ".join(
+                value for value in [question_voice, answer_voice] if str(value or "").strip()
+            ).strip() or question_voice
 
             if formula is not None:
                 formula.next_to(q, mn.DOWN, buff=0.34)
@@ -649,30 +714,34 @@ class GeneratedScene(VoiceoverScene):
                     detail_anchor, mn.DOWN, buff=0.38
                 )
 
-            if answer_voice:
-                with self.voiceover(text=answer_voice) as tracker:
-                    used = 0.0
-                    if formula is not None:
-                        self.play(mn.Write(formula), run_time=0.7)
-                        used += 0.7
-                    if len(details):
-                        self.play(
-                            mn.LaggedStart(*[mn.FadeIn(x) for x in details], lag_ratio=0.12),
-                            run_time=0.9,
-                        )
-                        used += 0.9
-                    target = formula if formula is not None else q
-                    self.play(mn.Indicate(target), run_time=0.65)
-                    used += 0.65
-                    hold_voiceover(tracker, used)
-            else:
+            # Keep question and answer in one audio request. Estimate where the question ends in
+            # that track, hold the question visual through that point, then reveal answer content.
+            with self.voiceover(text=spoken_text) as tracker:
+                total_duration = max(1.0, float(getattr(tracker, "duration", 0) or 0))
+                self.play(mn.FadeIn(mark, scale=0.75), mn.Write(q), run_time=1.0)
+                used = 1.0
+                q_weight = max(3, len(re.findall(r"[A-Za-z0-9']+", question_voice)))
+                a_weight = max(3, len(re.findall(r"[A-Za-z0-9']+", answer_voice))) if answer_voice else 0
+                question_target = total_duration * q_weight / max(1, q_weight + a_weight)
+                if question_target > used:
+                    self.wait(question_target - used)
+                    used = question_target
+                self.wait(0.22)
+                used += 0.22
+
                 if formula is not None:
                     self.play(mn.Write(formula), run_time=0.7)
+                    used += 0.7
                 if len(details):
                     self.play(
                         mn.LaggedStart(*[mn.FadeIn(x) for x in details], lag_ratio=0.12),
                         run_time=0.9,
                     )
+                    used += 0.9
+                target = formula if formula is not None else q
+                self.play(mn.Indicate(target), run_time=0.65)
+                used += 0.65
+                hold_voiceover(tracker, used)
 
         elif scene_type == "process_scene" and labels:
             names = labels[:3]
@@ -699,18 +768,71 @@ class GeneratedScene(VoiceoverScene):
                 hold_voiceover(tracker, used)
 
         elif scene_type == "comparison_scene" and len(labels) >= 2:
-            left = mn.RoundedRectangle(width=3.65, height=2.35, corner_radius=0.2, color=mn.BLUE_C).set_fill("#172554", opacity=0.88).shift(mn.LEFT * 2.25 + mn.DOWN * 0.2)
-            right = mn.RoundedRectangle(width=3.65, height=2.35, corner_radius=0.2, color=mn.ORANGE).set_fill("#431407", opacity=0.84).shift(mn.RIGHT * 2.25 + mn.DOWN * 0.2)
-            lt = fit_text(labels[0], 26, mn.WHITE, 3.0).move_to(left)
-            rt = fit_text(labels[1], 26, mn.WHITE, 3.0).move_to(right)
-            takeaway = fit_text(labels[2], 23, mn.GREEN_C, 10.0).to_edge(mn.DOWN, buff=0.6) if len(labels) > 2 else None
+            left = mn.RoundedRectangle(width=4.15, height=1.05, corner_radius=0.2, color=mn.BLUE_C).set_fill("#172554", opacity=0.88).shift(mn.LEFT * 2.3 + mn.UP * 1.05)
+            right = mn.RoundedRectangle(width=4.15, height=1.05, corner_radius=0.2, color=mn.ORANGE).set_fill("#431407", opacity=0.84).shift(mn.RIGHT * 2.3 + mn.UP * 1.05)
+            lt = fit_text(labels[0], 25, mn.WHITE, 3.45).move_to(left)
+            rt = fit_text(labels[1], 25, mn.WHITE, 3.45).move_to(right)
+
+            comparison_points = key_points[:4]
+            point_cards = mn.VGroup()
+            for point in comparison_points:
+                card = mn.RoundedRectangle(
+                    width=9.6, height=0.72, corner_radius=0.14, color=mn.TEAL_C
+                )
+                card.set_fill("#1e293b", opacity=0.92)
+                text_mob = fit_text(point, 21, mn.WHITE, 8.9).move_to(card)
+                point_cards.add(mn.VGroup(card, text_mob))
+            if len(point_cards):
+                point_cards.arrange(mn.DOWN, buff=0.16).next_to(
+                    mn.VGroup(left, right), mn.DOWN, buff=0.36
+                )
+                if point_cards.height > 3.35:
+                    point_cards.scale_to_fit_height(3.35)
+                if point_cards.get_bottom()[1] < -3.05:
+                    point_cards.shift(mn.UP * (-3.05 - point_cards.get_bottom()[1]))
+
+            takeaway = (
+                fit_text(labels[2], 21, mn.GREEN_C, 9.5).to_edge(mn.DOWN, buff=0.42)
+                if len(labels) > 2 and not comparison_points
+                else None
+            )
             with self.voiceover(text=narration) as tracker:
-                self.play(mn.FadeIn(left, shift=mn.LEFT * 0.15), mn.Write(lt), run_time=0.85)
-                self.play(mn.FadeIn(right, shift=mn.RIGHT * 0.15), mn.Write(rt), run_time=0.85)
-                if takeaway is not None:
+                total_duration = max(1.0, float(getattr(tracker, "duration", 0) or 0))
+                used = 0.0
+                self.play(
+                    mn.FadeIn(left, shift=mn.LEFT * 0.15),
+                    mn.Write(lt),
+                    mn.FadeIn(right, shift=mn.RIGHT * 0.15),
+                    mn.Write(rt),
+                    run_time=0.95,
+                )
+                used += 0.95
+                if len(point_cards):
+                    reveal_time = 0.48
+                    focus_time = 0.22
+                    remaining = max(0.0, total_duration - used - len(point_cards) * (reveal_time + focus_time))
+                    per_point_wait = remaining / max(1, len(point_cards))
+                    current_focus = None
+                    for card in point_cards:
+                        focus = mn.SurroundingRectangle(
+                            card[0], color=mn.YELLOW, buff=0.07, corner_radius=0.07
+                        )
+                        animations = [mn.FadeIn(card, shift=mn.UP * 0.08), mn.Create(focus)]
+                        if current_focus is not None:
+                            animations.append(mn.FadeOut(current_focus))
+                        self.play(*animations, run_time=reveal_time)
+                        self.play(mn.Indicate(card[1], scale_factor=1.012), run_time=focus_time)
+                        if per_point_wait > 0.08:
+                            self.wait(per_point_wait)
+                        used += reveal_time + focus_time + max(0.0, per_point_wait)
+                        current_focus = focus
+                elif takeaway is not None:
                     self.play(mn.FadeIn(takeaway, shift=mn.UP * 0.1), run_time=0.65)
-                self.play(mn.Indicate(formula if formula is not None else right), run_time=0.65)
-                hold_voiceover(tracker, 3.0)
+                    used += 0.65
+                else:
+                    self.play(mn.Indicate(right), run_time=0.55)
+                    used += 0.55
+                hold_voiceover(tracker, used)
 
         else:
             # Simple concept layout. Internal production directions are never displayed.

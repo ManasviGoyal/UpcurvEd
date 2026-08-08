@@ -218,16 +218,12 @@ Creative quality guidance:
   class. A scene labeled graph may use axes, a number plane, a state diagram, a grid, or another
   clear representation when that better teaches the requested relationship.
 - Prefer stable Manim primitives over external graph libraries or fragile internal APIs.
-- When a prominent learner-facing question is shown, speak that complete question aloud before
-  beginning its explanation or answer. Keep the question visually present while it is spoken and
-  give it a natural beat to register before moving into the answer. Do not reveal a question and
-  answer it almost simultaneously.
-- When an ordered list, bullet list, or practical steps are the teaching structure, keep the
-  introduction brief and discuss the visible items in the same order they appear. Reveal or
-  highlight the current item while it is discussed. Narration should name or closely paraphrase
-  each important visible item before adding one concise explanation. Exact word-for-word reading
-  is not required for bullets, but the viewer's eyes and ears should stay on roughly the same idea.
-  Do not force a step format when another visual structure teaches the idea better.
+- For custom scenes that visibly present a learner question, speak the complete question before
+  its explanation and keep it visible long enough to register. Standard question scenes enforce
+  this timing in the backend.
+- For ordered steps or bullets, keep the introduction brief and reveal or highlight each item as
+  it is discussed, in the same order. Closely paraphrase visible items rather than reading them
+  mechanically when natural narration is clearer.
 - Before animating a graph or 3D scene, inspect the full group bounds conceptually and leave a
   comfortable border on every side. A visually ambitious scene is still incomplete if a title,
   curve, surface, arrowhead, or axis label touches or crosses the frame edge.
@@ -241,7 +237,6 @@ Creative quality guidance:
   whole. For a very short snippet, a VGroup of Text lines is also acceptable.
 - Preserve CODE_SNIPPET exactly through plan repair, sanitizer repair, render repair,
   simplification, and editing. Simplify the animation around it, not the educational code.
-- Prefer two or three focused creative scenes in a normal video, and never more than three.
 
 Before returning each script, silently verify:
 1. Only the allowed executable imports appear.
@@ -359,21 +354,18 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
       A very brief title hook is allowed, but do not open with a greeting, agenda, learning-goal
       list, or phrases such as "In this video you will learn," "Today we will explore," or
       "Welcome." Begin teaching within the first sentence.
-    - Scene 1 may be question_scene, concept_scene, title_scene, or custom_manim_scene. When it is
-      title_scene, keep it under eight seconds and make its narration a teaching hook rather than
-      a statement of objectives. If the hook itself is a visible question, prefer question_scene
-      so the question can be spoken and paced before the answer begins.
-    - When a learner-facing question is visibly shown, the narration must say that complete
-      question aloud before explaining or answering it. Do not compress the question and answer
-      into the same immediate beat; allow the question to register naturally first.
+    - If the opening hook is a visible question, use question_scene and put its complete wording in
+      LEARNER_QUESTION; NARRATION is the explanation that follows. The backend guarantees the
+      question is spoken first. If code is important, show it after the question beat.
     - Every scene should show meaningful learner-facing content throughout narration.
     - Standard scenes should use KEY_POINT, LABEL, FORMULA, STEP_TEXT, or a clear question.
-    - Use STEP_TEXT immediately followed by matching STEP_NARRATION for ordered explanations.
-      Keep the scene introduction brief. Each STEP_NARRATION should identify or closely
-      paraphrase its STEP_TEXT, then add only the explanation needed for that step.
-    - For visible KEY_POINT or bullet lists, write NARRATION so it follows the displayed items in
-      order and stays semantically aligned with the item being revealed or highlighted. Avoid
-      showing a full list while narration immediately jumps ahead to a later or unrelated point.
+    - For STEP_TEXT, KEY_POINT, or bullet sequences, keep any introduction to one short sentence,
+      then discuss items in display order while they are revealed or highlighted. Keep narration
+      semantically aligned with the current visible item.
+    - For comparison_scene, use the first two LABEL values for the two things being compared and
+      include two to four KEY_POINT values containing the actual comparison takeaways or criteria.
+      Do not leave a long comparison narration supported only by two category names. Narration
+      should move through those KEY_POINT values in the same order they are shown.
     - Worked mathematics should show completed substitution, simplification, and final answer.
     - Teach meaning before notation when that order helps comprehension.
     - VISUAL_MODE is advisory. Choose the Manim representation that best explains the idea; do
@@ -382,8 +374,13 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
       custom_manim_scene, ESSENTIAL_VISUAL true, and one non-empty CODE_SNIPPET.
     - Multiple different scenes may each carry one CODE_SNIPPET. Preserve the exact learner-facing
       snippet in its own scene and visibly render it.
-    - Use custom_manim_scene when actual spatial, graphical, simulated, networked, coded, or 3D
-      explanation adds value. A normal video should contain no more than three creative scenes.
+    - Visual learning: in a typical 5-7 scene video, normally aim for 2-3 scenes where motion,
+      spatial relationships, diagrams, comparisons, simulations, code, graphs, networks, or other
+      topic-specific visuals materially improve understanding. Prefer the simplest implementation
+      that teaches the idea; creative means explanatory, not decorative. Never exceed three custom
+      Manim scenes.
+    - For uncertain or future-facing topics, distinguish likely trends, plausible scenarios,
+      risks, and aspirations; do not present uncertain outcomes as inevitable.
     - Set REQUIRES_3D true only when the complete script genuinely uses 3D objects or camera.
     - Internal fields VISUAL, CODE_GOAL, ESSENTIAL_VISUAL, REQUIRES_3D, and MANIM_SCRIPT_REF
       are never learner-facing. CODE_SNIPPET is learner-facing content shown in the video.
