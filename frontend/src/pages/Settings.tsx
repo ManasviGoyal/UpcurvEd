@@ -278,6 +278,12 @@ export const SettingsPage = ({
               }}
             >
               {!selectedProvider && <option value="">Select provider first</option>}
+              {/* A saved config can have a provider but no model. Without a matching
+                  option the browser would show the first model while state stays "",
+                  so the UI would claim a model that never gets saved. */}
+              {selectedProvider && !isCustomModel && !localKeys.model && (
+                <option value="">Choose a model…</option>
+              )}
               {selectedProviderModels.map((model) => (
                 <option key={model} value={model}>
                   {model}

@@ -83,6 +83,12 @@ export default function FeedbackModal({ isDark, onClose }: FeedbackModalProps) {
 
         <div className="max-h-[calc(90vh-88px)] space-y-6 overflow-y-auto px-5 py-5 sm:px-8 sm:py-8">
           <div className="text-center">
+            <img
+              src="/upcurved-logo.png"
+              alt=""
+              aria-hidden="true"
+              className="mx-auto mb-4 h-20 w-20"
+            />
             <h3 className={`text-2xl font-bold ${accentClass}`}>
               UpcurvEd &ndash; Export Diagnostics and Feedback Form
             </h3>
