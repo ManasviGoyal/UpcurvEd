@@ -52,7 +52,7 @@ def default_openrouter_model() -> str:
 
 def default_openai_model() -> str:
     """Return the configured direct OpenAI model."""
-    return _env_value("OPENAI_MODEL") or "gpt-5.6-luna"
+    return _env_value("OPENAI_MODEL") or "gpt-5.6"
 
 
 def get_default_model(provider: str | None) -> str | None:

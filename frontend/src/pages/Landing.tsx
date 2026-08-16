@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import DocsModal from "@/components/landing/DocsModal";
+import FeedbackModal from "@/components/landing/FeedbackModal";
+import NoticeOfConsentModal from "@/components/landing/NoticeOfConsentModal";
 import { trackEvent } from "@/lib/analytics";
 
-const FEEDBACK_FORM_URL =
-  "https://docs.google.com/forms/d/e/1FAIpQLSemR4uuVdmnGVFjcGRc3bSGsZ1zcNRLgQuSXZuYSVw-CkI68g/viewform?usp=header";
-
 export default function Landing({ setView: _setView }: { setView?: (view: string) => void }) {
+  const navigate = useNavigate();
   const [isDark, setIsDark] = useState(true);
   const [mutedStates, setMutedStates] = useState([true, true, true]);
   const [isDocsOpen, setIsDocsOpen] = useState(false);
+  const [isConsentOpen, setIsConsentOpen] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const windowsDownloadUrl =
     (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
   const macDownloadUrl =
@@ -44,9 +47,19 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
     setIsDocsOpen(true);
   };
 
+  const handleSetupGuideClick = () => {
+    trackEvent("setup_guide_open", { source: "landing" });
+    navigate("/setup-guide");
+  };
+
   const handleFeedbackClick = () => {
     trackEvent("feedback_click", { source: "landing" });
-    window.open(FEEDBACK_FORM_URL, "_blank", "noopener,noreferrer");
+    setIsFeedbackOpen(true);
+  };
+
+  const handleConsentClick = () => {
+    trackEvent("consent_open", { source: "landing" });
+    setIsConsentOpen(true);
   };
 
   const bgClass = isDark
@@ -104,9 +117,28 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
       <div className="absolute right-4 top-4 z-20 flex items-center gap-2 sm:right-6 sm:top-6">
         <button
           type="button"
+          onClick={handleSetupGuideClick}
+          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
+          aria-label="Open Setup Guide"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M7 3.5A2.5 2.5 0 004.5 6v12A2.5 2.5 0 007 20.5h10A2.5 2.5 0 0019.5 18V6A2.5 2.5 0 0017 3.5H7z" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M8 8h8M8 12h8M8 16h6" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          Setup
+        </button>
+
+        <button
+          type="button"
           onClick={handleDocsOpen}
           className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
-          aria-label="Open Docs and FAQ"
+          aria-label="Open Help and FAQ"
         >
           <svg
             viewBox="0 0 24 24"
@@ -122,14 +154,14 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               strokeLinejoin="round"
             />
           </svg>
-          Docs
+          Help
         </button>
 
         <button
           type="button"
           onClick={handleFeedbackClick}
           className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
-          aria-label="Open feedback form"
+          aria-label="Open feedback and export diagnostics info"
         >
           <svg
             viewBox="0 0 24 24"
@@ -147,6 +179,25 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
             <path d="M7 9h10M7 13h6" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
           Feedback
+        </button>
+
+        <button
+          type="button"
+          onClick={handleConsentClick}
+          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
+          aria-label="Open Notice of Consent"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M7 4.5A2.5 2.5 0 004.5 7v10A2.5 2.5 0 007 19.5h10A2.5 2.5 0 0019.5 17V7A2.5 2.5 0 0017 4.5H7z" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M8 9h8M8 13h8" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          Notice of Consent
         </button>
       </div>
 
@@ -326,6 +377,8 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
       </div>
 
       {isDocsOpen && <DocsModal isDark={isDark} onClose={() => setIsDocsOpen(false)} />}
+      {isFeedbackOpen && <FeedbackModal isDark={isDark} onClose={() => setIsFeedbackOpen(false)} />}
+      {isConsentOpen && <NoticeOfConsentModal isDark={isDark} onClose={() => setIsConsentOpen(false)} />}
 
       <style>{`
         @keyframes pulse {

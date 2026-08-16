@@ -20,6 +20,10 @@ import {
   persistApiKeysSecurelyForUser,
 } from "@/lib/secureKeys";
 
+// Sentinel for the "type your own model ID" entry. Prefixed so it can never
+// collide with a real provider model ID.
+const CUSTOM_MODEL_OPTION = "__custom_model__";
+
 interface SettingsPageProps {
   setView: (view: string) => void;
   user: User;
@@ -49,6 +53,7 @@ export const SettingsPage = ({
   const [busy, setBusy] = useState<boolean>(false);
   const [exportBusy, setExportBusy] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
+  const [customModelSelected, setCustomModelSelected] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +165,10 @@ export const SettingsPage = ({
     const models = provider ? PROVIDER_CONFIG[provider].models : [];
     const defaultModel = models[0] || "";
 
+    // The new provider's presets are unrelated to the old one's, so drop back to
+    // the preset dropdown instead of leaving the custom-ID input open.
+    setCustomModelSelected(false);
+
     setLocalKeys((previous) => ({
       ...previous,
       provider,
@@ -176,7 +185,13 @@ export const SettingsPage = ({
     ? PROVIDER_CONFIG[selectedProvider]
     : null;
   const selectedProviderModels = selectedProviderConfig?.models || [];
-  const modelListId = `provider-models-${selectedProvider || "none"}`;
+  const modelSelectId = `provider-model-${selectedProvider || "none"}`;
+
+  // A saved model that isn't one of the listed presets (e.g. typed by hand, or a
+  // preset that has since been removed) must still show as the current selection.
+  const isCustomModel =
+    Boolean(selectedProvider) &&
+    (customModelSelected || (Boolean(localKeys.model) && !selectedProviderModels.includes(localKeys.model || "")));
 
   return (
     <div
@@ -243,28 +258,50 @@ export const SettingsPage = ({
           </div>
 
           <div className="grid grid-cols-1 gap-2">
-            <label className="text-sm font-medium">Model</label>
-            <Input
-              list={modelListId}
-              value={localKeys.model || ""}
-              onChange={(event) =>
+            <label className="text-sm font-medium" htmlFor={modelSelectId}>
+              Model
+            </label>
+            <select
+              id={modelSelectId}
+              className="border rounded px-3 py-2 bg-background"
+              value={isCustomModel ? CUSTOM_MODEL_OPTION : localKeys.model || ""}
+              disabled={!selectedProvider}
+              onChange={(event) => {
+                const next = event.target.value;
+                // Switching to "custom" clears the field so the text input starts empty
+                // rather than inheriting the model that was selected a moment ago.
+                setCustomModelSelected(next === CUSTOM_MODEL_OPTION);
                 setLocalKeys((previous) => ({
                   ...previous,
-                  model: event.target.value,
-                }))
-              }
-              disabled={!selectedProvider}
-              placeholder={
-                selectedProvider
-                  ? "Choose or type exact model ID"
-                  : "Select provider first"
-              }
-            />
-            <datalist id={modelListId}>
+                  model: next === CUSTOM_MODEL_OPTION ? "" : next,
+                }));
+              }}
+            >
+              {!selectedProvider && <option value="">Select provider first</option>}
               {selectedProviderModels.map((model) => (
-                <option key={model} value={model} />
+                <option key={model} value={model}>
+                  {model}
+                </option>
               ))}
-            </datalist>
+              {selectedProvider && (
+                <option value={CUSTOM_MODEL_OPTION}>Other — enter a model ID…</option>
+              )}
+            </select>
+
+            {isCustomModel && (
+              <Input
+                autoFocus
+                value={localKeys.model || ""}
+                onChange={(event) =>
+                  setLocalKeys((previous) => ({
+                    ...previous,
+                    model: event.target.value,
+                  }))
+                }
+                placeholder="Exact model ID"
+              />
+            )}
+
             <p className="text-xs text-muted-foreground">
               {selectedProviderConfig?.help || NO_PROVIDER_MODEL_HELP}
             </p>

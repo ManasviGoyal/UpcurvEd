@@ -8,6 +8,7 @@ import { LoginPage } from "./pages/Login";
 import { SettingsPage } from "./pages/Settings";
 import { ChatInterface } from "./pages/Chat";
 import Landing from "./pages/Landing";
+import SetupGuide from "./pages/SetupGuide";
 import type { User, ApiKeys, Theme, ColorTheme } from "./types";
 import { getFirebaseAuth } from "./firebase";
 import { onAuthStateChanged, setPersistence, browserLocalPersistence } from "firebase/auth";
@@ -23,7 +24,13 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const desktopLocal = isDesktopLocalMode();
-  const isPublicLandingRoute = location.pathname === "/home" || location.pathname === "/";
+  // Routes that render without auth. These must skip the Firebase bootstrap below:
+  // it throws when Firebase env vars are unset, and its signed-out branch redirects
+  // any non-listed path back to /home.
+  const isPublicRoute =
+    location.pathname === "/home" ||
+    location.pathname === "/" ||
+    location.pathname === "/setup-guide";
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [users, setUsers] = useState<User[]>([{
@@ -220,7 +227,7 @@ const AppContent = () => {
     }
 
     // Public landing should not initialize Firebase/auth listeners.
-    if (isPublicLandingRoute) {
+    if (isPublicRoute) {
       setBooting(false);
       return;
     }
@@ -303,7 +310,7 @@ const AppContent = () => {
       }
     });
     return () => unsub();
-  }, [desktopLocal, isPublicLandingRoute, location.pathname, location.search, navigate]);
+  }, [desktopLocal, isPublicRoute, location.pathname, location.search, navigate]);
 
   if (booting) {
     return (
@@ -340,6 +347,10 @@ const AppContent = () => {
             <Navigate to={`/chat${location.search}`} replace />
           )
         }
+      />
+      <Route
+        path="/setup-guide"
+        element={<SetupGuide />}
       />
 
       {/* Protected routes (auth required) */}
