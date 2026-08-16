@@ -56,6 +56,22 @@ _VOICE_SYNTHESIS_PHRASES = (
     "voice synthesis",
 )
 
+# A native render dependency that is missing, or present but linked against the wrong build of a
+# shared library. Distinct from "render": no prompt, model, or scene code can affect it, and no
+# retry will clear it -- the interpreter's library search order has to change. The canonical case
+# is Pycairo resolving a Cairo without tee-surface support and failing on
+# `undefined symbol: cairo_tee_surface_index`.
+_RENDER_RUNTIME_PHRASES = (
+    "undefined symbol",
+    "no module named 'cairo'",
+    "no module named 'manim'",
+    "libcairo",
+    "libpango",
+    "cannot open shared object file",
+    "glibcxx_",
+    "symbol lookup error",
+)
+
 
 @dataclass
 class DiagnosticError(RuntimeError):
@@ -174,6 +190,12 @@ def diagnostic_category(error: Any) -> str:
 
     if "ffmpeg" in lowered:
         return "media_export"
+
+    # Before the "manim"/"render" catch-all: a broken native stack usually mentions manim too
+    # (the failing import sits next to it in the preflight), and would otherwise be filed as an
+    # ordinary render error that looks retryable to a reader.
+    if any(phrase in lowered for phrase in _RENDER_RUNTIME_PHRASES):
+        return "render_runtime"
 
     if "manim" in lowered or "render" in lowered:
         return "render"

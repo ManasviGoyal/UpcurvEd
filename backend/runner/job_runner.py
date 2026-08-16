@@ -96,6 +96,22 @@ def _kill_proc_tree(proc: subprocess.Popen[str]) -> None:
         pass
 
 
+def _write_vtt_verbatim(srt_file: Path, vtt_path: Path) -> None:
+    """Straight SRT-to-WebVTT conversion, used when word timings are unavailable."""
+    srt_text = srt_file.read_text(encoding="utf-8", errors="ignore")
+    vtt_body = re.sub(
+        r"^(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})",
+        r"\1.\2 --> \3.\4",
+        srt_text,
+        flags=re.MULTILINE,
+    )
+    vtt_lines = [line for line in vtt_body.splitlines() if not re.match(r"^\s*\d+\s*$", line)]
+    vtt_path.write_text(
+        "WEBVTT\n\n" + "\n".join(vtt_lines).strip() + "\n",
+        encoding="utf-8",
+    )
+
+
 def _runner_metadata(job_dir: Path, scene_py: Path | None = None) -> dict[str, str]:
     return {
         "job_dir": str(job_dir.resolve()),
@@ -465,22 +481,22 @@ def run_job_from_code(
         srt_file = newest.with_suffix(".srt")
         if srt_file.exists():
             try:
-                srt_text = srt_file.read_text(encoding="utf-8", errors="ignore")
-                vtt_body = re.sub(
-                    r"^(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})",
-                    r"\1.\2 --> \3.\4",
-                    srt_text,
-                    flags=re.MULTILINE,
-                )
-                vtt_lines = [
-                    line for line in vtt_body.splitlines() if not re.match(r"^\s*\d+\s*$", line)
-                ]
-                (job_dir / "video.vtt").write_text(
-                    "WEBVTT\n\n" + "\n".join(vtt_lines).strip() + "\n",
-                    encoding="utf-8",
-                )
+                # Prefer captions re-timed from the narrator's real word offsets; manim times its
+                # subcaption chunks by character count, which drifts past every spoken pause.
+                from backend.runner.caption_timing import retimed_subtitles
+
+                retimed = retimed_subtitles(srt_file, out_dir)
+                if retimed is not None:
+                    retimed_srt, retimed_vtt = retimed
+                    (job_dir / "video.srt").write_text(retimed_srt, encoding="utf-8")
+                    (job_dir / "video.vtt").write_text(retimed_vtt, encoding="utf-8")
+                else:
+                    _write_vtt_verbatim(srt_file, job_dir / "video.vtt")
             except Exception:
-                pass
+                try:
+                    _write_vtt_verbatim(srt_file, job_dir / "video.vtt")
+                except Exception:
+                    pass
 
         return _base_result(
             ok=True,

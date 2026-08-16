@@ -9,6 +9,7 @@ Legacy ``MANIM_BODY`` bundles remain readable and are migrated through the compl
 
 from __future__ import annotations
 
+import functools
 import html
 import json
 import logging
@@ -2449,25 +2450,105 @@ def _concat_clips(clips: list[pathlib.Path], final_mp4: pathlib.Path, logs_dir: 
         raise RuntimeError(f"ffmpeg concat failed: {detail[-3000:]}")
 
 
+_WATERMARK_TEXT = "Generated using UpcurvEd"
+_WATERMARK_MARGIN = 18
+_WATERMARK_FONT_SIZE = 16
+_WATERMARK_PADDING = 6
+
+
+@functools.lru_cache(maxsize=8)
+def _ffmpeg_has_filter(ffmpeg: str, name: str) -> bool:
+    """Ask this ffmpeg build whether a filter is compiled in."""
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return False
+    if completed.returncode != 0:
+        return False
+    pattern = re.compile(rf"^\s*[A-Z.]+\s+{re.escape(name)}\s+", re.MULTILINE)
+    return bool(pattern.search(completed.stdout or ""))
+
+
+def _write_watermark_overlay_png(target: pathlib.Path) -> tuple[int, int]:
+    """Render the watermark to a transparent PNG, returning its pixel size.
+
+    Used where ffmpeg cannot draw text itself. Pillow arrives with manim, and
+    ``load_default`` has been scalable since Pillow 10.1, so this needs no font file on disk --
+    which matters because the bundled runtime ships no fonts.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:
+        font = ImageFont.load_default(size=_WATERMARK_FONT_SIZE)
+    except TypeError:  # Pillow < 10.1: fixed-size bitmap default.
+        font = ImageFont.load_default()
+
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    left, top, right, bottom = measure.textbbox((0, 0), _WATERMARK_TEXT, font=font)
+    width = (right - left) + 2 * _WATERMARK_PADDING
+    height = (bottom - top) + 2 * _WATERMARK_PADDING
+
+    image = Image.new("RGBA", (width, height), (0, 0, 0, int(255 * 0.35)))
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (_WATERMARK_PADDING - left, _WATERMARK_PADDING - top),
+        _WATERMARK_TEXT,
+        font=font,
+        fill=(255, 255, 255, int(255 * 0.78)),
+    )
+    image.save(target)
+    return width, height
+
+
 def _apply_final_watermark(final_mp4: pathlib.Path, logs_dir: pathlib.Path) -> None:
+    """Stamp the watermark, using an image overlay when ffmpeg has no text renderer.
+
+    imageio-ffmpeg bundles a static FFmpeg 7 built without libharfbuzz, and FFmpeg 7 dropped
+    ``drawtext`` unless harfbuzz is present -- so every packaged build failed the whole render with
+    "No such filter: 'drawtext'". ``overlay`` is a core filter that is always available, so the
+    fallback pre-renders the text to a PNG and composites that instead.
+    """
     ffmpeg = _find_ffmpeg()
     watermarked = final_mp4.with_name("video_watermarked.mp4")
-    text = "Generated using UpcurvEd"
-    vf = (
-        "drawtext="
-        f"text='{text}':"
-        "x=w-tw-18:y=h-th-18:"
-        "fontsize=16:"
-        "fontcolor=white@0.78:"
-        "box=1:boxcolor=black@0.35:boxborderw=6"
-    )
+    overlay_png: pathlib.Path | None = None
+
+    if _ffmpeg_has_filter(ffmpeg, "drawtext"):
+        inputs = ["-i", str(final_mp4)]
+        filter_args = [
+            "-vf",
+            (
+                "drawtext="
+                f"text='{_WATERMARK_TEXT}':"
+                f"x=w-tw-{_WATERMARK_MARGIN}:y=h-th-{_WATERMARK_MARGIN}:"
+                f"fontsize={_WATERMARK_FONT_SIZE}:"
+                "fontcolor=white@0.78:"
+                f"box=1:boxcolor=black@0.35:boxborderw={_WATERMARK_PADDING}"
+            ),
+        ]
+    else:
+        overlay_png = logs_dir / "watermark_overlay.png"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        _write_watermark_overlay_png(overlay_png)
+        inputs = ["-i", str(final_mp4), "-i", str(overlay_png)]
+        filter_args = [
+            "-filter_complex",
+            f"[0:v][1:v]overlay=W-w-{_WATERMARK_MARGIN}:H-h-{_WATERMARK_MARGIN}[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+        ]
+
     cmd = [
         ffmpeg,
         "-y",
-        "-i",
-        str(final_mp4),
-        "-vf",
-        vf,
+        *inputs,
+        *filter_args,
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -2483,6 +2564,8 @@ def _apply_final_watermark(final_mp4: pathlib.Path, logs_dir: pathlib.Path) -> N
     if completed.returncode != 0 or not watermarked.exists():
         raise RuntimeError(f"ffmpeg watermark failed: {(completed.stderr or '')[-3000:]}")
     watermarked.replace(final_mp4)
+    if overlay_png is not None:
+        overlay_png.unlink(missing_ok=True)
 
 
 def _format_vtt_ts(seconds: float) -> str:
@@ -2588,8 +2671,81 @@ def _fallback_scene_cues(
     return cues
 
 
+_FFMPEG_DURATION_RE = re.compile(r"Duration:\s*(\d{2,}):(\d{2}):(\d{2}\.\d+)")
+
+
+def _ffprobe_duration_seconds(path: pathlib.Path) -> float | None:
+    """Container duration via ffprobe, when the host happens to provide it."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        duration = float((completed.stdout or "").strip())
+        if completed.returncode == 0 and duration > 0:
+            return duration
+    except Exception:
+        pass
+    return None
+
+
+def _ffmpeg_duration_seconds(path: pathlib.Path) -> float | None:
+    """Container duration parsed from ffmpeg's own banner.
+
+    The desktop bundle ships ffmpeg (copied out of imageio-ffmpeg) but no ffprobe, so this is
+    the only container-level measurement available in a packaged install.
+    """
+    try:
+        ffmpeg = _find_ffmpeg()
+    except Exception:
+        return None
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-i", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return None
+    # `ffmpeg -i` with no output file always exits non-zero; the banner on stderr is still valid.
+    match = _FFMPEG_DURATION_RE.search(completed.stderr or "")
+    if not match:
+        return None
+    hours, minutes, seconds = match.groups()
+    duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    return duration if duration > 0 else None
+
+
 def _media_duration_seconds(path: pathlib.Path, fallback: float) -> float:
-    """Read an actual rendered clip duration, falling back to plan metadata."""
+    """Read an actual rendered clip duration, falling back to plan metadata.
+
+    Must report the *container* duration, because that is what `-f concat` advances the output
+    timeline by, and subtitle offsets are accumulated from this value. mutagen is a last resort
+    for exactly that reason: MP4Info walks trak atoms until it finds a `soun` handler and reports
+    that track's mdhd length, so on a voiceover clip whose animation outlives the narration it
+    returns the audio length -- shorter than the clip. Trusting it made every scene boundary land
+    early, and the error accumulated scene over scene.
+    """
+    for reader in (_ffprobe_duration_seconds, _ffmpeg_duration_seconds):
+        duration = reader(path)
+        if duration:
+            return duration
+
     try:
         from mutagen.mp4 import MP4
 
@@ -2599,29 +2755,6 @@ def _media_duration_seconds(path: pathlib.Path, fallback: float) -> float:
     except Exception:
         pass
 
-    ffprobe = shutil.which("ffprobe")
-    if ffprobe:
-        try:
-            completed = subprocess.run(
-                [
-                    ffprobe,
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "default=noprint_wrappers=1:nokey=1",
-                    str(path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            duration = float((completed.stdout or "").strip())
-            if completed.returncode == 0 and duration > 0:
-                return duration
-        except Exception:
-            pass
     return max(1.0, fallback)
 
 
@@ -2633,6 +2766,7 @@ def _write_subtitles_from_scenes(
 ) -> None:
     """Merge actual voiceover captions and write standards-compliant SRT and WebVTT."""
     cues: list[tuple[float, float, str]] = []
+    timeline: list[dict[str, Any]] = []
     timeline_offset = 0.0
     scenes = plan.get("scenes") or []
     for index, scene in enumerate(scenes):
@@ -2643,11 +2777,31 @@ def _write_subtitles_from_scenes(
         clip = clips[index] if index < len(clips) else None
         duration = _media_duration_seconds(clip, planned_duration) if clip else planned_duration
         scene_cues = _read_vtt_cues(clip.with_suffix(".vtt")) if clip else []
+        from_sidecar = bool(scene_cues)
         if not scene_cues:
             scene_cues = _fallback_scene_cues(scene, duration)
         cues.extend(
             (timeline_offset + start, timeline_offset + end, text)
             for start, end, text in scene_cues
+        )
+        timeline.append(
+            {
+                "scene": index + 1,
+                "type": scene.get("type"),
+                "measured_duration": round(duration, 3),
+                "planned_duration": round(planned_duration, 3),
+                "offset_start": round(timeline_offset, 3),
+                "offset_end": round(timeline_offset + duration, 3),
+                "cues": len(scene_cues),
+                "cues_from_sidecar": from_sidecar,
+                # How much of the clip runs on after its last caption -- a long tail here is the
+                # trailing-silence case that makes captions look unmoored from the scene.
+                "silent_tail": (
+                    round(duration - max(end for _, end, _ in scene_cues), 3)
+                    if scene_cues
+                    else None
+                ),
+            }
         )
         timeline_offset += duration
 
@@ -2663,6 +2817,35 @@ def _write_subtitles_from_scenes(
     vtt_text = "\n".join(vtt_lines).rstrip()
     srt_path.write_text((srt_text + "\n") if srt_text else "", encoding="utf-8")
     vtt_path.write_text(vtt_text + ("\n" if cues else "\n\n"), encoding="utf-8")
+    _write_subtitle_timeline_report(srt_path, timeline)
+
+
+def _write_subtitle_timeline_report(
+    srt_path: pathlib.Path,
+    timeline: list[dict[str, Any]],
+) -> None:
+    """Record the per-scene offsets the subtitles were built on, next to the final video.
+
+    Subtitle drift is only diagnosable by comparing the offsets this function accumulated against
+    the timeline the concatenated file actually has. Without this the two are invisible to each
+    other and the error can only be guessed at from watching the video.
+    """
+    final_mp4 = srt_path.with_suffix(".mp4")
+    predicted = timeline[-1]["offset_end"] if timeline else 0.0
+    actual = _media_duration_seconds(final_mp4, 0.0) if final_mp4.exists() else None
+    report = {
+        "scenes": timeline,
+        "predicted_total": round(predicted, 3),
+        "actual_video_duration": round(actual, 3) if actual else None,
+        # Positive means the subtitle timeline ran longer than the video, i.e. cues drift late.
+        "drift": round(predicted - actual, 3) if actual else None,
+    }
+    try:
+        srt_path.with_name("subtitle_timeline.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 def _write_vtt_from_plan(plan: dict[str, Any], out_path: pathlib.Path) -> None:

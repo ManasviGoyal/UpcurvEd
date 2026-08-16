@@ -676,7 +676,6 @@ class GeneratedScene(VoiceoverScene):
                         run_time=completion_time,
                     )
                 hold_voiceover(tracker, total_duration)
-            self.wait(1.5)
             clean_out(bg)
             return
 

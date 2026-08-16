@@ -22,6 +22,7 @@ import logging
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(f"app.{__name__}")
 
@@ -185,6 +186,42 @@ def _run_coro(coro):
     return box.get("value")
 
 
+def _word_boundaries_from_chunks(
+    text: str,
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert edge-tts WordBoundary events into manim-voiceover's WordBoundary shape.
+
+    edge-tts reports ``offset``/``duration`` in 100-nanosecond ticks, which is already the unit
+    manim-voiceover's ``AUDIO_OFFSET_RESOLUTION`` divides by. It does not report where the word sat
+    in the input, so ``text_offset`` is recovered by walking the source text and consuming each
+    spoken word in order -- the voice speaks the words in sequence, so a forward-only scan cannot
+    mismatch, and a word the scan cannot locate (an expanded number, say) is skipped rather than
+    guessed at.
+    """
+    boundaries: list[dict[str, Any]] = []
+    cursor = 0
+    for chunk in chunks:
+        spoken = str(chunk.get("text") or "")
+        if not spoken:
+            continue
+        found = text.find(spoken, cursor)
+        if found < 0:
+            continue
+        cursor = found + len(spoken)
+        boundaries.append(
+            {
+                "audio_offset": int(chunk.get("offset") or 0),
+                "duration_milliseconds": int(float(chunk.get("duration") or 0) / 10_000),
+                "text_offset": found,
+                "word_length": len(spoken),
+                "text": spoken,
+                "boundary_type": "Word",
+            }
+        )
+    return boundaries
+
+
 def synthesize_edge(
     text: str,
     out_path: str | Path,
@@ -192,12 +229,17 @@ def synthesize_edge(
     lang: str = "en",
     role: str | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    word_boundaries: list[dict[str, Any]] | None = None,
 ) -> str:
     """Synthesize ``text`` to an MP3 at ``out_path`` and return the voice used.
 
     Raises TTSUnavailable for every failure mode -- disabled, not installed,
     unmapped language, network error, or empty output -- so callers can treat
     "use gTTS instead" as a single except branch.
+
+    When ``word_boundaries`` is supplied it is filled in place with per-word audio timings. They
+    are what makes a caption land on the pause the voice actually took: without them the only
+    timing signal is the total duration, and callers have to assume a constant speech rate.
     """
     if not (text or "").strip():
         raise TTSUnavailable("Refusing to synthesize empty text.")
@@ -216,10 +258,33 @@ def synthesize_edge(
 
     rate, pitch = prosody_for(role)
     destination = Path(out_path)
+    collected: list[dict[str, Any]] = []
 
     async def _synthesize() -> None:
-        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
-        await asyncio.wait_for(communicate.save(str(destination)), timeout=timeout_seconds)
+        # Boundary metadata is opt-in: Communicate defaults to "SentenceBoundary", which makes the
+        # service send no per-word events at all. Older edge-tts builds have no such parameter, so
+        # fall back to the default and let the caller cope with an empty timing list.
+        try:
+            communicate = edge_tts.Communicate(
+                text, voice, rate=rate, pitch=pitch, boundary="WordBoundary"
+            )
+        except TypeError:
+            communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+
+        async def _stream() -> None:
+            # stream() rather than save(): save() discards the boundary events entirely.
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("wb") as handle:
+                async for chunk in communicate.stream():
+                    kind = chunk.get("type")
+                    if kind == "audio" and chunk.get("data"):
+                        handle.write(chunk["data"])
+                    elif kind in ("WordBoundary", "SentenceBoundary"):
+                        # Sentence events are accepted too: coarser, but still anchored to real
+                        # audio, which is what keeps a caption off the narrator's pauses.
+                        collected.append(dict(chunk))
+
+        await asyncio.wait_for(_stream(), timeout=timeout_seconds)
 
     try:
         _run_coro(_synthesize())
@@ -231,6 +296,9 @@ def synthesize_edge(
     if not destination.exists() or destination.stat().st_size < _MIN_AUDIO_BYTES:
         _discard(destination)
         raise TTSUnavailable("edge-tts returned no audio.")
+
+    if word_boundaries is not None:
+        word_boundaries.extend(_word_boundaries_from_chunks(text, collected))
 
     return voice
 

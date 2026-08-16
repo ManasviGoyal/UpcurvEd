@@ -88,9 +88,15 @@ class EdgeTTSService(SpeechService):
         destination = Path(cache_dir) / audio_path
 
         used_edge = False
+        boundaries: list[dict[str, object]] = []
         if voice and self._edge_available:
             try:
-                synthesize_edge(input_text, destination, lang=self.lang)
+                synthesize_edge(
+                    input_text,
+                    destination,
+                    lang=self.lang,
+                    word_boundaries=boundaries,
+                )
                 used_edge = True
             except TTSUnavailable as exc:
                 # Latch off so the rest of the render does not re-attempt a
@@ -103,14 +109,22 @@ class EdgeTTSService(SpeechService):
             # Re-key so a transient outage does not cache gTTS audio under the
             # edge-tts key and poison later renders.
             input_data = gtts_key
+            boundaries = []
             if path is None:
                 audio_path = self._recache(destination, cache_dir, input_data)
 
-        return {
+        result: VoiceoverData = {
             "input_text": text,
             "input_data": input_data,
             "original_audio": audio_path,
         }
+        # manim-voiceover persists this into its cache.json, which is what lets the caption
+        # re-timing pass recover real word times after the render. It also makes
+        # ``tracker.time_until_bookmark()`` exact instead of interpolating a constant speech rate.
+        # gTTS reports no timings at all, so that path is deliberately left without the key.
+        if boundaries:
+            result["word_boundaries"] = boundaries
+        return result
 
     def _synthesize_gtts(self, input_text: str, destination: Path) -> None:
         from gtts import gTTS

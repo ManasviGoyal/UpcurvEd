@@ -173,11 +173,35 @@ async function probeBackendHealth() {
 // A healthy backend is only safe to adopt when it runs on this same OS. WSL2 mirrors
 // localhost into Windows, so an installed Windows app will otherwise silently attach to a
 // `desktop:dev` backend running in WSL and use its Python instead of the bundled runtime.
+function resolveInterpreterPath(command) {
+  const probe = runCapture(command, ["-c", "import sys; print(sys.executable)"]);
+  if (probe.status !== 0) return null;
+  return String(probe.stdout || "").trim() || null;
+}
+
+function samePath(left, right) {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  // Deliberately no realpathSync: a venv's python is a symlink to its base interpreter, and
+  // collapsing them would make a base-interpreter backend look like a venv one.
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
 function canAdoptBackend(payload) {
   const reported = typeof payload.platform === "string" ? payload.platform : "";
   // Backend predating the identity fields: trust it in dev, never in a packaged app.
   if (!reported) return IS_DEV;
-  return reported === process.platform;
+  if (reported !== process.platform) return false;
+
+  // Matching OS is not enough. A backend on a different interpreter has a different render stack
+  // (a conda Python resolves a Cairo without tee-surface support) and a different snapshot of the
+  // Python source, so adopting it silently runs code this app never selected. Refusing is cheap:
+  // startBackend() just claims the next free port for its own.
+  const theirs = typeof payload.interpreter === "string" ? payload.interpreter.trim() : "";
+  if (!theirs) return true;
+  const ours = resolveInterpreterPath(getPythonCommand());
+  if (!ours) return true;
+  return samePath(theirs, ours);
 }
 
 function isPortOpen(port, host, timeoutMs = 600) {
@@ -260,10 +284,26 @@ function runCapture(command, args, options = {}) {
   });
 }
 
+// A checked-out `.venv` is a deliberate statement about which interpreter this repo runs on, so
+// it outranks whatever `python3` happens to resolve to. Bare `python3` is often a conda base env,
+// and conda ships native libraries that shadow the host's -- a conda interpreter's RPATH is
+// `$ORIGIN/../lib`, which makes Pycairo bind conda's tee-surface-less Cairo and fail with
+// `undefined symbol: cairo_tee_surface_index` even though the system Cairo is fine.
+function getProjectVenvPython() {
+  const candidate =
+    process.platform === "win32"
+      ? path.join(APP_DIR, ".venv", "Scripts", "python.exe")
+      : path.join(APP_DIR, ".venv", "bin", "python");
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
 function getPythonCommand() {
   if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  // Packaged builds must keep using their own runtime, so this stays ahead of the venv.
   const bundled = getBundledPythonPath();
   if (bundled) return bundled;
+  const venv = getProjectVenvPython();
+  if (venv) return venv;
   if (process.platform === "win32") return "python";
   if (canRun("python3.12", ["--version"])) return "python3.12";
   return "python3";
@@ -349,11 +389,11 @@ function startBackend() {
 
       if (health && !adoptable) {
         console.warn(
-          `[desktop] backend at ${API_HOST}:${API_PORT} reports platform '${
+          `[desktop] refusing to adopt the backend at ${API_HOST}:${API_PORT}: it reports platform '${
             health.platform || "unknown"
-          }' (interpreter ${health.interpreter || "unknown"}), but this app is '${
+          }' on interpreter '${health.interpreter || "unknown"}', but this app runs '${
             process.platform
-          }'; refusing to adopt it.`
+          }' on '${resolveInterpreterPath(getPythonCommand()) || getPythonCommand()}'.`
         );
       }
 
@@ -471,7 +511,12 @@ function startBackend() {
         "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",
         "assert pathlib.Path(sys.base_prefix).resolve() == root, (sys.base_prefix, root)",
         "modules = {'_ctypes': _ctypes, 'cairo': cairo, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
-        "bad = {name: module.__file__ for name, module in modules.items() if not inside(module.__file__)}",
+        // Statically linked extensions have no __file__ (python-build-standalone compiles _ctypes
+        // into the interpreter). Tolerate that, but require them to be genuinely built in.
+        "located = {name: getattr(module, '__file__', None) for name, module in modules.items()}",
+        "embedded = sorted(name for name, value in located.items() if value is None)",
+        "assert all(name in sys.builtin_module_names for name in embedded), embedded",
+        "bad = {name: value for name, value in located.items() if value and not inside(value)}",
         "assert not bad, bad",
         "outside_site = [p for p in sys.path if p and 'site-packages' in p and not inside(p)]",
         "assert not outside_site, outside_site",

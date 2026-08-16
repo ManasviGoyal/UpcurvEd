@@ -140,6 +140,75 @@ class TestSynthesizeEdge:
 
         assert asyncio.run(_driver()) == engine.voice_for("en")
 
+    def test_word_boundaries_must_be_requested_explicitly(self, tmp_path, monkeypatch):
+        """Communicate defaults to SentenceBoundary, which sends no per-word events at all."""
+        out = tmp_path / "out.mp3"
+        module = _fake_edge_tts(out, payload=b"\x00" * 4096)
+        monkeypatch.setitem(sys.modules, "edge_tts", module)
+
+        engine.synthesize_edge("hello there", out)
+
+        assert module.kwargs_seen[0].get("boundary") == "WordBoundary"
+
+    def test_collected_boundaries_are_returned_to_the_caller(self, tmp_path, monkeypatch):
+        out = tmp_path / "out.mp3"
+        module = _fake_edge_tts(
+            out,
+            payload=b"\x00" * 4096,
+            boundaries=[
+                {"type": "WordBoundary", "offset": 0, "duration": 3_000_000, "text": "hello"},
+                {
+                    "type": "WordBoundary",
+                    "offset": 30_000_000,
+                    "duration": 2_000_000,
+                    "text": "there",
+                },
+            ],
+        )
+        monkeypatch.setitem(sys.modules, "edge_tts", module)
+
+        collected: list[dict] = []
+        engine.synthesize_edge("hello there", out, word_boundaries=collected)
+
+        assert [b["text"] for b in collected] == ["hello", "there"]
+        assert [b["text_offset"] for b in collected] == [0, 6]
+        assert collected[1]["audio_offset"] == 30_000_000
+
+    def test_sentence_boundaries_are_accepted_too(self, tmp_path, monkeypatch):
+        out = tmp_path / "out.mp3"
+        module = _fake_edge_tts(
+            out,
+            payload=b"\x00" * 4096,
+            boundaries=[
+                {
+                    "type": "SentenceBoundary",
+                    "offset": 0,
+                    "duration": 9_000_000,
+                    "text": "hello there",
+                },
+            ],
+        )
+        monkeypatch.setitem(sys.modules, "edge_tts", module)
+
+        collected: list[dict] = []
+        engine.synthesize_edge("hello there", out, word_boundaries=collected)
+
+        assert [b["text"] for b in collected] == ["hello there"]
+
+    def test_older_edge_tts_without_boundary_kwarg_still_synthesizes(self, tmp_path, monkeypatch):
+        out = tmp_path / "out.mp3"
+        module = _fake_edge_tts(
+            out, payload=b"\x00" * 4096, reject_boundary_kwarg=True
+        )
+        monkeypatch.setitem(sys.modules, "edge_tts", module)
+
+        collected: list[dict] = []
+        voice = engine.synthesize_edge("hello there", out, word_boundaries=collected)
+
+        assert voice == engine.voice_for("en")
+        assert out.exists()
+        assert collected == []
+
 
 def _import_raiser(blocked: str):
     real_import = __import__
@@ -152,22 +221,40 @@ def _import_raiser(blocked: str):
     return _fake
 
 
-def _fake_edge_tts(out_path, *, payload: bytes = b"", error: Exception | None = None):
-    """Build a stand-in edge_tts module recording Communicate(...) arguments."""
+def _fake_edge_tts(
+    out_path,
+    *,
+    payload: bytes = b"",
+    error: Exception | None = None,
+    boundaries: list[dict] | None = None,
+    reject_boundary_kwarg: bool = False,
+):
+    """Build a stand-in edge_tts module recording Communicate(...) arguments.
+
+    Mirrors the real ``stream()`` API rather than ``save()``: synthesize_edge streams so it can
+    collect the boundary metadata that ``save()`` throws away.
+    """
     calls: list[tuple[str, str, str, str]] = []
+    kwargs_seen: list[dict] = []
 
     class Communicate:
         def __init__(self, text, voice, rate="+0%", pitch="+0Hz", **kwargs):
+            if reject_boundary_kwarg and "boundary" in kwargs:
+                raise TypeError("unexpected keyword argument 'boundary'")
             calls.append((text, voice, rate, pitch))
+            kwargs_seen.append(dict(kwargs))
 
-        async def save(self, path):
+        async def stream(self):
             if error is not None:
                 raise error
-            with open(path, "wb") as handle:
-                handle.write(payload)
+            if payload:
+                yield {"type": "audio", "data": payload}
+            for boundary in boundaries or []:
+                yield boundary
 
     module = SimpleNamespace(Communicate=Communicate)
     module.calls = calls
+    module.kwargs_seen = kwargs_seen
     return module
 
 

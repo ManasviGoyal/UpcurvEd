@@ -123,8 +123,47 @@ function copyPythonRuntime(command, prefixArgs) {
 
   // Dereference symlinks so packaged app bundles do not contain host-specific link targets.
   fs.cpSync(basePrefix, PYTHON_DIR, { recursive: true, force: true, dereference: true });
+  rewriteSymlinksIntoCopy(basePrefix);
   removeExternallyManagedMarkers();
   return basePrefix;
+}
+
+// `dereference: true` does not flatten every link: cpSync leaves nested symlinks as symlinks and
+// rewrites their targets to absolute paths, so a copied `bin/python3` can still point at the
+// interpreter it was copied FROM. That ships a link into a path no end user has, and it makes
+// `Path(sys.executable).resolve()` escape the bundle -- which is what validateBundledRuntime's
+// prefix assertions are there to catch. Repoint such links at the equivalent file inside the copy,
+// relatively, which is how a normal Python install expresses them.
+//
+// Linux-only, matching removeExternallyManagedMarkers: the mac and Windows bundles are built from
+// interpreters whose internal links are already relative, so this finds nothing to rewrite there.
+function rewriteSymlinksIntoCopy(basePrefix) {
+  if (process.platform !== "linux") return;
+
+  const base = path.resolve(basePrefix);
+  const stack = [PYTHON_DIR];
+  while (stack.length) {
+    const current = stack.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        const target = fs.readlinkSync(fullPath);
+        if (!path.isAbsolute(target)) continue;
+        const resolved = path.resolve(target);
+        const insideBase = resolved === base || resolved.startsWith(base + path.sep);
+        if (!insideBase) continue;
+
+        const counterpart = path.join(PYTHON_DIR, path.relative(base, resolved));
+        if (!fs.existsSync(counterpart)) continue;
+        const relative = path.relative(path.dirname(fullPath), counterpart);
+        fs.rmSync(fullPath, { force: true });
+        fs.symlinkSync(relative, fullPath);
+        console.log(`[desktop] repointed bundled symlink into the copy: ${fullPath} -> ${relative}`);
+        continue;
+      }
+      if (entry.isDirectory()) stack.push(fullPath);
+    }
+  }
 }
 
 // PEP 668 marker files travel with the copy when the base interpreter is managed by a distro
@@ -241,7 +280,13 @@ function validateBundledRuntime(python) {
     "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",
     "assert pathlib.Path(sys.base_prefix).resolve() == root, (sys.base_prefix, root)",
     "modules = {'_ctypes': _ctypes, 'cairo': cairo, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
-    "bad = {name: module.__file__ for name, module in modules.items() if not inside(module.__file__)}",
+    // Statically linked extensions have no __file__ (python-build-standalone compiles _ctypes into
+    // the interpreter). Those cannot come from outside the bundle, but prove they really are
+    // built in rather than letting a missing __file__ excuse a module that escaped the runtime.
+    "located = {name: getattr(module, '__file__', None) for name, module in modules.items()}",
+    "embedded = sorted(name for name, value in located.items() if value is None)",
+    "assert all(name in sys.builtin_module_names for name in embedded), embedded",
+    "bad = {name: value for name, value in located.items() if value and not inside(value)}",
     "assert not bad, bad",
     "outside_site = [p for p in sys.path if p and 'site-packages' in p and not inside(p)]",
     "assert not outside_site, outside_site",
