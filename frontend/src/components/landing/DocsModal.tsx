@@ -87,6 +87,13 @@ export default function DocsModal({ isDark, onClose }: DocsModalProps) {
         </div>
 
         <div className="max-h-[calc(90vh-88px)] overflow-y-auto px-5 py-5 sm:px-6 sm:py-6">
+          <img
+            src="/upcurved-logo.png"
+            alt=""
+            aria-hidden="true"
+            className="mx-auto mb-6 h-20 w-20"
+          />
+
           <dl className="space-y-6">
             <div>
               <dt className="font-semibold">How do I install and set up UpcurvEd?</dt>

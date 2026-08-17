@@ -7,6 +7,8 @@ import { Link } from "react-router-dom";
 const IMG = {
   common: {
     downloadPage: "/setup-guide/common/download-page.png",
+    // The app window looks the same on both platforms, so mac and Windows share it.
+    appRunning: "/setup-guide/common/app-running.png",
     settingsButton: "/setup-guide/common/settings-button.png",
     apiKeyEntry: "/setup-guide/common/api-key-entry.png",
   },
@@ -20,19 +22,15 @@ const IMG = {
     doubleClickBlocked: "/setup-guide/mac/07-double-click-blocked.png",
     rightClickOpen: "/setup-guide/mac/08-right-click-open.png",
     confirmOpen: "/setup-guide/mac/09-confirm-open.png",
-    appRunningDock: "/setup-guide/mac/10-app-running-dock.png",
   },
   // Not committed yet — see frontend/public/setup-guide/windows/README.md.
   // Each renders a placeholder until the file is added, then works with no code change.
   win: {
     downloadedInstaller: "/setup-guide/windows/01-downloaded-installer.png",
-    uacPrompt: "/setup-guide/windows/02-uac-prompt.png",
-    installerWindow: "/setup-guide/windows/03-installer-window.png",
-    smartScreenWarning: "/setup-guide/windows/04-smartscreen-warning.png",
-    smartScreenRunAnyway: "/setup-guide/windows/05-smartscreen-run-anyway.png",
-    startMenu: "/setup-guide/windows/06-start-menu.png",
-    firewallPrompt: "/setup-guide/windows/07-firewall-prompt.png",
-    appRunning: "/setup-guide/windows/08-app-running.png",
+    smartScreenWarning: "/setup-guide/windows/02-smartscreen-warning.png",
+    smartScreenRunAnyway: "/setup-guide/windows/03-smartscreen-run-anyway.png",
+    installing: "/setup-guide/windows/04-installing.png",
+    startMenu: "/setup-guide/windows/05-start-menu.png",
   },
 };
 
@@ -260,10 +258,18 @@ export default function SetupGuide() {
             Back to home
           </Link>
 
-          <h1 className={`text-2xl font-bold ${textPrimary}`}>Setup Guide</h1>
-          <p className={`mt-1 text-base ${textSecondary}`}>
-            How to install, open, and set up UpcurvEd Desktop.
-          </p>
+          <div className="text-center">
+            <img
+              src="/upcurved-logo.png"
+              alt=""
+              aria-hidden="true"
+              className="mx-auto mb-4 h-20 w-20"
+            />
+            <h1 className={`text-2xl font-bold ${textPrimary}`}>Setup Guide</h1>
+            <p className={`mt-1 text-base ${textSecondary}`}>
+              How to install, open, and set up UpcurvEd Desktop.
+            </p>
+          </div>
         </header>
 
         <main className={`rounded-2xl border ${cardBorder} ${cardBg} shadow-2xl backdrop-blur-sm`}>
@@ -380,7 +386,7 @@ export default function SetupGuide() {
                         />
                       </li>
                       <li>
-                        Wait for UpcurvEd to copy to Applications (size is 1.69 GB).
+                        Wait for UpcurvEd to copy to Applications (around 1.5 GB).
                         <Shot
                           src={IMG.mac.copyProgress}
                           alt="Copy progress dialog showing UpcurvEd being copied to Applications"
@@ -433,7 +439,7 @@ export default function SetupGuide() {
                       <li>
                         Now that the application is open you will see it on your dock at the bottom of the screen, and
                         it will be open for you. It should look like this:
-                        <Shot src={IMG.mac.appRunningDock} alt="UpcurvEd running, shown in the macOS dock" />
+                        <Shot src={IMG.common.appRunning} alt="UpcurvEd open and ready to use" />
                       </li>
                     </ol>
                   </section>
@@ -441,24 +447,17 @@ export default function SetupGuide() {
               ) : (
                 <div role="tabpanel" id="setup-panel-windows" aria-labelledby="setup-tab-windows" className="space-y-8">
                   <section>
-                    <h3 className={headingClass}>Run the installer</h3>
+                    <h3 className={headingClass}>Open the installer</h3>
                     <ol className={listClass}>
                       <li>
-                        Open your <strong>Downloads</strong> folder and find{" "}
-                        <strong>upcurved-desktop-1.0.0-win-x64.exe</strong>.
-                        <Shot src={IMG.win.downloadedInstaller} alt="The downloaded UpcurvEd installer" />
+                        Once the download finishes, open your <strong>Downloads</strong> folder and find{" "}
+                        <strong>UpcurvEd-1.0.0-win-x64.exe</strong>.
+                        <Shot
+                          src={IMG.win.downloadedInstaller}
+                          alt="The downloaded UpcurvEd installer in the Downloads folder"
+                        />
                       </li>
-                      <li>
-                        Double-click the file to start the installer. If Windows shows a{" "}
-                        <strong>User Account Control</strong> prompt asking to allow the app to make changes, click{" "}
-                        <strong>Yes</strong>.
-                        <Shot src={IMG.win.uacPrompt} alt="Windows User Account Control prompt" />
-                      </li>
-                      <li>
-                        Choose an install location if you are asked, then click <strong>Install</strong> and wait. The
-                        build is around 1.69 GB, so this can take a few minutes.
-                        <Shot src={IMG.win.installerWindow} alt="The UpcurvEd Windows installer window" />
-                      </li>
+                      <li>Double-click the file to start the installer.</li>
                     </ol>
                   </section>
 
@@ -466,14 +465,18 @@ export default function SetupGuide() {
                     <h3 className={headingClass}>Get past the SmartScreen warning</h3>
                     <ol className={listClass}>
                       <li>
-                        <strong>Note:</strong> UpcurvEd is not code-signed yet, so Windows may show a blue{" "}
+                        <strong>Note:</strong> UpcurvEd is not code-signed yet, so Windows shows a blue{" "}
                         <strong>Windows protected your PC</strong> screen instead of running the installer.
                         <Shot src={IMG.win.smartScreenWarning} alt="Windows protected your PC SmartScreen warning" />
                       </li>
                       <li>
-                        Click <strong>More info</strong>, then click the <strong>Run anyway</strong> button that
-                        appears.
-                        <Shot src={IMG.win.smartScreenRunAnyway} alt="The Run anyway button on the SmartScreen screen" />
+                        Click <strong>More info</strong>. It expands to show the app name and{" "}
+                        <strong>Unknown publisher</strong>, along with a <strong>Run anyway</strong> button. Click{" "}
+                        <strong>Run anyway</strong>.
+                        <Shot
+                          src={IMG.win.smartScreenRunAnyway}
+                          alt="SmartScreen expanded with the Run anyway button"
+                        />
                       </li>
                       <li>
                         If your antivirus quarantines the download, restore it and allow the file, then run it again.
@@ -482,25 +485,34 @@ export default function SetupGuide() {
                   </section>
 
                   <section>
+                    <h3 className={headingClass}>Finish installation</h3>
+                    <ol className={listClass}>
+                      <li>
+                        UpcurvEd installs on its own — there is nothing to choose. Wait for{" "}
+                        <strong>Installing, please wait…</strong> to finish. The app is around 1.5 GB, so this can take
+                        a few minutes.
+                        <Shot src={IMG.win.installing} alt="UpcurvEd Setup showing an install progress bar" />
+                      </li>
+                      <li>UpcurvEd opens by itself once the install completes.</li>
+                    </ol>
+                  </section>
+
+                  <section>
                     <h3 className={headingClass}>Open the app on Windows</h3>
                     <ol className={listClass}>
                       <li>
-                        Open UpcurvEd from the <strong>Start menu</strong>, or from the desktop shortcut the installer
-                        created.
+                        After the first launch, open UpcurvEd from the <strong>Start menu</strong> or the desktop
+                        shortcut.
                         <Shot src={IMG.win.startMenu} alt="UpcurvEd in the Windows Start menu" />
                       </li>
                       <li>
                         The first launch is slower than later ones — UpcurvEd starts a local server on your machine
                         before the window appears.
                       </li>
+                      <li>Once the window opens, you can pin UpcurvEd to your taskbar for quicker access.</li>
                       <li>
-                        If <strong>Windows Defender Firewall</strong> asks, allow UpcurvEd on{" "}
-                        <strong>Private networks</strong>. The app needs this to talk to its own local server.
-                        <Shot src={IMG.win.firewallPrompt} alt="Windows Defender Firewall network access prompt" />
-                      </li>
-                      <li>
-                        Once the window opens, you can pin UpcurvEd to your taskbar for quicker access.
-                        <Shot src={IMG.win.appRunning} alt="UpcurvEd running on Windows" />
+                        It should look like this:
+                        <Shot src={IMG.common.appRunning} alt="UpcurvEd open and ready to use" />
                       </li>
                     </ol>
                   </section>
