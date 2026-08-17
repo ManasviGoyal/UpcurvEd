@@ -7,7 +7,6 @@ directories:
 files:
   - desktop/**/*
   - "!desktop/python-runtime/**"
-  - desktop/requirements-desktop.txt
   - frontend/dist/**/*
   - backend/**/*
   - package.json

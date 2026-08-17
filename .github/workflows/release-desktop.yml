@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (example: v0.3.0)"
+        description: "Release tag to publish (example: v1.0.1)"
         required: true
         type: string
 
@@ -24,15 +24,24 @@ jobs:
         include:
           - label: windows-x64
             os: windows-latest
+            python_arch: x64
             dist_command: npm run desktop:dist:win -- --publish never
+
           - label: macos-x64
-            os: macos-13
+            # GitHub's current standard Intel macOS runner.
+            os: macos-15-intel
+            python_arch: x64
             dist_command: npm run desktop:dist:mac:x64 -- --publish never
+
           - label: macos-arm64
+            # Native Apple Silicon runner so the bundled Python runtime is arm64.
             os: macos-14
+            python_arch: arm64
             dist_command: npm run desktop:dist:mac:arm64 -- --publish never
+
           - label: linux-x64
             os: ubuntu-latest
+            python_arch: x64
             dist_command: npm run desktop:dist:linux -- --publish never
 
     env:
@@ -48,11 +57,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
+
+      - name: Show build environment
+        shell: bash
+        run: |
+          echo "runner.os=${{ runner.os }}"
+          echo "runner.arch=${{ runner.arch }}"
+          echo "expected python architecture=${{ matrix.python_arch }}"
+          node -p "'node ' + process.version + ' ' + process.platform + ' ' + process.arch"
+          python -c "import platform, sys; print('python', sys.version.split()[0], platform.platform(), platform.machine())"
 
       - name: Install Linux system deps (manim/manimpango/sox)
         if: runner.os == 'Linux'
@@ -66,14 +89,13 @@ jobs:
             sox \
             libsox-fmt-all
 
-      - name: Install macOS system deps (sox)
+      - name: Install macOS system deps (manim/manimpango/sox)
         if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install sox || true
+          brew install pkg-config cairo pango sox
 
       - name: Install root deps
-        run: npm install
+        run: npm ci
 
       - name: Install frontend deps
         run: npm --prefix frontend ci

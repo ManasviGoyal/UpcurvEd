@@ -9,7 +9,7 @@ const RUNTIME_ROOT = path.join(ROOT_DIR, "desktop", "python-runtime");
 const PYTHON_DIR = path.join(RUNTIME_ROOT, "python");
 const BIN_DIR = path.join(RUNTIME_ROOT, "bin");
 const PLAYWRIGHT_BROWSERS_DIR = path.join(RUNTIME_ROOT, "ms-playwright");
-const REQUIREMENTS_FILE = path.join(ROOT_DIR, "desktop", "requirements-desktop.txt");
+const PYPROJECT_FILE = path.join(ROOT_DIR, "backend", "pyproject.toml");
 
 function runOrThrow(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -18,7 +18,14 @@ function runOrThrow(command, args, options = {}) {
   });
 
   if (result.status !== 0) {
-    throw new Error(`Command failed (${result.status}): ${command} ${args.join(" ")}`);
+    const details = [
+      `status=${result.status}`,
+      result.signal ? `signal=${result.signal}` : null,
+      result.error ? `error=${result.error.message}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(`Command failed (${details}): ${command} ${args.join(" ")}`);
   }
 }
 
@@ -28,10 +35,15 @@ function runAndCaptureOrThrow(command, args, options = {}) {
     ...options,
   });
   if (result.status !== 0) {
+    const details = [
+      `status=${result.status}`,
+      result.signal ? `signal=${result.signal}` : null,
+      result.error ? `error=${result.error.message}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
     throw new Error(
-      `Command failed (${result.status}): ${command} ${args.join(" ")}\n${
-        result.stderr || ""
-      }`
+      `Command failed (${details}): ${command} ${args.join(" ")}\n${result.stderr || ""}`
     );
   }
   return (result.stdout || "").trim();
@@ -75,6 +87,64 @@ function resolvePythonCommand() {
   return { command: "python", prefixArgs: [] };
 }
 
+function loadDeclaredDependencies(command, prefixArgs = [], options = {}) {
+  const code = [
+    "import json, pathlib, sys, tomllib",
+    "data = tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))",
+    "project = data.get('project', {})",
+    "deps = list(project.get('dependencies', []))",
+    "deps.extend(project.get('optional-dependencies', {}).get('desktop', []))",
+    "print(json.dumps(deps))",
+  ].join("; ");
+
+  const raw = runAndCaptureOrThrow(
+    command,
+    [...prefixArgs, "-c", code, PYPROJECT_FILE],
+    options
+  );
+  const dependencies = JSON.parse(raw);
+  if (!Array.isArray(dependencies) || dependencies.length === 0) {
+    throw new Error(`No Python dependencies declared in ${PYPROJECT_FILE}.`);
+  }
+  return dependencies;
+}
+
+function installDeclaredDependencies(command, prefixArgs = [], options = {}) {
+  const dependencies = loadDeclaredDependencies(command, prefixArgs, options);
+  console.log(
+    `[desktop] installing ${dependencies.length} Python dependencies declared by backend/pyproject.toml`
+  );
+  runOrThrow(
+    command,
+    [
+      ...prefixArgs,
+      "-m",
+      "pip",
+      "install",
+      "--no-cache-dir",
+      "--upgrade",
+      ...dependencies,
+    ],
+    options
+  );
+}
+
+function installDevDependencies() {
+  if (!fs.existsSync(PYPROJECT_FILE)) {
+    throw new Error(`Missing backend dependency manifest at ${PYPROJECT_FILE}`);
+  }
+  const { command, prefixArgs } = resolvePythonCommand();
+  const version = runAndCaptureOrThrow(
+    command,
+    [...prefixArgs, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+    { cwd: ROOT_DIR }
+  );
+  if (version !== "3.12") {
+    throw new Error(`Python 3.12 is required for desktop development. Found ${version}.`);
+  }
+  installDeclaredDependencies(command, prefixArgs, { cwd: ROOT_DIR });
+}
+
 function getBundledPythonPath() {
   if (process.platform === "win32") {
     return path.join(PYTHON_DIR, "python.exe");
@@ -91,7 +161,10 @@ function bundledPythonEnv(extra = {}) {
     PYTHONHOME: PYTHON_DIR,
     PYTHONNOUSERSITE: "1",
     PYTHONSAFEPATH: "1",
-    PYTHONPATH: "",
+    // Default to an empty import path for isolation, but allow callers such as
+    // validateBundledRuntime() to explicitly expose the repo root so imports
+    // like `backend.api.main` can be validated.
+    PYTHONPATH: extra.PYTHONPATH ?? "",
   };
   delete env.VIRTUAL_ENV;
   delete env.__PYVENV_LAUNCHER__;
@@ -126,6 +199,23 @@ function copyPythonRuntime(command, prefixArgs) {
   rewriteSymlinksIntoCopy(basePrefix);
   removeExternallyManagedMarkers();
   return basePrefix;
+}
+
+function purgeCopiedSitePackages() {
+  // Never inherit third-party packages from the build machine. Python.org/Homebrew/framework
+  // installs may have a populated site-packages under sys.base_prefix; copying it makes release
+  // contents depend on whatever happens to be installed on the builder. Start from stdlib only
+  // and let ensurepip + requirements rebuild dependencies from the declared constraints.
+  const sitePackages =
+    process.platform === "win32"
+      ? path.join(PYTHON_DIR, "Lib", "site-packages")
+      : path.join(PYTHON_DIR, "lib", "python3.12", "site-packages");
+
+  if (fs.existsSync(sitePackages)) {
+    fs.rmSync(sitePackages, { recursive: true, force: true });
+  }
+  fs.mkdirSync(sitePackages, { recursive: true });
+  console.log(`[desktop] cleared copied build-machine site-packages: ${sitePackages}`);
 }
 
 // `dereference: true` does not flatten every link: cpSync leaves nested symlinks as symlinks and
@@ -224,6 +314,24 @@ function walkRuntimeBinaryCandidates(rootDir) {
   return output;
 }
 
+function adHocSignMacBinary(filePath) {
+  if (process.platform !== "darwin") return;
+  const codesign = "/usr/bin/codesign";
+  const otool = "/usr/bin/otool";
+  if (!fs.existsSync(codesign)) {
+    throw new Error("macOS desktop runtime bundling requires codesign.");
+  }
+
+  // Only sign Mach-O files. walkRuntimeBinaryCandidates also includes scripts in bin/.
+  const inspected = runAndCapture(otool, ["-L", filePath]);
+  if (inspected.status !== 0) return;
+
+  // install_name_tool invalidates the copied Python.org signature. An ad-hoc
+  // signature makes the relocated binary executable again; electron-builder
+  // can replace it with the final app signature during packaging.
+  runOrThrow(codesign, ["--force", "--sign", "-", filePath]);
+}
+
 function patchMacPythonFrameworkLinks() {
   if (process.platform !== "darwin") return;
   const otool = "/usr/bin/otool";
@@ -240,7 +348,9 @@ function patchMacPythonFrameworkLinks() {
     throw new Error(`Bundled Python framework library is missing: ${bundledLibrary}`);
   }
 
+  const changedCandidates = new Set();
   runOrThrow(installNameTool, ["-id", "@rpath/Python", bundledLibrary]);
+  changedCandidates.add(bundledLibrary);
 
   let patched = 0;
   for (const candidate of walkRuntimeBinaryCandidates(PYTHON_DIR)) {
@@ -260,10 +370,20 @@ function patchMacPythonFrameworkLinks() {
         ? "@executable_path/../Python"
         : `@loader_path/${path.relative(path.dirname(candidate), bundledLibrary)}`;
       runOrThrow(installNameTool, ["-change", dependency, replacement, candidate]);
+      changedCandidates.add(candidate);
       patched += 1;
     }
   }
-  console.log(`[desktop] patched ${patched} macOS Python framework link(s)`);
+
+  // macOS refuses to execute Mach-O files after install_name_tool invalidates
+  // their signatures. Re-sign every modified binary before ensurepip/pip runs.
+  for (const candidate of changedCandidates) {
+    adHocSignMacBinary(candidate);
+  }
+
+  console.log(
+    `[desktop] patched ${patched} macOS Python framework link(s) and ad-hoc signed ${changedCandidates.size} modified binary/binaries`
+  );
 }
 
 function validateBundledRuntime(python) {
@@ -272,6 +392,8 @@ function validateBundledRuntime(python) {
     "import cairo, numpy, scipy, manim, manim_voiceover",
     "from manim_voiceover.services.gtts import GTTSService",
     "import edge_tts",
+    "from backend.tts.manim_service import EdgeTTSService",
+    "import backend.api.main as backend_main",
     "surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)",
     "tee = cairo.TeeSurface(surface)",
     "tee.index(0)",
@@ -295,16 +417,22 @@ function validateBundledRuntime(python) {
     "print('prefix', sys.prefix)",
     "print('scipy', scipy.__file__)",
     "print('manim', manim.__file__)",
+    "print('backend_ok', bool(backend_main))",
   ].join("; ");
   runOrThrow(python, ["-c", validationCode], {
     cwd: ROOT_DIR,
-    env: bundledPythonEnv(),
+    env: bundledPythonEnv({ PYTHONPATH: ROOT_DIR }),
   });
 }
 
 function main() {
-  if (!fs.existsSync(REQUIREMENTS_FILE)) {
-    throw new Error(`Missing requirements file at ${REQUIREMENTS_FILE}`);
+  if (!fs.existsSync(PYPROJECT_FILE)) {
+    throw new Error(`Missing backend dependency manifest at ${PYPROJECT_FILE}`);
+  }
+
+  if (process.argv.includes("--dev-deps")) {
+    installDevDependencies();
+    return;
   }
 
   const { command, prefixArgs } = resolvePythonCommand();
@@ -325,6 +453,7 @@ function main() {
 
   ensureCleanRuntimeDir();
   copyPythonRuntime(command, prefixArgs);
+  purgeCopiedSitePackages();
   patchMacPythonFrameworkLinks();
 
   const bundledPython = getBundledPythonPath();
@@ -338,20 +467,10 @@ function main() {
   runOrThrow(bundledPython, ["-m", "ensurepip", "--upgrade"], pythonOptions);
   runOrThrow(
     bundledPython,
-    ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+    ["-m", "pip", "install", "--upgrade", "pip", "wheel"],
     pythonOptions
   );
-  runOrThrow(
-    bundledPython,
-    ["-m", "pip", "install", "--no-cache-dir", "-r", REQUIREMENTS_FILE],
-    pythonOptions
-  );
-  // Ensure pkg_resources remains available for manim plugins (manim-voiceover).
-  runOrThrow(
-    bundledPython,
-    ["-m", "pip", "install", "--no-cache-dir", "--upgrade", "setuptools<81"],
-    pythonOptions
-  );
+  installDeclaredDependencies(bundledPython, [], pythonOptions);
 
   // Newly installed native extensions may also reference the build machine's framework.
   patchMacPythonFrameworkLinks();

@@ -16,7 +16,7 @@
   "scripts": {
     "desktop:dev": "electron desktop/main.cjs --dev",
     "desktop:build:frontend": "npm --prefix frontend run build -- --mode desktop",
-    "desktop:dev:setup": "python3 -m pip install -r desktop/requirements-desktop.txt",
+    "desktop:dev:setup": "node desktop/scripts/prepare-python-runtime.cjs --dev-deps",
     "desktop:prepare:python": "node desktop/scripts/prepare-python-runtime.cjs",
     "desktop:start": "electron desktop/main.cjs",
     "desktop:build": "npm run desktop:build:frontend && npm run desktop:start",
