@@ -314,7 +314,7 @@ function walkRuntimeBinaryCandidates(rootDir) {
   return output;
 }
 
-function removeMacSignatureIfPresent(filePath) {
+function adHocSignMacBinary(filePath) {
   if (process.platform !== "darwin") return;
   const codesign = "/usr/bin/codesign";
   const otool = "/usr/bin/otool";
@@ -322,20 +322,14 @@ function removeMacSignatureIfPresent(filePath) {
     throw new Error("macOS desktop runtime bundling requires codesign.");
   }
 
-  // Only touch Mach-O files. The copied Python.org runtime is signed; changing
-  // its load commands would leave an invalid signature, which macOS kills.
+  // Only sign Mach-O files. walkRuntimeBinaryCandidates also includes scripts in bin/.
   const inspected = runAndCapture(otool, ["-L", filePath]);
   if (inspected.status !== 0) return;
 
-  const removed = runAndCapture(codesign, ["--remove-signature", filePath]);
-  if (removed.status !== 0) {
-    const details = `${removed.stdout || ""}\n${removed.stderr || ""}`.trim();
-    // It is fine if the file is already unsigned (for example on the second
-    // framework-link pass after dependencies are installed).
-    if (!/not signed|code object is not signed/i.test(details)) {
-      throw new Error(`Could not remove macOS code signature from ${filePath}.\n${details}`);
-    }
-  }
+  // install_name_tool invalidates the copied Python.org signature. An ad-hoc
+  // signature makes the relocated binary executable again; electron-builder
+  // can replace it with the final app signature during packaging.
+  runOrThrow(codesign, ["--force", "--sign", "-", filePath]);
 }
 
 function patchMacPythonFrameworkLinks() {
@@ -355,7 +349,6 @@ function patchMacPythonFrameworkLinks() {
   }
 
   const changedCandidates = new Set();
-  removeMacSignatureIfPresent(bundledLibrary);
   runOrThrow(installNameTool, ["-id", "@rpath/Python", bundledLibrary]);
   changedCandidates.add(bundledLibrary);
 
@@ -376,17 +369,20 @@ function patchMacPythonFrameworkLinks() {
       const replacement = inBin
         ? "@executable_path/../Python"
         : `@loader_path/${path.relative(path.dirname(candidate), bundledLibrary)}`;
-      if (!changedCandidates.has(candidate)) {
-        removeMacSignatureIfPresent(candidate);
-      }
       runOrThrow(installNameTool, ["-change", dependency, replacement, candidate]);
       changedCandidates.add(candidate);
       patched += 1;
     }
   }
 
+  // macOS refuses to execute Mach-O files after install_name_tool invalidates
+  // their signatures. Re-sign every modified binary before ensurepip/pip runs.
+  for (const candidate of changedCandidates) {
+    adHocSignMacBinary(candidate);
+  }
+
   console.log(
-    `[desktop] patched ${patched} macOS Python framework link(s); modified copied Python binaries remain unsigned`
+    `[desktop] patched ${patched} macOS Python framework link(s) and ad-hoc signed ${changedCandidates.size} modified binary/binaries`
   );
 }
 
