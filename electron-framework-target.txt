@@ -1,0 +1,60 @@
+===== SOURCE A =====
+total 351592
+drwxr-xr-x    6 isabelayepes  staff   192B Dec 31  1979 .
+drwxr-xr-x    4 isabelayepes  staff   128B Dec 31  1979 ..
+-rwxr-xr-x    1 isabelayepes  staff   172M Dec 31  1979 Electron Framework
+drwxr-xr-x    3 isabelayepes  staff    96B Dec 31  1979 Helpers
+drwxr-xr-x    7 isabelayepes  staff   224B Dec 31  1979 Libraries
+drwxr-xr-x  229 isabelayepes  staff   7.2K Dec 31  1979 Resources
+
+TARGET:
+-rwxr-xr-x  1 isabelayepes  staff   172M Dec 31  1979 node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework
+node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework: Mach-O 64-bit dynamically linked shared library arm64
+
+===== BUILT A =====
+total 351624
+drwxr-xr-x    7 isabelayepes  staff   224B Aug 19 22:20 .
+drwxr-xr-x    4 isabelayepes  staff   128B Aug 19 22:16 ..
+-rwxr-xr-x    1 isabelayepes  staff   172M Aug 19 22:20 Electron Framework
+drwxr-xr-x    3 isabelayepes  staff    96B Aug 19 22:20 Helpers
+drwxr-xr-x    7 isabelayepes  staff   224B Aug 19 22:20 Libraries
+drwxr-xr-x  229 isabelayepes  staff   7.2K Aug 19 22:16 Resources
+drwxr-xr-x    3 isabelayepes  staff    96B Aug 19 22:20 _CodeSignature
+
+TARGET:
+-rwxr-xr-x  1 isabelayepes  staff   172M Aug 19 22:20 release/mac-arm64/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework
+release/mac-arm64/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework: Mach-O 64-bit dynamically linked shared library arm64
+
+===== INSTALLED A =====
+total 0
+drwxr-xr-x@   6 isabelayepes  admin   192B Aug 19 22:21 .
+drwxr-xr-x@   4 isabelayepes  admin   128B Aug 19 22:21 ..
+drwxr-xr-x@   3 isabelayepes  admin    96B Aug 19 22:20 Helpers
+drwxr-xr-x@   7 isabelayepes  admin   224B Aug 19 22:20 Libraries
+drwxr-xr-x@ 229 isabelayepes  admin   7.2K Aug 19 22:16 Resources
+drwxr-xr-x@   3 isabelayepes  admin    96B Aug 19 22:20 _CodeSignature
+
+TARGET:
+ls: /Applications/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework: No such file or directory
+/Applications/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework: cannot open `/Applications/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework' (No such file or directory)
+
+===== DMG / VOLUMES =====
+/Volumes/UpcurvEd 1.0.0-arm64 2/UpcurvEd.app
+/Volumes/UpcurvEd 1.0.0-arm64 5/UpcurvEd.app
+/Volumes/UpcurvEd 1.0.0-arm64/UpcurvEd.app
+/Volumes/UpcurvEd 1.0.0-arm64 4/UpcurvEd.app
+/Volumes/UpcurvEd 1.0.0-arm64 3/UpcurvEd.app
+/Volumes/UpcurvEd 1.0.0-arm64 1/UpcurvEd.app
+
+===== DMG A =====
+total 351592
+drwxr-xr-x    6 isabelayepes  staff   204B Aug 16 18:22 .
+drwxr-xr-x    4 isabelayepes  staff   136B Aug 16 18:22 ..
+-rwxr-xr-x    1 isabelayepes  staff   172M Aug 16 18:22 Electron Framework
+drwxr-xr-x    3 isabelayepes  staff   102B Aug 16 18:22 Helpers
+drwxr-xr-x    7 isabelayepes  staff   238B Aug 16 18:22 Libraries
+drwxr-xr-x  229 isabelayepes  staff   7.6K Aug 16 18:22 Resources
+
+TARGET:
+-rwxr-xr-x  1 isabelayepes  staff   172M Aug 16 18:22 /Volumes/UpcurvEd 1.0.0-arm64 2/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework
+/Volumes/UpcurvEd 1.0.0-arm64 2/UpcurvEd.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework: Mach-O 64-bit dynamically linked shared library arm64

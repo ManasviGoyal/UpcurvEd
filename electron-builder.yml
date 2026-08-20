@@ -34,6 +34,8 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 mac:
   icon: desktop/icons/icon.icns
   category: public.app-category.education
+  identity: "-"
+  hardenedRuntime: false
   target:
     - target: dmg
 
