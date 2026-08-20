@@ -1,0 +1,111 @@
+[mac-native-audit] scanned 413 runtime Mach-O files under /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime
+[mac-native-audit] FAILED: found 33 real non-portable runtime reference(s)
+
+Summary:
+   26  /Library/Frameworks
+    5  /opt/homebrew
+    1  /Users
+    1  /tmp
+
+Details:
+
+desktop/python-runtime/python/lib/libformw.5.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libformw.5.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libformw.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libformw.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libmenuw.5.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libmenuw.5.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libmenuw.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libmenuw.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libpanelw.5.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libpanelw.5.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libpanelw.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libpanelw.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+
+desktop/python-runtime/python/lib/libssl.3.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/libssl.3.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/libssl.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/libssl.dylib
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_hashlib.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_hashlib.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libssl.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libssl.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libtcl8.6.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libtk8.6.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libtcl8.6.dylib
+
+desktop/python-runtime/python/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /Library/Frameworks/Python.framework/Versions/3.12/lib/libtk8.6.dylib
+
+desktop/python-runtime/python/lib/python3.12/site-packages/PIL/.dylibs/libjpeg.62.4.0.dylib
+  LC_RPATH: /Users/runner/work/Pillow/Pillow/build/deps/darwin/lib
+
+desktop/python-runtime/python/lib/python3.12/site-packages/av/.dylibs/libsharpyuv.0.1.2.dylib
+  LC_RPATH: /tmp/vendor/lib
+
+desktop/python-runtime/python/lib/python3.12/site-packages/cairo/_cairo.cpython-312-darwin.so
+  LC_LOAD_DYLIB: /opt/homebrew/opt/cairo/lib/libcairo.2.dylib
+
+desktop/python-runtime/python/lib/python3.12/site-packages/cairo/_cairo.cpython-312-darwin.so
+  LC_RPATH: /opt/homebrew/Cellar/cairo/1.18.4/lib
+
+desktop/python-runtime/python/lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so
+  LC_RPATH: /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc/aarch64-apple-darwin23/13
+
+desktop/python-runtime/python/lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so
+  LC_RPATH: /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc
+
+desktop/python-runtime/python/lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so
+  LC_RPATH: /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13
+
+Allowed: Apple system libraries and @rpath/@loader_path/@executable_path. Everything else must be bundled/rewritten or deliberately removed.

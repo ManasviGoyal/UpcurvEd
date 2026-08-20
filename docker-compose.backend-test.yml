@@ -1,0 +1,20 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend-test
+    ports:
+      - "8000:8000"
+    environment:
+      APP_MODE: desktop-local
+      UPCURVED_STORAGE_DIR: /data/storage
+      UPCURVED_DESKTOP_STATE_DIR: /data/state
+      PYTHONPATH: /app
+    volumes:
+      - ./backend:/app/backend
+      - upcurved_storage:/data/storage
+      - upcurved_state:/data/state
+
+volumes:
+  upcurved_storage:
+  upcurved_state:

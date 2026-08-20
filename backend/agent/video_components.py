@@ -147,18 +147,6 @@ def _derive_display_points(value: Any, *, limit: int = 3) -> list[str]:
     return points
 
 
-def _has_visible_component_content(scene: dict[str, Any]) -> bool:
-    return bool(
-        str(scene.get("subtitle") or "").strip()
-        or str(scene.get("learner_question") or "").strip()
-        or str(scene.get("formula") or "").strip()
-        or str(scene.get("code_snippet") or "").strip()
-        or [x for x in (scene.get("key_points") or []) if str(x).strip()]
-        or [x for x in (scene.get("labels") or []) if str(x).strip()]
-        or [x for x in (scene.get("steps") or scene.get("calculation_steps") or []) if str(x).strip()]
-    )
-
-
 def _scene_for_render(scene: dict[str, Any]) -> dict[str, Any]:
     rendered = dict(scene)
 
@@ -204,10 +192,6 @@ def _scene_for_render(scene: dict[str, Any]) -> dict[str, Any]:
         # Keep the old name in the generated wrapper so saved custom bodies continue to work.
         rendered["calculation_steps"] = steps
 
-    if str(rendered.get("type") or "") != "title_scene" and not _has_visible_component_content(rendered):
-        rendered["key_points"] = _derive_display_points(rendered.get("narration"), limit=3)
-        if not rendered["key_points"]:
-            rendered["key_points"] = ["Focus on the key relationship in this idea"]
     return rendered
 
 

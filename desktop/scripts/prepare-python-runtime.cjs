@@ -10,6 +10,18 @@ const PYTHON_DIR = path.join(RUNTIME_ROOT, "python");
 const BIN_DIR = path.join(RUNTIME_ROOT, "bin");
 const PLAYWRIGHT_BROWSERS_DIR = path.join(RUNTIME_ROOT, "ms-playwright");
 const PYPROJECT_FILE = path.join(ROOT_DIR, "backend", "pyproject.toml");
+const MAC_NATIVE_BUNDLE_SCRIPT = path.join(
+  ROOT_DIR,
+  "desktop",
+  "scripts",
+  "bundle-macos-native-deps.cjs"
+);
+const MAC_NATIVE_AUDIT_SCRIPT = path.join(
+  ROOT_DIR,
+  "desktop",
+  "scripts",
+  "audit-macos-native-deps.cjs"
+);
 
 function runOrThrow(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -389,7 +401,9 @@ function patchMacPythonFrameworkLinks() {
 function validateBundledRuntime(python) {
   const validationCode = [
     "import sys, pathlib, ctypes, _ctypes",
-    "import cairo, numpy, scipy, manim, manim_voiceover",
+    "import cairo, numpy, scipy, scipy.linalg, manim, manim_voiceover",
+    "from PIL import Image",
+    "import av, ssl, hashlib",
     "from manim_voiceover.services.gtts import GTTSService",
     "import edge_tts",
     "from backend.tts.manim_service import EdgeTTSService",
@@ -474,6 +488,16 @@ function main() {
 
   // Newly installed native extensions may also reference the build machine's framework.
   patchMacPythonFrameworkLinks();
+
+  // macOS wheels/native extensions can carry absolute Homebrew or Python.org
+  // library references from the build machine. Bundle external dylibs, rewrite
+  // Python-framework references to the copied runtime, strip build-machine
+  // rpaths, then fail the build if any non-portable references remain.
+  if (process.platform === "darwin") {
+    runOrThrow(process.execPath, [MAC_NATIVE_BUNDLE_SCRIPT], { cwd: ROOT_DIR });
+    runOrThrow(process.execPath, [MAC_NATIVE_AUDIT_SCRIPT], { cwd: ROOT_DIR });
+  }
+
   validateBundledRuntime(bundledPython);
 
   // Bundle Playwright Chromium into runtime so end-users do not need manual install.

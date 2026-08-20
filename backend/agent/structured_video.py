@@ -83,7 +83,6 @@ _SANITIZER_REPAIR_MAX_TOKENS = int(os.getenv("UPCURVED_VIDEO_SANITIZER_REPAIR_MA
 _RENDER_REPAIR_MAX_TOKENS = int(os.getenv("UPCURVED_VIDEO_RENDER_REPAIR_MAX_TOKENS", "8000"))
 _SIMPLIFY_MAX_TOKENS = int(os.getenv("UPCURVED_VIDEO_SIMPLIFY_MAX_TOKENS", "7000"))
 _SCENE_RENDER_TIMEOUT = int(os.getenv("UPCURVED_SCENE_RENDER_TIMEOUT_SECONDS", "300"))
-_MAX_CUSTOM_SCENES = int(os.getenv("UPCURVED_MAX_CUSTOM_SCENES", "3"))
 _VOICE_SYNTHESIS_RETRIES = max(0, int(os.getenv("UPCURVED_VOICE_RETRIES", "2")))
 _VOICE_RETRY_BASE_DELAY = max(0.1, float(os.getenv("UPCURVED_VOICE_RETRY_DELAY_SECONDS", "1.5")))
 
@@ -317,76 +316,6 @@ def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "required"}
-
-
-def _derive_display_points(value: Any, *, limit: int = 3) -> list[str]:
-    """Create short learner-facing points from existing narration without another LLM call."""
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not text:
-        return []
-
-    raw_parts = re.split(r"(?<=[.!?])\s+|[;•]+", text)
-    candidates: list[str] = []
-    for raw in raw_parts:
-        part = re.sub(r"^[\s\-–—•]+", "", raw).strip()
-        if not part:
-            continue
-        # Long single sentences often contain useful learner-facing clauses.
-        clauses = re.split(
-            r",\s+|\s+(?:and|but|so|because|while|whereas)\s+",
-            part,
-            flags=re.IGNORECASE,
-        )
-        useful = [clause.strip(" ,.;:") for clause in clauses if len(clause.strip().split()) >= 3]
-        if len(useful) >= 2 and len(part) > 105:
-            candidates.extend(useful)
-        else:
-            candidates.append(part.strip(" ,;"))
-
-    points: list[str] = []
-    for candidate in candidates:
-        point = _short_text(candidate, 112, "").rstrip(" .")
-        if not point:
-            continue
-        normalized = re.sub(r"[^a-z0-9]+", " ", point.lower()).strip()
-        if normalized and normalized not in {
-            re.sub(r"[^a-z0-9]+", " ", existing.lower()).strip()
-            for existing in points
-        }:
-            points.append(point)
-        if len(points) >= limit:
-            break
-    return points
-
-
-def _standard_visible_content_score(scene: dict[str, Any]) -> int:
-    """Estimate whether a deterministic scene has enough learner-facing material.
-
-    A lone subtitle or question is not enough for a long teaching scene. Formula and ordered
-    step renderers count as substantial content; otherwise require at least two visible ideas.
-    """
-    steps = [
-        value
-        for value in (scene.get("steps") or scene.get("calculation_steps") or [])
-        if str(value).strip()
-    ]
-    if steps:
-        return max(2, len(steps))
-    if str(scene.get("formula") or "").strip():
-        return 2
-    if str(scene.get("code_snippet") or "").strip():
-        return 2
-
-    score = 0
-    score += len([value for value in (scene.get("key_points") or []) if str(value).strip()])
-    score += len([value for value in (scene.get("labels") or []) if str(value).strip()])
-    score += 1 if str(scene.get("subtitle") or "").strip() else 0
-    score += 1 if str(scene.get("learner_question") or "").strip() else 0
-    return score
-
-
-def _scene_has_standard_visible_content(scene: dict[str, Any]) -> bool:
-    return _standard_visible_content_score(scene) >= 2
 
 
 def _json_object_candidate(raw: str) -> str:
@@ -1231,7 +1160,18 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
         code_snippet = _normalize_code_snippet(
             incoming.get("code_snippet") or incoming.get("source_code") or ""
         )
-        if visual_mode in {"graph", "code"} or code_snippet:
+        if (
+            visual_mode in {"graph", "code"}
+            or code_snippet
+            or (
+                scene_type == "concept_scene"
+                and visual_mode in {"diagram", "motion"}
+            )
+        ):
+            # The deterministic concept renderer is text/formula/label based. If the model
+            # explicitly plans a real diagram or motion, route it through custom Manim so the
+            # requested visual does not silently collapse into text cards. A missing script is
+            # handled by the existing sanitizer/repair/fallback pipeline.
             scene_type = "custom_manim_scene"
         if code_snippet and visual_mode == "text":
             visual_mode = "code"
@@ -1370,35 +1310,6 @@ def _normalize_plan(plan: dict[str, Any], *, topic: str) -> dict[str, Any]:
             if scene.get("visual_mode") == "text":
                 scene["visual_mode"] = "diagram"
 
-    # Enforce the agreed maximum while keeping essential graph/3D/code visuals first.
-    custom_indices = [index for index, scene in enumerate(scenes) if scene.get("type") == "custom_manim_scene"]
-    if len(custom_indices) > _MAX_CUSTOM_SCENES:
-        ranked = sorted(
-            custom_indices,
-            key=lambda idx: (
-                not bool(scenes[idx].get("essential_visual")),
-                not bool(scenes[idx].get("code_snippet")),
-                not bool(scenes[idx].get("requires_3d")),
-                idx,
-            ),
-        )
-        keep = set(ranked[:_MAX_CUSTOM_SCENES])
-        for idx in custom_indices:
-            if idx in keep:
-                continue
-            scene = scenes[idx]
-            scene["type"] = "concept_scene"
-            scene["visual_mode"] = "code" if scene.get("code_snippet") else "diagram"
-            scene["essential_visual"] = bool(scene.get("code_snippet"))
-            for field in (
-                "manim_script",
-                "manim_script_ref",
-                "manim_body",
-                "manim_body_ref",
-                "code_goal",
-                "requires_3d",
-            ):
-                scene.pop(field, None)
 
     return {
         "title": title,
@@ -1493,26 +1404,6 @@ def _apply_local_plan_quality_fixes(plan: dict[str, Any], *, topic: str) -> list
                 scene["visual_mode"] = "diagram"
             fixes.append(f"Scene {index}: converted a later title card into a teaching scene.")
 
-        # A comparison supported only by two category names leaves the narration visually empty.
-        # Derive concise comparison takeaways locally when the model omitted KEY_POINT values.
-        if (
-            scene.get("type") == "comparison_scene"
-            and not [value for value in (scene.get("key_points") or []) if str(value).strip()]
-            and str(scene.get("narration") or "").strip()
-        ):
-            points = _derive_display_points(scene.get("narration"), limit=3)
-            if points:
-                scene["key_points"] = points
-                fixes.append(
-                    f"Scene {index}: derived visible comparison points from the narration."
-                )
-
-        # Standard components need at least one visible idea, but this never affects custom code.
-        if scene.get("type") != "custom_manim_scene" and index > 1 and not _scene_has_standard_visible_content(scene):
-            points = _derive_display_points(scene.get("narration"), limit=3)
-            if points:
-                scene["key_points"] = points
-                fixes.append(f"Scene {index}: derived visible text for the standard renderer.")
     return fixes
 
 def _inherit_missing_scene_fields(

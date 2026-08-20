@@ -1,0 +1,1020 @@
+
+> upcurved-desktop@1.0.0 desktop:prepare:python
+> node desktop/scripts/prepare-python-runtime.cjs
+
+[desktop] preparing bundled Python runtime with 'python3.12'
+[desktop] cleared copied build-machine site-packages: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/site-packages
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Python (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Python (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3 (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3 (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3 (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3 (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3-intel64 (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12 (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12 (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12 (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12 (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12-intel64 (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Resources/Python.app/Contents/MacOS/Python (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Resources/Python.app/Contents/MacOS/Python (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Resources/Python.app/Contents/MacOS/Python (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Resources/Python.app/Contents/MacOS/Python (for architecture arm64)
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Python: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3-intel64: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3.12-intel64: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Resources/Python.app/Contents/MacOS/Python: replacing existing signature
+[desktop] patched 12 macOS Python framework link(s) and ad-hoc signed 8 modified binary/binaries
+Looking in links: /var/folders/td/bl53m3795jddfk6py9kdy83c0000gn/T/tmpav_7fcxp
+Processing /var/folders/td/bl53m3795jddfk6py9kdy83c0000gn/T/tmpav_7fcxp/pip-24.3.1-py3-none-any.whl
+Installing collected packages: pip
+Successfully installed pip-24.3.1
+Requirement already satisfied: pip in ./desktop/python-runtime/python/lib/python3.12/site-packages (24.3.1)
+Collecting pip
+  Using cached pip-26.2.1-py3-none-any.whl.metadata (4.6 kB)
+Collecting wheel
+  Using cached wheel-0.48.0-py3-none-any.whl.metadata (2.3 kB)
+Collecting packaging>=24.0 (from wheel)
+  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Using cached pip-26.2.1-py3-none-any.whl (1.8 MB)
+Using cached wheel-0.48.0-py3-none-any.whl (33 kB)
+Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Installing collected packages: pip, packaging, wheel
+  Attempting uninstall: pip
+    Found existing installation: pip 24.3.1
+    Uninstalling pip-24.3.1:
+      Successfully uninstalled pip-24.3.1
+Successfully installed packaging-26.3 pip-26.2.1 wheel-0.48.0
+[desktop] installing 25 Python dependencies declared by backend/pyproject.toml
+Collecting fastapi<1.0.0,>=0.111.0
+  Downloading fastapi-0.141.1-py3-none-any.whl.metadata (27 kB)
+Collecting uvicorn<1.0.0,>=0.30.0 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading uvicorn-0.52.4-py3-none-any.whl.metadata (6.6 kB)
+Collecting pydantic<3.0.0,>=2.7.0
+  Downloading pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
+Collecting manim>=0.19.0
+  Downloading manim-0.21.0-py3-none-any.whl.metadata (10 kB)
+Collecting manim-voiceover==0.4.0 (from manim-voiceover[gtts]==0.4.0)
+  Downloading manim_voiceover-0.4.0-py3-none-any.whl.metadata (5.9 kB)
+Collecting edge-tts>=7.0.0
+  Downloading edge_tts-7.2.8-py3-none-any.whl.metadata (5.5 kB)
+Collecting gTTS>=2.5.1
+  Downloading gTTS-2.5.4-py3-none-any.whl.metadata (4.1 kB)
+Collecting setuptools<81,>=68
+  Downloading setuptools-80.10.2-py3-none-any.whl.metadata (6.6 kB)
+Collecting langgraph>=0.6.10
+  Downloading langgraph-1.2.11-py3-none-any.whl.metadata (4.9 kB)
+Collecting tiktoken
+  Downloading tiktoken-0.14.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (6.7 kB)
+Collecting chromadb>=0.4.0
+  Downloading chromadb-1.5.9-cp39-abi3-macosx_11_0_arm64.whl.metadata (5.0 kB)
+Collecting httpx>=0.27.0
+  Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+Collecting anthropic>=0.29.0
+  Downloading anthropic-0.125.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting google-generativeai>=0.7.2
+  Downloading google_generativeai-0.8.6-py3-none-any.whl.metadata (3.9 kB)
+Collecting mcp>=1.2.0
+  Downloading mcp-2.0.0-py3-none-any.whl.metadata (7.7 kB)
+Collecting langdetect>=1.0.9
+  Downloading langdetect-1.0.9.tar.gz (981 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 981.5/981.5 kB 39.5 MB/s  0:00:00
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting mutagen>=1.47.0
+  Downloading mutagen-1.48.1-py3-none-any.whl.metadata (1.8 kB)
+Collecting firebase-admin>=6.5.0
+  Downloading firebase_admin-7.5.0-py3-none-any.whl.metadata (1.8 kB)
+Collecting google-cloud-firestore>=2.16.0
+  Downloading google_cloud_firestore-2.28.1-py3-none-any.whl.metadata (9.5 kB)
+Collecting google-cloud-storage>=2.18.0
+  Downloading google_cloud_storage-3.13.1-py3-none-any.whl.metadata (14 kB)
+Collecting json5>=0.9.24
+  Downloading json5-0.15.0-py3-none-any.whl.metadata (37 kB)
+Collecting fastmcp>=0.1.0
+  Downloading fastmcp-3.4.7-py3-none-any.whl.metadata (8.5 kB)
+Collecting playwright>=1.52.0
+  Downloading playwright-1.62.0-py3-none-macosx_11_0_arm64.whl.metadata (3.3 kB)
+Collecting pyflakes>=3.2.0
+  Downloading pyflakes-3.4.0-py2.py3-none-any.whl.metadata (3.5 kB)
+Collecting imageio-ffmpeg>=0.6.0
+  Downloading imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl.metadata (1.5 kB)
+Requirement already satisfied: pip>=26.1.2 in ./desktop/python-runtime/python/lib/python3.12/site-packages (from manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0) (26.2.1)
+Collecting pydub<0.26,>=0.25.1 (from manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0)
+  Downloading pydub-0.25.1-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting python-dotenv<2,>=1.2.2 (from manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0)
+  Downloading python_dotenv-1.2.3-py3-none-any.whl.metadata (29 kB)
+Collecting python-slugify<9,>=8.0.1 (from manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0)
+  Downloading python_slugify-8.0.4-py2.py3-none-any.whl.metadata (8.5 kB)
+Collecting sox<2,>=1.4.1 (from manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0)
+  Downloading sox-1.5.0.tar.gz (63 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting starlette>=0.46.0 (from fastapi<1.0.0,>=0.111.0)
+  Downloading starlette-1.6.0-py3-none-any.whl.metadata (6.4 kB)
+Collecting typing-extensions>=4.8.0 (from fastapi<1.0.0,>=0.111.0)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting typing-inspection>=0.4.2 (from fastapi<1.0.0,>=0.111.0)
+  Downloading typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
+Collecting annotated-doc>=0.0.2 (from fastapi<1.0.0,>=0.111.0)
+  Downloading annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
+Collecting click>=7.0 (from uvicorn<1.0.0,>=0.30.0->uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading click-8.4.2-py3-none-any.whl.metadata (2.6 kB)
+Collecting h11>=0.8 (from uvicorn<1.0.0,>=0.30.0->uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+Collecting annotated-types>=0.6.0 (from pydantic<3.0.0,>=2.7.0)
+  Downloading annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+Collecting pydantic-core==2.46.4 (from pydantic<3.0.0,>=2.7.0)
+  Downloading pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl.metadata (6.6 kB)
+Collecting requests<3,>=2.27 (from gTTS>=2.5.1)
+  Downloading requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+Collecting click>=7.0 (from uvicorn<1.0.0,>=0.30.0->uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading click-8.1.8-py3-none-any.whl.metadata (2.3 kB)
+Collecting text-unidecode>=1.3 (from python-slugify<9,>=8.0.1->manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0)
+  Downloading text_unidecode-1.3-py2.py3-none-any.whl.metadata (2.4 kB)
+Collecting charset_normalizer<4,>=2 (from requests<3,>=2.27->gTTS>=2.5.1)
+  Downloading charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl.metadata (45 kB)
+Collecting idna<4,>=2.5 (from requests<3,>=2.27->gTTS>=2.5.1)
+  Downloading idna-3.19-py3-none-any.whl.metadata (9.2 kB)
+Collecting urllib3<3,>=1.26 (from requests<3,>=2.27->gTTS>=2.5.1)
+  Downloading urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+Collecting certifi>=2023.5.7 (from requests<3,>=2.27->gTTS>=2.5.1)
+  Downloading certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+Collecting numpy>=1.9.0 (from sox<2,>=1.4.1->manim-voiceover==0.4.0->manim-voiceover[gtts]==0.4.0)
+  Downloading numpy-2.5.2-cp312-cp312-macosx_14_0_arm64.whl.metadata (6.6 kB)
+Collecting httptools>=0.8.0 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading httptools-0.8.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (3.5 kB)
+Collecting pyyaml>=5.1 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading pyyaml-6.0.3-cp312-cp312-macosx_11_0_arm64.whl.metadata (2.4 kB)
+Collecting uvloop>=0.15.1 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading uvloop-0.22.1-cp312-cp312-macosx_10_13_universal2.whl.metadata (4.9 kB)
+Collecting watchfiles>=0.20 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading watchfiles-1.2.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (4.9 kB)
+Collecting websockets>=13.0 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading websockets-17.0.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (6.3 kB)
+Collecting av>=15.0 (from manim>=0.19.0)
+  Downloading av-18.1.0-cp311-abi3-macosx_14_0_arm64.whl.metadata (5.0 kB)
+Collecting beautifulsoup4>=4.12 (from manim>=0.19.0)
+  Downloading beautifulsoup4-4.15.0-py3-none-any.whl.metadata (3.8 kB)
+Collecting cloup>=2.0.0 (from manim>=0.19.0)
+  Downloading cloup-3.1.0-py2.py3-none-any.whl.metadata (6.4 kB)
+Collecting decorator>=4.3.2 (from manim>=0.19.0)
+  Downloading decorator-5.3.1-py3-none-any.whl.metadata (3.9 kB)
+Collecting isosurfaces>=0.1.1 (from manim>=0.19.0)
+  Downloading isosurfaces-0.1.2-py3-none-any.whl.metadata (3.3 kB)
+Collecting manimpango<1.0.0,>=0.6.1 (from manim>=0.19.0)
+  Downloading manimpango-0.6.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (8.2 kB)
+Collecting mapbox-earcut>=1.0.0 (from manim>=0.19.0)
+  Downloading mapbox_earcut-2.0.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (2.5 kB)
+Collecting moderngl-window>=2.0.0 (from manim>=0.19.0)
+  Downloading moderngl_window-3.1.1-py3-none-any.whl.metadata (9.0 kB)
+Collecting moderngl<6.0.0,>=5.7.0 (from manim>=0.19.0)
+  Downloading moderngl-5.12.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (7.8 kB)
+Collecting networkx>=2.6 (from manim>=0.19.0)
+  Downloading networkx-3.6.1-py3-none-any.whl.metadata (6.8 kB)
+Collecting pillow>=11.0 (from manim>=0.19.0)
+  Downloading pillow-12.3.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (9.1 kB)
+Collecting pycairo<2.0.0,>=1.14 (from manim>=0.19.0)
+  Downloading pycairo-1.29.1.tar.gz (666 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 666.3/666.3 kB 42.4 MB/s  0:00:00
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting pygments>=2.17 (from manim>=0.19.0)
+  Downloading pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting rich>=12.0.0 (from manim>=0.19.0)
+  Downloading rich-15.0.0-py3-none-any.whl.metadata (18 kB)
+Collecting scipy>=1.13.0 (from manim>=0.19.0)
+  Downloading scipy-1.18.0-cp312-cp312-macosx_14_0_arm64.whl.metadata (62 kB)
+Collecting screeninfo>=0.7.0 (from manim>=0.19.0)
+  Downloading screeninfo-0.8.1-py3-none-any.whl.metadata (2.9 kB)
+Collecting skia-pathops>=0.9.0 (from manim>=0.19.0)
+  Downloading skia_pathops-0.9.2-cp310-abi3-macosx_10_9_universal2.whl.metadata (2.5 kB)
+Collecting srt>=3.0.0 (from manim>=0.19.0)
+  Downloading srt-3.5.3.tar.gz (28 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting svgelements>=1.9.0 (from manim>=0.19.0)
+  Downloading svgelements-1.9.6-py2.py3-none-any.whl.metadata (44 kB)
+Collecting tqdm>=4.21.0 (from manim>=0.19.0)
+  Downloading tqdm-4.70.0-py3-none-any.whl.metadata (57 kB)
+Collecting watchdog>=2.0.0 (from manim>=0.19.0)
+  Downloading watchdog-6.0.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (44 kB)
+Collecting glcontext>=3.0.0 (from moderngl<6.0.0,>=5.7.0->manim>=0.19.0)
+  Downloading glcontext-3.0.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (6.0 kB)
+Collecting aiohttp<4.0.0,>=3.8.0 (from edge-tts>=7.0.0)
+  Downloading aiohttp-3.14.3-cp312-cp312-macosx_11_0_arm64.whl.metadata (8.3 kB)
+Collecting tabulate<1.0.0,>=0.4.4 (from edge-tts>=7.0.0)
+  Downloading tabulate-0.10.0-py3-none-any.whl.metadata (40 kB)
+Collecting aiohappyeyeballs>=2.5.0 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl.metadata (5.9 kB)
+Collecting aiosignal>=1.4.0 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
+Collecting attrs>=17.3.0 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+Collecting frozenlist>=1.1.1 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (20 kB)
+Collecting multidict<7.0,>=4.5 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading multidict-6.7.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (5.3 kB)
+Collecting propcache>=0.2.0 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading propcache-0.5.2-cp312-cp312-macosx_11_0_arm64.whl.metadata (16 kB)
+Collecting yarl<2.0,>=1.17.0 (from aiohttp<4.0.0,>=3.8.0->edge-tts>=7.0.0)
+  Downloading yarl-1.24.5-cp312-cp312-macosx_11_0_arm64.whl.metadata (103 kB)
+Collecting langchain-core<2,>=1.4.7 (from langgraph>=0.6.10)
+  Downloading langchain_core-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting langgraph-checkpoint<5.0.0,>=4.1.0 (from langgraph>=0.6.10)
+  Downloading langgraph_checkpoint-4.2.0-py3-none-any.whl.metadata (6.7 kB)
+Collecting langgraph-prebuilt<1.2.0,>=1.1.0 (from langgraph>=0.6.10)
+  Downloading langgraph_prebuilt-1.1.0-py3-none-any.whl.metadata (5.2 kB)
+Collecting langgraph-sdk<0.5.0,>=0.4.2 (from langgraph>=0.6.10)
+  Downloading langgraph_sdk-0.4.3-py3-none-any.whl.metadata (5.1 kB)
+Collecting xxhash>=3.5.0 (from langgraph>=0.6.10)
+  Downloading xxhash-4.0.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (17 kB)
+Collecting jsonpatch<2.0.0,>=1.33.0 (from langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading jsonpatch-1.33-py2.py3-none-any.whl.metadata (3.0 kB)
+Collecting langchain-protocol>=0.0.17 (from langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading langchain_protocol-0.0.18-py3-none-any.whl.metadata (2.4 kB)
+Collecting langsmith<1.0.0,>=0.3.45 (from langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading langsmith-0.11.1-py3-none-any.whl.metadata (22 kB)
+Requirement already satisfied: packaging>=23.2.0 in ./desktop/python-runtime/python/lib/python3.12/site-packages (from langchain-core<2,>=1.4.7->langgraph>=0.6.10) (26.3)
+Collecting tenacity!=8.4.0,<10.0.0,>=8.1.0 (from langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading tenacity-9.1.4-py3-none-any.whl.metadata (1.2 kB)
+Collecting uuid-utils<1.0,>=0.12.0 (from langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading uuid_utils-0.17.0-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl.metadata (6.4 kB)
+Collecting anyio (from httpx>=0.27.0)
+  Downloading anyio-4.14.2-py3-none-any.whl.metadata (4.6 kB)
+Collecting httpcore==1.* (from httpx>=0.27.0)
+  Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+Collecting jsonpointer>=1.9 (from jsonpatch<2.0.0,>=1.33.0->langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading jsonpointer-3.1.1-py3-none-any.whl.metadata (2.4 kB)
+Collecting ormsgpack>=1.12.0 (from langgraph-checkpoint<5.0.0,>=4.1.0->langgraph>=0.6.10)
+  Downloading ormsgpack-1.12.2-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl.metadata (3.2 kB)
+Collecting orjson>=3.11.5 (from langgraph-sdk<0.5.0,>=0.4.2->langgraph>=0.6.10)
+  Downloading orjson-3.12.0-cp312-cp312-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl.metadata (41 kB)
+Collecting websockets>=13.0 (from uvicorn[standard]<1.0.0,>=0.30.0)
+  Downloading websockets-16.1.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (6.8 kB)
+Collecting distro>=1.7.0 (from langsmith<1.0.0,>=0.3.45->langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading distro-1.9.0-py3-none-any.whl.metadata (6.8 kB)
+Collecting requests-toolbelt>=1.0.0 (from langsmith<1.0.0,>=0.3.45->langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading requests_toolbelt-1.0.0-py2.py3-none-any.whl.metadata (14 kB)
+Collecting sniffio>=1.1 (from langsmith<1.0.0,>=0.3.45->langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading sniffio-1.3.1-py3-none-any.whl.metadata (3.9 kB)
+Collecting zstandard>=0.23.0 (from langsmith<1.0.0,>=0.3.45->langchain-core<2,>=1.4.7->langgraph>=0.6.10)
+  Downloading zstandard-0.25.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (3.3 kB)
+Collecting regex (from tiktoken)
+  Downloading regex-2026.7.19-cp312-cp312-macosx_11_0_arm64.whl.metadata (40 kB)
+Collecting build>=1.0.3 (from chromadb>=0.4.0)
+  Downloading build-1.5.0-py3-none-any.whl.metadata (5.7 kB)
+Collecting pydantic-settings>=2.0 (from chromadb>=0.4.0)
+  Downloading pydantic_settings-2.15.0-py3-none-any.whl.metadata (3.9 kB)
+Collecting pybase64>=1.4.1 (from chromadb>=0.4.0)
+  Downloading pybase64-1.5.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (11 kB)
+Collecting onnxruntime>=1.14.1 (from chromadb>=0.4.0)
+  Downloading onnxruntime-1.29.0-cp312-cp312-macosx_14_0_arm64.whl.metadata (5.6 kB)
+Collecting opentelemetry-api>=1.2.0 (from chromadb>=0.4.0)
+  Downloading opentelemetry_api-1.44.0-py3-none-any.whl.metadata (1.4 kB)
+Collecting opentelemetry-exporter-otlp-proto-grpc>=1.2.0 (from chromadb>=0.4.0)
+  Downloading opentelemetry_exporter_otlp_proto_grpc-1.44.0-py3-none-any.whl.metadata (2.6 kB)
+Collecting opentelemetry-sdk>=1.2.0 (from chromadb>=0.4.0)
+  Downloading opentelemetry_sdk-1.44.0-py3-none-any.whl.metadata (1.6 kB)
+Collecting tokenizers>=0.13.2 (from chromadb>=0.4.0)
+  Downloading tokenizers-0.23.1-cp310-abi3-macosx_11_0_arm64.whl.metadata (9.8 kB)
+Collecting pypika>=0.48.9 (from chromadb>=0.4.0)
+  Downloading pypika-0.51.1-py2.py3-none-any.whl.metadata (51 kB)
+Collecting overrides>=7.3.1 (from chromadb>=0.4.0)
+  Downloading overrides-7.7.0-py3-none-any.whl.metadata (5.8 kB)
+Collecting importlib-resources (from chromadb>=0.4.0)
+  Downloading importlib_resources-7.1.0-py3-none-any.whl.metadata (4.0 kB)
+Collecting grpcio>=1.58.0 (from chromadb>=0.4.0)
+  Downloading grpcio-1.83.0-cp312-cp312-macosx_11_0_universal2.whl.metadata (3.7 kB)
+Collecting bcrypt>=4.0.1 (from chromadb>=0.4.0)
+  Downloading bcrypt-5.0.0-cp39-abi3-macosx_10_12_universal2.whl.metadata (10 kB)
+Collecting typer>=0.9.0 (from chromadb>=0.4.0)
+  Downloading typer-0.27.1-py3-none-any.whl.metadata (16 kB)
+Collecting kubernetes>=28.1.0 (from chromadb>=0.4.0)
+  Downloading kubernetes-36.0.3-py2.py3-none-any.whl.metadata (1.8 kB)
+Collecting mmh3>=4.0.1 (from chromadb>=0.4.0)
+  Downloading mmh3-5.2.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (14 kB)
+Collecting jsonschema>=4.19.0 (from chromadb>=0.4.0)
+  Downloading jsonschema-4.26.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting docstring-parser<1,>=0.15 (from anthropic>=0.29.0)
+  Downloading docstring_parser-0.18.0-py3-none-any.whl.metadata (3.5 kB)
+Collecting jiter<1,>=0.4.0 (from anthropic>=0.29.0)
+  Downloading jiter-0.16.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (5.2 kB)
+Collecting google-ai-generativelanguage==0.6.15 (from google-generativeai>=0.7.2)
+  Downloading google_ai_generativelanguage-0.6.15-py3-none-any.whl.metadata (5.7 kB)
+Collecting google-api-core (from google-generativeai>=0.7.2)
+  Downloading google_api_core-2.34.0-py3-none-any.whl.metadata (2.9 kB)
+Collecting google-api-python-client (from google-generativeai>=0.7.2)
+  Downloading google_api_python_client-2.198.0-py3-none-any.whl.metadata (7.0 kB)
+Collecting google-auth>=2.15.0 (from google-generativeai>=0.7.2)
+  Downloading google_auth-2.56.3-py3-none-any.whl.metadata (6.0 kB)
+Collecting protobuf (from google-generativeai>=0.7.2)
+  Downloading protobuf-7.35.1-cp310-abi3-macosx_10_9_universal2.whl.metadata (595 bytes)
+Collecting proto-plus<2.0.0dev,>=1.22.3 (from google-ai-generativelanguage==0.6.15->google-generativeai>=0.7.2)
+  Downloading proto_plus-1.28.3-py3-none-any.whl.metadata (2.2 kB)
+Collecting protobuf (from google-generativeai>=0.7.2)
+  Downloading protobuf-5.29.6-cp38-abi3-macosx_10_9_universal2.whl.metadata (592 bytes)
+Collecting googleapis-common-protos<2.0.0,>=1.69.2 (from google-api-core->google-generativeai>=0.7.2)
+  Downloading googleapis_common_protos-1.75.1-py3-none-any.whl.metadata (8.5 kB)
+INFO: pip is looking at multiple versions of google-api-core to determine which version is compatible with other requirements. This could take a while.
+Collecting google-api-core (from google-generativeai>=0.7.2)
+  Downloading google_api_core-2.33.0-py3-none-any.whl.metadata (3.2 kB)
+INFO: pip is looking at multiple versions of google-api-core[grpc] to determine which version is compatible with other requirements. This could take a while.
+Collecting grpcio-status<2.0.0,>=1.41.0 (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0dev,>=1.34.1->google-ai-generativelanguage==0.6.15->google-generativeai>=0.7.2)
+  Downloading grpcio_status-1.83.0-py3-none-any.whl.metadata (1.2 kB)
+Collecting pyasn1-modules>=0.2.1 (from google-auth>=2.15.0->google-generativeai>=0.7.2)
+  Downloading pyasn1_modules-0.4.2-py3-none-any.whl.metadata (3.5 kB)
+Collecting cryptography>=38.0.3 (from google-auth>=2.15.0->google-generativeai>=0.7.2)
+  Downloading cryptography-50.0.0-cp311-abi3-macosx_11_0_arm64.whl.metadata (4.3 kB)
+INFO: pip is looking at multiple versions of googleapis-common-protos to determine which version is compatible with other requirements. This could take a while.
+Collecting googleapis-common-protos<2.0.0,>=1.63.2 (from google-api-core->google-generativeai>=0.7.2)
+  Downloading googleapis_common_protos-1.75.0-py3-none-any.whl.metadata (8.6 kB)
+INFO: pip is looking at multiple versions of grpcio-status to determine which version is compatible with other requirements. This could take a while.
+Collecting grpcio-status<2.0.0,>=1.41.0 (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0dev,>=1.34.1->google-ai-generativelanguage==0.6.15->google-generativeai>=0.7.2)
+  Downloading grpcio_status-1.82.1-py3-none-any.whl.metadata (1.2 kB)
+  Downloading grpcio_status-1.81.1-py3-none-any.whl.metadata (1.2 kB)
+  Downloading grpcio_status-1.81.0-py3-none-any.whl.metadata (1.2 kB)
+  Downloading grpcio_status-1.80.0-py3-none-any.whl.metadata (1.3 kB)
+  Downloading grpcio_status-1.78.0-py3-none-any.whl.metadata (1.3 kB)
+  Downloading grpcio_status-1.76.0-py3-none-any.whl.metadata (1.1 kB)
+  Downloading grpcio_status-1.75.1-py3-none-any.whl.metadata (1.1 kB)
+INFO: pip is still looking at multiple versions of grpcio-status to determine which version is compatible with other requirements. This could take a while.
+  Downloading grpcio_status-1.75.0-py3-none-any.whl.metadata (1.1 kB)
+  Downloading grpcio_status-1.74.0-py3-none-any.whl.metadata (1.1 kB)
+  Downloading grpcio_status-1.73.1-py3-none-any.whl.metadata (1.1 kB)
+  Downloading grpcio_status-1.73.0-py3-none-any.whl.metadata (1.1 kB)
+  Downloading grpcio_status-1.72.2-py3-none-any.whl.metadata (1.1 kB)
+INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
+  Downloading grpcio_status-1.72.1-py3-none-any.whl.metadata (1.1 kB)
+  Downloading grpcio_status-1.71.2-py3-none-any.whl.metadata (1.1 kB)
+INFO: pip is looking at multiple versions of proto-plus to determine which version is compatible with other requirements. This could take a while.
+Collecting proto-plus<2.0.0dev,>=1.22.3 (from google-ai-generativelanguage==0.6.15->google-generativeai>=0.7.2)
+  Downloading proto_plus-1.28.2-py3-none-any.whl.metadata (2.2 kB)
+Collecting httpx2>=2.5.0 (from mcp>=1.2.0)
+  Downloading httpx2-2.12.0-py3-none-any.whl.metadata (9.5 kB)
+Collecting mcp-types==2.0.0 (from mcp>=1.2.0)
+  Downloading mcp_types-2.0.0-py3-none-any.whl.metadata (1.9 kB)
+Collecting pyjwt>=2.10.1 (from pyjwt[crypto]>=2.10.1->mcp>=1.2.0)
+  Downloading pyjwt-2.13.0-py3-none-any.whl.metadata (3.4 kB)
+Collecting python-multipart>=0.0.9 (from mcp>=1.2.0)
+  Downloading python_multipart-0.0.32-py3-none-any.whl.metadata (2.1 kB)
+Collecting sse-starlette>=3.0.0 (from mcp>=1.2.0)
+  Downloading sse_starlette-3.4.8-py3-none-any.whl.metadata (15 kB)
+Collecting six (from langdetect>=1.0.9)
+  Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+Collecting cachecontrol>=0.14.3 (from firebase-admin>=6.5.0)
+  Downloading cachecontrol-0.14.4-py3-none-any.whl.metadata (3.1 kB)
+Collecting h2<5,>=3 (from httpx[http2]==0.28.1->firebase-admin>=6.5.0)
+  Downloading h2-4.4.1-py3-none-any.whl.metadata (3.8 kB)
+Collecting hyperframe<7,>=6.1 (from h2<5,>=3->httpx[http2]==0.28.1->firebase-admin>=6.5.0)
+  Downloading hyperframe-6.1.0-py3-none-any.whl.metadata (4.3 kB)
+Collecting hpack<5,>=4.2 (from h2<5,>=3->httpx[http2]==0.28.1->firebase-admin>=6.5.0)
+  Downloading hpack-4.2.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting google-cloud-core<3.0.0,>=2.0.0 (from google-cloud-firestore>=2.16.0)
+  Downloading google_cloud_core-2.6.1-py3-none-any.whl.metadata (2.8 kB)
+INFO: pip is looking at multiple versions of google-cloud-firestore to determine which version is compatible with other requirements. This could take a while.
+Collecting google-cloud-firestore>=2.16.0
+  Downloading google_cloud_firestore-2.28.0-py3-none-any.whl.metadata (9.5 kB)
+  Downloading google_cloud_firestore-2.27.0-py3-none-any.whl.metadata (10.0 kB)
+Collecting google-resumable-media<3.0.0,>=2.7.2 (from google-cloud-storage>=2.18.0)
+  Downloading google_resumable_media-2.10.1-py3-none-any.whl.metadata (2.2 kB)
+Collecting google-crc32c<2.0.0,>=1.6.0 (from google-cloud-storage>=2.18.0)
+  Downloading google_crc32c-1.8.0-cp312-cp312-macosx_12_0_arm64.whl.metadata (1.7 kB)
+Collecting fastmcp-slim==3.4.7 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading fastmcp_slim-3.4.7-py3-none-any.whl.metadata (10 kB)
+Collecting platformdirs>=4.0.0 (from fastmcp-slim==3.4.7->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading platformdirs-4.11.3-py3-none-any.whl.metadata (5.5 kB)
+Collecting authlib>=1.6.11 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading authlib-1.7.2-py2.py3-none-any.whl.metadata (10 kB)
+Collecting exceptiongroup>=1.2.2 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading exceptiongroup-1.3.1-py3-none-any.whl.metadata (6.7 kB)
+Collecting mcp>=1.2.0
+  Downloading mcp-1.29.0-py3-none-any.whl.metadata (9.3 kB)
+Collecting py-key-value-aio<0.5.0,>=0.4.4 (from py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading py_key_value_aio-0.4.5-py3-none-any.whl.metadata (16 kB)
+Collecting cyclopts>=4.0.0 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading cyclopts-4.23.0-py3-none-any.whl.metadata (12 kB)
+Collecting griffelib>=2.0.0 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading griffelib-2.2.0-py3-none-any.whl.metadata (1.3 kB)
+Collecting joserfc>=1.1.0 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading joserfc-1.7.4-py3-none-any.whl.metadata (3.1 kB)
+Collecting jsonref>=1.1.0 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading jsonref-1.1.0-py3-none-any.whl.metadata (2.7 kB)
+Collecting jsonschema-path>=0.3.4 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading jsonschema_path-0.5.0-py3-none-any.whl.metadata (8.1 kB)
+Collecting openapi-pydantic>=0.5.1 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading openapi_pydantic-0.5.1-py3-none-any.whl.metadata (10 kB)
+Collecting pyperclip>=1.9.0 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading pyperclip-1.11.0-py3-none-any.whl.metadata (2.4 kB)
+Collecting uncalled-for>=0.2.0 (from fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading uncalled_for-0.4.0-py3-none-any.whl.metadata (4.4 kB)
+Collecting httpx-sse>=0.4 (from mcp>=1.2.0)
+  Downloading httpx_sse-0.4.3-py3-none-any.whl.metadata (9.7 kB)
+Collecting beartype>=0.20.0 (from py-key-value-aio<0.5.0,>=0.4.4->py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading beartype-0.22.9-py3-none-any.whl.metadata (37 kB)
+Collecting aiofile>=3.5.0 (from py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading aiofile-3.12.3-py3-none-any.whl.metadata (17 kB)
+Collecting keyring>=25.6.0 (from py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading keyring-25.7.0-py3-none-any.whl.metadata (21 kB)
+Collecting cachetools>=5.0.0 (from py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading cachetools-7.1.7-py3-none-any.whl.metadata (5.5 kB)
+Collecting pyee<14,>=13 (from playwright>=1.52.0)
+  Downloading pyee-13.0.1-py3-none-any.whl.metadata (3.0 kB)
+Collecting greenlet<4.0.0,>=3.1.1 (from playwright>=1.52.0)
+  Downloading greenlet-3.5.5-cp312-cp312-macosx_11_0_universal2.whl.metadata (3.8 kB)
+Collecting caio~=0.12.0 (from aiofile>=3.5.0->py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading caio-0.12.2-cp312-cp312-macosx_10_13_universal2.whl.metadata (4.5 kB)
+Collecting soupsieve>=1.6.1 (from beautifulsoup4>=4.12->manim>=0.19.0)
+  Downloading soupsieve-2.9.2-py3-none-any.whl.metadata (4.6 kB)
+Collecting pyproject_hooks (from build>=1.0.3->chromadb>=0.4.0)
+  Downloading pyproject_hooks-1.2.0-py3-none-any.whl.metadata (1.3 kB)
+Collecting msgpack<2.0.0,>=0.5.2 (from cachecontrol>=0.14.3->firebase-admin>=6.5.0)
+  Downloading msgpack-1.2.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (8.3 kB)
+Collecting cffi>=2.0.0 (from cryptography>=38.0.3->google-auth>=2.15.0->google-generativeai>=0.7.2)
+  Downloading cffi-2.1.1-cp312-cp312-macosx_11_0_arm64.whl.metadata (2.5 kB)
+Collecting pycparser (from cffi>=2.0.0->cryptography>=38.0.3->google-auth>=2.15.0->google-generativeai>=0.7.2)
+  Downloading pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+Collecting rich-rst<3.0.0,>=1.3.1 (from cyclopts>=4.0.0->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading rich_rst-2.1.0-py3-none-any.whl.metadata (4.7 kB)
+Collecting jsonschema-specifications>=2023.03.6 (from jsonschema>=4.19.0->chromadb>=0.4.0)
+  Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl.metadata (2.9 kB)
+Collecting referencing>=0.28.4 (from jsonschema>=4.19.0->chromadb>=0.4.0)
+  Downloading referencing-0.37.0-py3-none-any.whl.metadata (2.8 kB)
+Collecting rpds-py>=0.25.0 (from jsonschema>=4.19.0->chromadb>=0.4.0)
+  Downloading rpds_py-2026.6.3-cp312-cp312-macosx_11_0_arm64.whl.metadata (4.1 kB)
+Collecting pathable<0.7.0,>=0.6.0 (from jsonschema-path>=0.3.4->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading pathable-0.6.0-py3-none-any.whl.metadata (7.2 kB)
+Collecting jaraco.classes (from keyring>=25.6.0->py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading jaraco.classes-3.4.0-py3-none-any.whl.metadata (2.6 kB)
+Collecting jaraco.functools (from keyring>=25.6.0->py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading jaraco_functools-4.6.0-py3-none-any.whl.metadata (2.9 kB)
+Collecting jaraco.context (from keyring>=25.6.0->py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading jaraco_context-6.1.2-py3-none-any.whl.metadata (4.2 kB)
+Collecting python-dateutil>=2.5.3 (from kubernetes>=28.1.0->chromadb>=0.4.0)
+  Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+Collecting websocket-client!=0.40.0,!=0.41.*,!=0.42.*,>=0.32.0 (from kubernetes>=28.1.0->chromadb>=0.4.0)
+  Downloading websocket_client-1.9.0-py3-none-any.whl.metadata (8.3 kB)
+Collecting requests-oauthlib (from kubernetes>=28.1.0->chromadb>=0.4.0)
+  Downloading requests_oauthlib-2.0.0-py2.py3-none-any.whl.metadata (11 kB)
+Collecting durationpy>=0.7 (from kubernetes>=28.1.0->chromadb>=0.4.0)
+  Downloading durationpy-0.10-py3-none-any.whl.metadata (340 bytes)
+Collecting pyglet>=2.0.0 (from moderngl-window>=2.0.0->manim>=0.19.0)
+  Downloading pyglet-2.1.16-py3-none-any.whl.metadata (8.0 kB)
+Collecting pyglm<3,>=2.7.0 (from moderngl-window>=2.0.0->manim>=0.19.0)
+  Downloading pyglm-2.8.3-cp312-cp312-macosx_11_0_arm64.whl.metadata (13 kB)
+Collecting flatbuffers (from onnxruntime>=1.14.1->chromadb>=0.4.0)
+  Downloading flatbuffers-25.12.19-py2.py3-none-any.whl.metadata (1.0 kB)
+Collecting opentelemetry-exporter-otlp-proto-common==1.44.0 (from opentelemetry-exporter-otlp-proto-grpc>=1.2.0->chromadb>=0.4.0)
+  Downloading opentelemetry_exporter_otlp_proto_common-1.44.0-py3-none-any.whl.metadata (1.8 kB)
+Collecting opentelemetry-proto==1.44.0 (from opentelemetry-exporter-otlp-proto-grpc>=1.2.0->chromadb>=0.4.0)
+  Downloading opentelemetry_proto-1.44.0-py3-none-any.whl.metadata (2.3 kB)
+Collecting opentelemetry-semantic-conventions==0.65b0 (from opentelemetry-sdk>=1.2.0->chromadb>=0.4.0)
+  Downloading opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl.metadata (2.4 kB)
+Collecting pyasn1<0.7.0,>=0.6.1 (from pyasn1-modules>=0.2.1->google-auth>=2.15.0->google-generativeai>=0.7.2)
+  Downloading pyasn1-0.6.4-py3-none-any.whl.metadata (8.4 kB)
+Collecting email-validator>=2.0.0 (from pydantic[email]>=2.11.7->fastmcp-slim==3.4.7->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading email_validator-2.3.0-py3-none-any.whl.metadata (26 kB)
+Collecting dnspython>=2.0.0 (from email-validator>=2.0.0->pydantic[email]>=2.11.7->fastmcp-slim==3.4.7->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading dnspython-2.8.0-py3-none-any.whl.metadata (5.7 kB)
+Collecting markdown-it-py>=2.2.0 (from rich>=12.0.0->manim>=0.19.0)
+  Downloading markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=12.0.0->manim>=0.19.0)
+  Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+Collecting Cython (from screeninfo>=0.7.0->manim>=0.19.0)
+  Downloading cython-3.2.9-cp312-cp312-macosx_11_0_arm64.whl.metadata (4.6 kB)
+Collecting pyobjc-framework-Cocoa (from screeninfo>=0.7.0->manim>=0.19.0)
+  Downloading pyobjc_framework_cocoa-12.2.2-cp312-cp312-macosx_10_13_universal2.whl.metadata (2.6 kB)
+Collecting huggingface-hub<2.0,>=0.16.4 (from tokenizers>=0.13.2->chromadb>=0.4.0)
+  Downloading huggingface_hub-1.28.0-py3-none-any.whl.metadata (16 kB)
+INFO: pip is looking at multiple versions of huggingface-hub to determine which version is compatible with other requirements. This could take a while.
+  Downloading huggingface_hub-1.27.0-py3-none-any.whl.metadata (16 kB)
+  Downloading huggingface_hub-1.26.1-py3-none-any.whl.metadata (16 kB)
+  Downloading huggingface_hub-1.26.0-py3-none-any.whl.metadata (16 kB)
+  Downloading huggingface_hub-1.25.1-py3-none-any.whl.metadata (16 kB)
+  Downloading huggingface_hub-1.25.0-py3-none-any.whl.metadata (16 kB)
+  Downloading huggingface_hub-1.24.0-py3-none-any.whl.metadata (16 kB)
+  Downloading huggingface_hub-1.23.0-py3-none-any.whl.metadata (14 kB)
+INFO: pip is still looking at multiple versions of huggingface-hub to determine which version is compatible with other requirements. This could take a while.
+  Downloading huggingface_hub-1.22.0-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.21.0-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.20.1-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.20.0-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.19.0-py3-none-any.whl.metadata (14 kB)
+INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
+  Downloading huggingface_hub-1.18.0-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.17.0-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.16.4-py3-none-any.whl.metadata (14 kB)
+  Downloading huggingface_hub-1.16.1-py3-none-any.whl.metadata (14 kB)
+Collecting filelock>=3.10.0 (from huggingface-hub<2.0,>=0.16.4->tokenizers>=0.13.2->chromadb>=0.4.0)
+  Downloading filelock-3.32.3-py3-none-any.whl.metadata (2.0 kB)
+Collecting fsspec>=2023.5.0 (from huggingface-hub<2.0,>=0.16.4->tokenizers>=0.13.2->chromadb>=0.4.0)
+  Downloading fsspec-2026.7.0-py3-none-any.whl.metadata (10 kB)
+Collecting hf-xet<2.0.0,>=1.4.3 (from huggingface-hub<2.0,>=0.16.4->tokenizers>=0.13.2->chromadb>=0.4.0)
+  Downloading hf_xet-1.6.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (4.9 kB)
+Collecting shellingham>=1.3.0 (from typer>=0.9.0->chromadb>=0.4.0)
+  Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+Collecting httplib2<1.0.0,>=0.19.0 (from google-api-python-client->google-generativeai>=0.7.2)
+  Downloading httplib2-0.32.0-py3-none-any.whl.metadata (2.2 kB)
+Collecting google-auth-httplib2<1.0.0,>=0.2.0 (from google-api-python-client->google-generativeai>=0.7.2)
+  Downloading google_auth_httplib2-0.4.1-py3-none-any.whl.metadata (3.0 kB)
+Collecting uritemplate<5,>=3.0.1 (from google-api-python-client->google-generativeai>=0.7.2)
+  Downloading uritemplate-4.2.0-py3-none-any.whl.metadata (2.6 kB)
+Collecting pyparsing<4,>=3.1 (from httplib2<1.0.0,>=0.19.0->google-api-python-client->google-generativeai>=0.7.2)
+  Downloading pyparsing-3.3.2-py3-none-any.whl.metadata (5.8 kB)
+Collecting httpcore2==2.12.0 (from httpx2>=2.5.0->mcp>=1.2.0)
+  Downloading httpcore2-2.12.0-py3-none-any.whl.metadata (25 kB)
+Collecting truststore>=0.10 (from httpx2>=2.5.0->mcp>=1.2.0)
+  Downloading truststore-0.10.4-py3-none-any.whl.metadata (4.4 kB)
+Collecting more-itertools (from jaraco.classes->keyring>=25.6.0->py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4; extra == "client"->fastmcp-slim[client,server]==3.4.7->fastmcp>=0.1.0)
+  Downloading more_itertools-11.1.0-py3-none-any.whl.metadata (41 kB)
+Collecting pyobjc-core>=12.2.2 (from pyobjc-framework-Cocoa->screeninfo>=0.7.0->manim>=0.19.0)
+  Downloading pyobjc_core-12.2.2-cp312-cp312-macosx_10_13_universal2.whl.metadata (2.8 kB)
+Collecting oauthlib>=3.0.0 (from requests-oauthlib->kubernetes>=28.1.0->chromadb>=0.4.0)
+  Downloading oauthlib-3.3.1-py3-none-any.whl.metadata (7.9 kB)
+Downloading manim_voiceover-0.4.0-py3-none-any.whl (43 kB)
+Downloading fastapi-0.141.1-py3-none-any.whl (131 kB)
+Downloading uvicorn-0.52.4-py3-none-any.whl (79 kB)
+Downloading pydantic-2.13.4-py3-none-any.whl (472 kB)
+Downloading pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl (2.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.0/2.0 MB 187.6 MB/s  0:00:00
+Downloading gTTS-2.5.4-py3-none-any.whl (29 kB)
+Downloading setuptools-80.10.2-py3-none-any.whl (1.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 52.3 MB/s  0:00:00
+Downloading mutagen-1.48.1-py3-none-any.whl (195 kB)
+Downloading click-8.1.8-py3-none-any.whl (98 kB)
+Downloading pydub-0.25.1-py2.py3-none-any.whl (32 kB)
+Downloading python_dotenv-1.2.3-py3-none-any.whl (22 kB)
+Downloading python_slugify-8.0.4-py2.py3-none-any.whl (10 kB)
+Downloading requests-2.34.2-py3-none-any.whl (73 kB)
+Downloading charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl (344 kB)
+Downloading idna-3.19-py3-none-any.whl (68 kB)
+Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
+Downloading manim-0.21.0-py3-none-any.whl (679 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 679.4/679.4 kB 30.8 MB/s  0:00:00
+Downloading manimpango-0.6.1-cp312-cp312-macosx_11_0_arm64.whl (7.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.1/7.1 MB 33.6 MB/s  0:00:00
+Downloading moderngl-5.12.0-cp312-cp312-macosx_11_0_arm64.whl (109 kB)
+Downloading edge_tts-7.2.8-py3-none-any.whl (31 kB)
+Downloading aiohttp-3.14.3-cp312-cp312-macosx_11_0_arm64.whl (511 kB)
+Downloading multidict-6.7.1-cp312-cp312-macosx_11_0_arm64.whl (43 kB)
+Downloading tabulate-0.10.0-py3-none-any.whl (39 kB)
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Downloading yarl-1.24.5-cp312-cp312-macosx_11_0_arm64.whl (97 kB)
+Downloading langgraph-1.2.11-py3-none-any.whl (248 kB)
+Downloading langchain_core-1.6.0-py3-none-any.whl (570 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 570.0/570.0 kB 43.6 MB/s  0:00:00
+Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+Downloading jsonpatch-1.33-py2.py3-none-any.whl (12 kB)
+Downloading langgraph_checkpoint-4.2.0-py3-none-any.whl (56 kB)
+Downloading langgraph_prebuilt-1.1.0-py3-none-any.whl (41 kB)
+Downloading langgraph_sdk-0.4.3-py3-none-any.whl (161 kB)
+Downloading langsmith-0.11.1-py3-none-any.whl (744 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 744.6/744.6 kB 66.8 MB/s  0:00:00
+Downloading pyyaml-6.0.3-cp312-cp312-macosx_11_0_arm64.whl (173 kB)
+Downloading tenacity-9.1.4-py3-none-any.whl (28 kB)
+Downloading uuid_utils-0.17.0-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl (556 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 556.4/556.4 kB 61.9 MB/s  0:00:00
+Downloading websockets-16.1.1-cp312-cp312-macosx_11_0_arm64.whl (177 kB)
+Downloading tiktoken-0.14.0-cp312-cp312-macosx_11_0_arm64.whl (1.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.0/1.0 MB 58.5 MB/s  0:00:00
+Downloading chromadb-1.5.9-cp39-abi3-macosx_11_0_arm64.whl (21.7 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 21.7/21.7 MB 26.0 MB/s  0:00:00
+Downloading anthropic-0.125.0-py3-none-any.whl (1.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 30.5 MB/s  0:00:00
+Downloading anyio-4.14.2-py3-none-any.whl (125 kB)
+Downloading distro-1.9.0-py3-none-any.whl (20 kB)
+Downloading docstring_parser-0.18.0-py3-none-any.whl (22 kB)
+Downloading jiter-0.16.0-cp312-cp312-macosx_11_0_arm64.whl (307 kB)
+Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
+Downloading google_generativeai-0.8.6-py3-none-any.whl (155 kB)
+Downloading google_ai_generativelanguage-0.6.15-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 30.9 MB/s  0:00:00
+Downloading google_api_core-2.33.0-py3-none-any.whl (176 kB)
+Downloading google_auth-2.56.3-py3-none-any.whl (259 kB)
+Downloading googleapis_common_protos-1.75.0-py3-none-any.whl (300 kB)
+Downloading grpcio-1.83.0-cp312-cp312-macosx_11_0_universal2.whl (12.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.2/12.2 MB 39.6 MB/s  0:00:00
+Downloading grpcio_status-1.71.2-py3-none-any.whl (14 kB)
+Downloading proto_plus-1.28.2-py3-none-any.whl (50 kB)
+Downloading protobuf-5.29.6-cp38-abi3-macosx_10_9_universal2.whl (418 kB)
+Downloading firebase_admin-7.5.0-py3-none-any.whl (141 kB)
+Downloading h2-4.4.1-py3-none-any.whl (62 kB)
+Downloading hpack-4.2.0-py3-none-any.whl (34 kB)
+Downloading hyperframe-6.1.0-py3-none-any.whl (13 kB)
+Downloading google_cloud_firestore-2.27.0-py3-none-any.whl (429 kB)
+Downloading google_cloud_core-2.6.1-py3-none-any.whl (29 kB)
+Downloading google_cloud_storage-3.13.1-py3-none-any.whl (341 kB)
+Downloading google_crc32c-1.8.0-cp312-cp312-macosx_12_0_arm64.whl (31 kB)
+Downloading google_resumable_media-2.10.1-py3-none-any.whl (81 kB)
+Downloading json5-0.15.0-py3-none-any.whl (36 kB)
+Downloading fastmcp-3.4.7-py3-none-any.whl (8.0 kB)
+Downloading fastmcp_slim-3.4.7-py3-none-any.whl (769 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 769.4/769.4 kB 36.2 MB/s  0:00:00
+Downloading mcp-1.29.0-py3-none-any.whl (223 kB)
+Downloading py_key_value_aio-0.4.5-py3-none-any.whl (170 kB)
+Downloading playwright-1.62.0-py3-none-macosx_11_0_arm64.whl (42.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42.5/42.5 MB 34.7 MB/s  0:00:01
+Downloading greenlet-3.5.5-cp312-cp312-macosx_11_0_universal2.whl (295 kB)
+Downloading pyee-13.0.1-py3-none-any.whl (15 kB)
+Downloading pyflakes-3.4.0-py2.py3-none-any.whl (63 kB)
+Downloading imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl (21.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 21.1/21.1 MB 38.8 MB/s  0:00:00
+Downloading aiofile-3.12.3-py3-none-any.whl (22 kB)
+Downloading caio-0.12.2-cp312-cp312-macosx_10_13_universal2.whl (84 kB)
+Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl (15 kB)
+Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
+Downloading annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
+Downloading attrs-26.1.0-py3-none-any.whl (67 kB)
+Downloading authlib-1.7.2-py2.py3-none-any.whl (259 kB)
+Downloading av-18.1.0-cp311-abi3-macosx_14_0_arm64.whl (18.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 18.2/18.2 MB 35.8 MB/s  0:00:00
+Downloading bcrypt-5.0.0-cp39-abi3-macosx_10_12_universal2.whl (495 kB)
+Downloading beartype-0.22.9-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 30.6 MB/s  0:00:00
+Downloading beautifulsoup4-4.15.0-py3-none-any.whl (109 kB)
+Downloading build-1.5.0-py3-none-any.whl (26 kB)
+Downloading cachecontrol-0.14.4-py3-none-any.whl (22 kB)
+Downloading msgpack-1.2.1-cp312-cp312-macosx_11_0_arm64.whl (82 kB)
+Downloading cachetools-7.1.7-py3-none-any.whl (16 kB)
+Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+Downloading cloup-3.1.0-py2.py3-none-any.whl (55 kB)
+Downloading cryptography-50.0.0-cp311-abi3-macosx_11_0_arm64.whl (4.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.0/4.0 MB 29.2 MB/s  0:00:00
+Downloading cffi-2.1.1-cp312-cp312-macosx_11_0_arm64.whl (184 kB)
+Downloading cyclopts-4.23.0-py3-none-any.whl (234 kB)
+Downloading rich_rst-2.1.0-py3-none-any.whl (272 kB)
+Downloading decorator-5.3.1-py3-none-any.whl (10 kB)
+Downloading exceptiongroup-1.3.1-py3-none-any.whl (16 kB)
+Downloading frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl (50 kB)
+Downloading glcontext-3.0.0-cp312-cp312-macosx_11_0_arm64.whl (9.7 kB)
+Downloading griffelib-2.2.0-py3-none-any.whl (166 kB)
+Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+Downloading httptools-0.8.0-cp312-cp312-macosx_11_0_arm64.whl (113 kB)
+Downloading httpx_sse-0.4.3-py3-none-any.whl (9.0 kB)
+Downloading isosurfaces-0.1.2-py3-none-any.whl (11 kB)
+Downloading joserfc-1.7.4-py3-none-any.whl (71 kB)
+Downloading jsonpointer-3.1.1-py3-none-any.whl (7.7 kB)
+Downloading jsonref-1.1.0-py3-none-any.whl (9.4 kB)
+Downloading jsonschema-4.26.0-py3-none-any.whl (90 kB)
+Downloading jsonschema_path-0.5.0-py3-none-any.whl (24 kB)
+Downloading pathable-0.6.0-py3-none-any.whl (18 kB)
+Downloading referencing-0.37.0-py3-none-any.whl (26 kB)
+Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
+Downloading keyring-25.7.0-py3-none-any.whl (39 kB)
+Downloading kubernetes-36.0.3-py2.py3-none-any.whl (4.6 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.6/4.6 MB 30.6 MB/s  0:00:00
+Downloading durationpy-0.10-py3-none-any.whl (3.9 kB)
+Downloading langchain_protocol-0.0.18-py3-none-any.whl (7.2 kB)
+Downloading mapbox_earcut-2.0.0-cp312-cp312-macosx_11_0_arm64.whl (52 kB)
+Downloading mmh3-5.2.1-cp312-cp312-macosx_11_0_arm64.whl (40 kB)
+Downloading moderngl_window-3.1.1-py3-none-any.whl (382 kB)
+Downloading pyglm-2.8.3-cp312-cp312-macosx_11_0_arm64.whl (1.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 30.4 MB/s  0:00:00
+Downloading networkx-3.6.1-py3-none-any.whl (2.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 32.4 MB/s  0:00:00
+Downloading numpy-2.5.2-cp312-cp312-macosx_14_0_arm64.whl (5.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.4/5.4 MB 31.2 MB/s  0:00:00
+Downloading onnxruntime-1.29.0-cp312-cp312-macosx_14_0_arm64.whl (21.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 21.4/21.4 MB 26.8 MB/s  0:00:00
+Downloading openapi_pydantic-0.5.1-py3-none-any.whl (96 kB)
+Downloading opentelemetry_api-1.44.0-py3-none-any.whl (60 kB)
+Downloading opentelemetry_exporter_otlp_proto_grpc-1.44.0-py3-none-any.whl (19 kB)
+Downloading opentelemetry_exporter_otlp_proto_common-1.44.0-py3-none-any.whl (17 kB)
+Downloading opentelemetry_proto-1.44.0-py3-none-any.whl (72 kB)
+Downloading opentelemetry_sdk-1.44.0-py3-none-any.whl (137 kB)
+Downloading opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl (204 kB)
+Downloading orjson-3.12.0-cp312-cp312-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl (223 kB)
+Downloading ormsgpack-1.12.2-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl (378 kB)
+Downloading overrides-7.7.0-py3-none-any.whl (17 kB)
+Downloading pillow-12.3.0-cp312-cp312-macosx_11_0_arm64.whl (4.8 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.8/4.8 MB 29.2 MB/s  0:00:00
+Downloading platformdirs-4.11.3-py3-none-any.whl (23 kB)
+Downloading propcache-0.5.2-cp312-cp312-macosx_11_0_arm64.whl (55 kB)
+Downloading pyasn1_modules-0.4.2-py3-none-any.whl (181 kB)
+Downloading pyasn1-0.6.4-py3-none-any.whl (84 kB)
+Downloading pybase64-1.5.0-cp312-cp312-macosx_11_0_arm64.whl (40 kB)
+Downloading pydantic_settings-2.15.0-py3-none-any.whl (69 kB)
+Downloading email_validator-2.3.0-py3-none-any.whl (35 kB)
+Downloading dnspython-2.8.0-py3-none-any.whl (331 kB)
+Downloading pyglet-2.1.16-py3-none-any.whl (1.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.0/1.0 MB 30.8 MB/s  0:00:00
+Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 29.0 MB/s  0:00:00
+Downloading pyjwt-2.13.0-py3-none-any.whl (31 kB)
+Downloading pyperclip-1.11.0-py3-none-any.whl (11 kB)
+Downloading pypika-0.51.1-py2.py3-none-any.whl (60 kB)
+Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Downloading python_multipart-0.0.32-py3-none-any.whl (30 kB)
+Downloading requests_toolbelt-1.0.0-py2.py3-none-any.whl (54 kB)
+Downloading rich-15.0.0-py3-none-any.whl (310 kB)
+Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Downloading rpds_py-2026.6.3-cp312-cp312-macosx_11_0_arm64.whl (338 kB)
+Downloading scipy-1.18.0-cp312-cp312-macosx_14_0_arm64.whl (20.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 20.4/20.4 MB 29.7 MB/s  0:00:00
+Downloading screeninfo-0.8.1-py3-none-any.whl (12 kB)
+Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+Downloading skia_pathops-0.9.2-cp310-abi3-macosx_10_9_universal2.whl (2.9 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.9/2.9 MB 25.5 MB/s  0:00:00
+Downloading soupsieve-2.9.2-py3-none-any.whl (37 kB)
+Downloading sse_starlette-3.4.8-py3-none-any.whl (16 kB)
+Downloading starlette-1.6.0-py3-none-any.whl (75 kB)
+Downloading svgelements-1.9.6-py2.py3-none-any.whl (137 kB)
+Downloading text_unidecode-1.3-py2.py3-none-any.whl (78 kB)
+Downloading tokenizers-0.23.1-cp310-abi3-macosx_11_0_arm64.whl (3.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.1/3.1 MB 26.3 MB/s  0:00:00
+Downloading huggingface_hub-1.16.1-py3-none-any.whl (668 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 668.2/668.2 kB 31.1 MB/s  0:00:00
+Downloading hf_xet-1.6.0-cp38-abi3-macosx_11_0_arm64.whl (3.9 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.9/3.9 MB 27.1 MB/s  0:00:00
+Downloading filelock-3.32.3-py3-none-any.whl (98 kB)
+Downloading fsspec-2026.7.0-py3-none-any.whl (206 kB)
+Downloading tqdm-4.70.0-py3-none-any.whl (80 kB)
+Downloading typer-0.27.1-py3-none-any.whl (122 kB)
+Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+Downloading typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+Downloading uncalled_for-0.4.0-py3-none-any.whl (15 kB)
+Downloading uvloop-0.22.1-cp312-cp312-macosx_10_13_universal2.whl (1.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 23.8 MB/s  0:00:00
+Downloading watchdog-6.0.0-cp312-cp312-macosx_11_0_arm64.whl (89 kB)
+Downloading watchfiles-1.2.0-cp312-cp312-macosx_11_0_arm64.whl (393 kB)
+Downloading websocket_client-1.9.0-py3-none-any.whl (82 kB)
+Downloading xxhash-4.0.1-cp312-cp312-macosx_11_0_arm64.whl (36 kB)
+Downloading zstandard-0.25.0-cp312-cp312-macosx_11_0_arm64.whl (640 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 640.4/640.4 kB 24.8 MB/s  0:00:00
+Downloading cython-3.2.9-cp312-cp312-macosx_11_0_arm64.whl (3.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.0/3.0 MB 27.7 MB/s  0:00:00
+Downloading flatbuffers-25.12.19-py2.py3-none-any.whl (26 kB)
+Downloading google_api_python_client-2.198.0-py3-none-any.whl (15.6 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.6/15.6 MB 27.8 MB/s  0:00:00
+Downloading google_auth_httplib2-0.4.1-py3-none-any.whl (9.5 kB)
+Downloading httplib2-0.32.0-py3-none-any.whl (93 kB)
+Downloading pyparsing-3.3.2-py3-none-any.whl (122 kB)
+Downloading uritemplate-4.2.0-py3-none-any.whl (11 kB)
+Downloading importlib_resources-7.1.0-py3-none-any.whl (37 kB)
+Downloading jaraco.classes-3.4.0-py3-none-any.whl (6.8 kB)
+Downloading jaraco_context-6.1.2-py3-none-any.whl (7.9 kB)
+Downloading jaraco_functools-4.6.0-py3-none-any.whl (11 kB)
+Downloading more_itertools-11.1.0-py3-none-any.whl (72 kB)
+Downloading pycparser-3.0-py3-none-any.whl (48 kB)
+Downloading pyobjc_framework_cocoa-12.2.2-cp312-cp312-macosx_10_13_universal2.whl (388 kB)
+Downloading pyobjc_core-12.2.2-cp312-cp312-macosx_10_13_universal2.whl (6.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.4/6.4 MB 30.7 MB/s  0:00:00
+Downloading pyproject_hooks-1.2.0-py3-none-any.whl (10 kB)
+Downloading regex-2026.7.19-cp312-cp312-macosx_11_0_arm64.whl (292 kB)
+Downloading requests_oauthlib-2.0.0-py2.py3-none-any.whl (24 kB)
+Downloading oauthlib-3.3.1-py3-none-any.whl (160 kB)
+Building wheels for collected packages: sox, pycairo, langdetect, srt
+  Building wheel for sox (pyproject.toml): started
+  Building wheel for sox (pyproject.toml): finished with status 'done'
+  Created wheel for sox: filename=sox-1.5.0-py3-none-any.whl size=40128 sha256=41fe8e658d7492ac8a059459aef88716ba82715269fde7de3d724d117e9e0733
+  Stored in directory: /private/var/folders/td/bl53m3795jddfk6py9kdy83c0000gn/T/pip-ephem-wheel-cache-pce9dej1/wheels/8c/c7/e7/baea1f7e79b9eb53addc81cc9b827424f4a7d8c9cc18c03659
+  Building wheel for pycairo (pyproject.toml): started
+  Building wheel for pycairo (pyproject.toml): finished with status 'done'
+  Created wheel for pycairo: filename=pycairo-1.29.1-cp312-cp312-macosx_14_0_arm64.whl size=112697 sha256=032471e84da3fe74789ff0b43f8f203c259cb6b2b420c632d6e775f0183d56e9
+  Stored in directory: /private/var/folders/td/bl53m3795jddfk6py9kdy83c0000gn/T/pip-ephem-wheel-cache-pce9dej1/wheels/ad/19/85/60420d243a976dde0e317ea8aac3b856a4de4a2fd990f56138
+  Building wheel for langdetect (pyproject.toml): started
+  Building wheel for langdetect (pyproject.toml): finished with status 'done'
+  Created wheel for langdetect: filename=langdetect-1.0.9-py3-none-any.whl size=993332 sha256=47a9f4223f47cf4dd7d7b0c482e54e24b23d390e2f879053b3466dfafdfc786f
+  Stored in directory: /private/var/folders/td/bl53m3795jddfk6py9kdy83c0000gn/T/pip-ephem-wheel-cache-pce9dej1/wheels/c1/67/88/e844b5b022812e15a52e4eaa38a1e709e99f06f6639d7e3ba7
+  Building wheel for srt (pyproject.toml): started
+  Building wheel for srt (pyproject.toml): finished with status 'done'
+  Created wheel for srt: filename=srt-3.5.3-py3-none-any.whl size=22510 sha256=19ac3e5c4fe2bb9477b68e5971dda582ba0a2f84474bd4f626a5d90cf5d40b6d
+  Stored in directory: /private/var/folders/td/bl53m3795jddfk6py9kdy83c0000gn/T/pip-ephem-wheel-cache-pce9dej1/wheels/7e/75/5b/e1d5c3756631e4bda806f6cc9640153b39484bb6f7b0b8def3
+Successfully built sox pycairo langdetect srt
+Installing collected packages: text-unidecode, svgelements, pypika, pyperclip, pyglm, pydub, glcontext, flatbuffers, durationpy, zstandard, xxhash, websockets, websocket-client, watchdog, uvloop, uuid-utils, urllib3, uritemplate, uncalled-for, typing-extensions, tqdm, tenacity, tabulate, srt, soupsieve, sniffio, skia-pathops, six, shellingham, setuptools, rpds-py, regex, pyyaml, python-slugify, python-multipart, python-dotenv, pyproject_hooks, pyparsing, pyobjc-core, pyjwt, pygments, pyglet, pyflakes, pycparser, pycairo, pybase64, pyasn1, protobuf, propcache, platformdirs, pillow, pathable, overrides, ormsgpack, orjson, oauthlib, numpy, networkx, mutagen, multidict, msgpack, more-itertools, moderngl, mmh3, mdurl, manimpango, jsonref, jsonpointer, json5, jiter, jaraco.context, importlib-resources, imageio-ffmpeg, idna, hyperframe, httpx-sse, httptools, hpack, hf-xet, h11, griffelib, greenlet, google-crc32c, fsspec, frozenlist, filelock, docstring-parser, dnspython, distro, decorator, Cython, click, charset_normalizer, certifi, caio, cachetools, beartype, bcrypt, av, attrs, annotated-types, annotated-doc, aiohappyeyeballs, yarl, uvicorn, typing-inspection, sox, scipy, requests, referencing, python-dateutil, pyobjc-framework-Cocoa, pyee, pydantic-core, pyasn1-modules, py-key-value-aio, proto-plus, opentelemetry-proto, opentelemetry-api, onnxruntime, moderngl-window, markdown-it-py, mapbox-earcut, langdetect, langchain-protocol, jsonpatch, jaraco.functools, jaraco.classes, isosurfaces, httplib2, httpcore, h2, grpcio, googleapis-common-protos, google-resumable-media, exceptiongroup, email-validator, cloup, cffi, build, beautifulsoup4, anyio, aiosignal, aiofile, watchfiles, tiktoken, starlette, screeninfo, rich, requests-toolbelt, requests-oauthlib, pydantic, playwright, opentelemetry-semantic-conventions, opentelemetry-exporter-otlp-proto-common, keyring, jsonschema-specifications, jsonschema-path, httpx, gTTS, grpcio-status, cryptography, cachecontrol, aiohttp, typer, sse-starlette, rich-rst, pydantic-settings, opentelemetry-sdk, openapi-pydantic, manim, langsmith, kubernetes, jsonschema, joserfc, google-auth, fastapi, edge-tts, anthropic, opentelemetry-exporter-otlp-proto-grpc, mcp, manim-voiceover, langchain-core, huggingface-hub, google-auth-httplib2, google-api-core, fastmcp-slim, cyclopts, authlib, tokenizers, langgraph-sdk, langgraph-checkpoint, google-cloud-core, google-api-python-client, langgraph-prebuilt, google-cloud-storage, google-cloud-firestore, google-ai-generativelanguage, fastmcp, chromadb, langgraph, google-generativeai, firebase-admin
+
+Successfully installed Cython-3.2.9 aiofile-3.12.3 aiohappyeyeballs-2.7.1 aiohttp-3.14.3 aiosignal-1.4.0 annotated-doc-0.0.5 annotated-types-0.8.0 anthropic-0.125.0 anyio-4.14.2 attrs-26.1.0 authlib-1.7.2 av-18.1.0 bcrypt-5.0.0 beartype-0.22.9 beautifulsoup4-4.15.0 build-1.5.0 cachecontrol-0.14.4 cachetools-7.1.7 caio-0.12.2 certifi-2026.7.22 cffi-2.1.1 charset_normalizer-3.5.1 chromadb-1.5.9 click-8.1.8 cloup-3.1.0 cryptography-50.0.0 cyclopts-4.23.0 decorator-5.3.1 distro-1.9.0 dnspython-2.8.0 docstring-parser-0.18.0 durationpy-0.10 edge-tts-7.2.8 email-validator-2.3.0 exceptiongroup-1.3.1 fastapi-0.141.1 fastmcp-3.4.7 fastmcp-slim-3.4.7 filelock-3.32.3 firebase-admin-7.5.0 flatbuffers-25.12.19 frozenlist-1.8.0 fsspec-2026.7.0 gTTS-2.5.4 glcontext-3.0.0 google-ai-generativelanguage-0.6.15 google-api-core-2.33.0 google-api-python-client-2.198.0 google-auth-2.56.3 google-auth-httplib2-0.4.1 google-cloud-core-2.6.1 google-cloud-firestore-2.27.0 google-cloud-storage-3.13.1 google-crc32c-1.8.0 google-generativeai-0.8.6 google-resumable-media-2.10.1 googleapis-common-protos-1.75.0 greenlet-3.5.5 griffelib-2.2.0 grpcio-1.83.0 grpcio-status-1.71.2 h11-0.16.0 h2-4.4.1 hf-xet-1.6.0 hpack-4.2.0 httpcore-1.0.9 httplib2-0.32.0 httptools-0.8.0 httpx-0.28.1 httpx-sse-0.4.3 huggingface-hub-1.16.1 hyperframe-6.1.0 idna-3.19 imageio-ffmpeg-0.6.0 importlib-resources-7.1.0 isosurfaces-0.1.2 jaraco.classes-3.4.0 jaraco.context-6.1.2 jaraco.functools-4.6.0 jiter-0.16.0 joserfc-1.7.4 json5-0.15.0 jsonpatch-1.33 jsonpointer-3.1.1 jsonref-1.1.0 jsonschema-4.26.0 jsonschema-path-0.5.0 jsonschema-specifications-2025.9.1 keyring-25.7.0 kubernetes-36.0.3 langchain-core-1.6.0 langchain-protocol-0.0.18 langdetect-1.0.9 langgraph-1.2.11 langgraph-checkpoint-4.2.0 langgraph-prebuilt-1.1.0 langgraph-sdk-0.4.3 langsmith-0.11.1 manim-0.21.0 manim-voiceover-0.4.0 manimpango-0.6.1 mapbox-earcut-2.0.0 markdown-it-py-4.2.0 mcp-1.29.0 mdurl-0.1.2 mmh3-5.2.1 moderngl-5.12.0 moderngl-window-3.1.1 more-itertools-11.1.0 msgpack-1.2.1 multidict-6.7.1 mutagen-1.48.1 networkx-3.6.1 numpy-2.5.2 oauthlib-3.3.1 onnxruntime-1.29.0 openapi-pydantic-0.5.1 opentelemetry-api-1.44.0 opentelemetry-exporter-otlp-proto-common-1.44.0 opentelemetry-exporter-otlp-proto-grpc-1.44.0 opentelemetry-proto-1.44.0 opentelemetry-sdk-1.44.0 opentelemetry-semantic-conventions-0.65b0 orjson-3.12.0 ormsgpack-1.12.2 overrides-7.7.0 pathable-0.6.0 pillow-12.3.0 platformdirs-4.11.3 playwright-1.62.0 propcache-0.5.2 proto-plus-1.28.2 protobuf-5.29.6 py-key-value-aio-0.4.5 pyasn1-0.6.4 pyasn1-modules-0.4.2 pybase64-1.5.0 pycairo-1.29.1 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pydantic-settings-2.15.0 pydub-0.25.1 pyee-13.0.1 pyflakes-3.4.0 pyglet-2.1.16 pyglm-2.8.3 pygments-2.21.0 pyjwt-2.13.0 pyobjc-core-12.2.2 pyobjc-framework-Cocoa-12.2.2 pyparsing-3.3.2 pyperclip-1.11.0 pypika-0.51.1 pyproject_hooks-1.2.0 python-dateutil-2.9.0.post0 python-dotenv-1.2.3 python-multipart-0.0.32 python-slugify-8.0.4 pyyaml-6.0.3 referencing-0.37.0 regex-2026.7.19 requests-2.34.2 requests-oauthlib-2.0.0 requests-toolbelt-1.0.0 rich-15.0.0 rich-rst-2.1.0 rpds-py-2026.6.3 scipy-1.18.0 screeninfo-0.8.1 setuptools-80.10.2 shellingham-1.5.4 six-1.17.0 skia-pathops-0.9.2 sniffio-1.3.1 soupsieve-2.9.2 sox-1.5.0 srt-3.5.3 sse-starlette-3.4.8 starlette-1.6.0 svgelements-1.9.6 tabulate-0.10.0 tenacity-9.1.4 text-unidecode-1.3 tiktoken-0.14.0 tokenizers-0.23.1 tqdm-4.70.0 typer-0.27.1 typing-extensions-4.16.0 typing-inspection-0.4.4 uncalled-for-0.4.0 uritemplate-4.2.0 urllib3-2.7.0 uuid-utils-0.17.0 uvicorn-0.52.4 uvloop-0.22.1 watchdog-6.0.0 watchfiles-1.2.0 websocket-client-1.9.0 websockets-16.1.1 xxhash-4.0.1 yarl-1.24.5 zstandard-0.25.0
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Python (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Python (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture arm64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture x86_64)
+/Library/Developer/CommandLineTools/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib (for architecture arm64)
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/Python: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/libpython3.12.dylib: replacing existing signature
+/Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/config-3.12-darwin/libpython3.12.dylib: replacing existing signature
+[desktop] patched 4 macOS Python framework link(s) and ad-hoc signed 3 modified binary/binaries
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libformw.5.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+  -> @loader_path/./libncursesw.5.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libformw.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+  -> @loader_path/./libncursesw.5.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libmenuw.5.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+  -> @loader_path/./libncursesw.5.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libmenuw.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+  -> @loader_path/./libncursesw.5.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libpanelw.5.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+  -> @loader_path/./libncursesw.5.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libpanelw.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libncursesw.5.dylib
+  -> @loader_path/./libncursesw.5.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libssl.3.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+  -> @loader_path/./libcrypto.3.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/libssl.dylib
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+  -> @loader_path/./libcrypto.3.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/python3.12/lib-dynload/_hashlib.cpython-312-darwin.so
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+  -> @loader_path/../../libcrypto.3.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libssl.3.dylib
+  -> @loader_path/../../libssl.3.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libcrypto.3.dylib
+  -> @loader_path/../../libcrypto.3.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libtcl8.6.dylib
+  -> @loader_path/../../libtcl8.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so
+  /Library/Frameworks/Python.framework/Versions/3.12/lib/libtk8.6.dylib
+  -> @loader_path/../../libtk8.6.dylib
+[mac-native-bundle] removed rpath /Users/runner/work/Pillow/Pillow/build/deps/darwin/lib from desktop/python-runtime/python/lib/python3.12/site-packages/PIL/.dylibs/libjpeg.62.4.0.dylib
+[mac-native-bundle] removed rpath /tmp/vendor/lib from desktop/python-runtime/python/lib/python3.12/site-packages/av/.dylibs/libsharpyuv.0.1.2.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/cairo/lib/libcairo.2.dylib -> desktop/python-runtime/native-libs/libcairo.2.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/python/lib/python3.12/site-packages/cairo/_cairo.cpython-312-darwin.so
+  /opt/homebrew/opt/cairo/lib/libcairo.2.dylib
+  -> @loader_path/../../../../../native-libs/libcairo.2.dylib
+[mac-native-bundle] removed rpath /opt/homebrew/Cellar/cairo/1.18.4/lib from desktop/python-runtime/python/lib/python3.12/site-packages/cairo/_cairo.cpython-312-darwin.so
+[mac-native-bundle] removed rpath /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc/aarch64-apple-darwin23/13 from desktop/python-runtime/python/lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so
+[mac-native-bundle] removed rpath /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc from desktop/python-runtime/python/lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so
+[mac-native-bundle] removed rpath /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13 from desktop/python-runtime/python/lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so
+[mac-native-bundle] copied /opt/homebrew/opt/libpng/lib/libpng16.16.dylib -> desktop/python-runtime/native-libs/libpng16.16.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libpng/lib/libpng16.16.dylib
+  -> @loader_path/./libpng16.16.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/fontconfig/lib/libfontconfig.1.dylib -> desktop/python-runtime/native-libs/libfontconfig.1.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/fontconfig/lib/libfontconfig.1.dylib
+  -> @loader_path/./libfontconfig.1.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/freetype/lib/libfreetype.6.dylib -> desktop/python-runtime/native-libs/libfreetype.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/freetype/lib/libfreetype.6.dylib
+  -> @loader_path/./libfreetype.6.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libx11/lib/libX11.6.dylib -> desktop/python-runtime/native-libs/libX11.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libx11/lib/libX11.6.dylib
+  -> @loader_path/./libX11.6.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxext/lib/libXext.6.dylib -> desktop/python-runtime/native-libs/libXext.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libxext/lib/libXext.6.dylib
+  -> @loader_path/./libXext.6.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxrender/lib/libXrender.1.dylib -> desktop/python-runtime/native-libs/libXrender.1.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libxrender/lib/libXrender.1.dylib
+  -> @loader_path/./libXrender.1.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxcb/lib/libxcb.1.dylib -> desktop/python-runtime/native-libs/libxcb.1.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libxcb/lib/libxcb.1.dylib
+  -> @loader_path/./libxcb.1.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxcb/lib/libxcb-render.0.dylib -> desktop/python-runtime/native-libs/libxcb-render.0.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libxcb/lib/libxcb-render.0.dylib
+  -> @loader_path/./libxcb-render.0.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxcb/lib/libxcb-shm.0.dylib -> desktop/python-runtime/native-libs/libxcb-shm.0.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/libxcb/lib/libxcb-shm.0.dylib
+  -> @loader_path/./libxcb-shm.0.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/pixman/lib/libpixman-1.0.dylib -> desktop/python-runtime/native-libs/libpixman-1.0.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libcairo.2.dylib
+  /opt/homebrew/opt/pixman/lib/libpixman-1.0.dylib
+  -> @loader_path/./libpixman-1.0.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libfontconfig.1.dylib
+  /opt/homebrew/opt/freetype/lib/libfreetype.6.dylib
+  -> @loader_path/./libfreetype.6.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/gettext/lib/libintl.8.dylib -> desktop/python-runtime/native-libs/libintl.8.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libfontconfig.1.dylib
+  /opt/homebrew/opt/gettext/lib/libintl.8.dylib
+  -> @loader_path/./libintl.8.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libfreetype.6.dylib
+  /opt/homebrew/opt/libpng/lib/libpng16.16.dylib
+  -> @loader_path/./libpng16.16.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libX11.6.dylib
+  /opt/homebrew/opt/libxcb/lib/libxcb.1.dylib
+  -> @loader_path/./libxcb.1.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libXext.6.dylib
+  /opt/homebrew/opt/libx11/lib/libX11.6.dylib
+  -> @loader_path/./libX11.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libXrender.1.dylib
+  /opt/homebrew/opt/libx11/lib/libX11.6.dylib
+  -> @loader_path/./libX11.6.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxau/lib/libXau.6.dylib -> desktop/python-runtime/native-libs/libXau.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb.1.dylib
+  /opt/homebrew/opt/libxau/lib/libXau.6.dylib
+  -> @loader_path/./libXau.6.dylib
+[mac-native-bundle] copied /opt/homebrew/opt/libxdmcp/lib/libXdmcp.6.dylib -> desktop/python-runtime/native-libs/libXdmcp.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb.1.dylib
+  /opt/homebrew/opt/libxdmcp/lib/libXdmcp.6.dylib
+  -> @loader_path/./libXdmcp.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb-render.0.dylib
+  /opt/homebrew/Cellar/libxcb/1.17.0/lib/libxcb.1.dylib
+  -> @loader_path/./libxcb.1.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb-render.0.dylib
+  /opt/homebrew/opt/libxau/lib/libXau.6.dylib
+  -> @loader_path/./libXau.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb-render.0.dylib
+  /opt/homebrew/opt/libxdmcp/lib/libXdmcp.6.dylib
+  -> @loader_path/./libXdmcp.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb-shm.0.dylib
+  /opt/homebrew/Cellar/libxcb/1.17.0/lib/libxcb.1.dylib
+  -> @loader_path/./libxcb.1.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb-shm.0.dylib
+  /opt/homebrew/opt/libxau/lib/libXau.6.dylib
+  -> @loader_path/./libXau.6.dylib
+[mac-native-bundle] rewrote desktop/python-runtime/native-libs/libxcb-shm.0.dylib
+  /opt/homebrew/opt/libxdmcp/lib/libXdmcp.6.dylib
+  -> @loader_path/./libXdmcp.6.dylib
+[mac-native-bundle] ready: copied 14 external dylib(s), rewrote 38 dependency reference(s), removed 6 non-portable rpath(s), ad-hoc signed 24 modified Mach-O file(s)
+[mac-native-audit] scanned 418 runtime Mach-O files under /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime
+[mac-native-audit] OK: no non-portable runtime dylib/rpath references found
+Bundled runtime OK
+executable /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/bin/python3
+prefix /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python
+scipy /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/site-packages/scipy/__init__.py
+manim /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python/lib/python3.12/site-packages/manim/__init__.py
+backend_ok True
+Downloading Chrome for Testing 151.0.7922.34 (playwright chromium v1234)[2m from https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-arm64/chrome-mac-arm64.zip[22m
+|                                                                                |   0% of 178.7 MiB
+|■■■■■■■■                                                                        |  10% of 178.7 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 178.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 178.7 MiB
+Chrome for Testing 151.0.7922.34 (playwright chromium v1234) downloaded to /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/ms-playwright/chromium-1234
+Downloading FFmpeg (playwright ffmpeg v1011)[2m from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-mac-arm64.zip[22m
+|                                                                                |   1% of 1 MiB
+|■■■■■■■■                                                                        |  10% of 1 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  61% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  81% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 1 MiB
+FFmpeg (playwright ffmpeg v1011) downloaded to /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/ms-playwright/ffmpeg-1011
+Downloading Chrome Headless Shell 151.0.7922.34 (playwright chromium-headless-shell v1234)[2m from https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-arm64/chrome-headless-shell-mac-arm64.zip[22m
+|                                                                                |   0% of 94.7 MiB
+|■■■■■■■■                                                                        |  10% of 94.7 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 94.7 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 94.7 MiB
+Chrome Headless Shell 151.0.7922.34 (playwright chromium-headless-shell v1234) downloaded to /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/ms-playwright/chromium_headless_shell-1234
+Manim Community v0.21.0
+
+[desktop] bundled Python runtime ready at /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/python
+[desktop] bundled ffmpeg ready at /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/bin/ffmpeg
+[desktop] bundled Playwright browsers ready at /Users/isabelayepes/Documents/other/upcurved-desktop/UpcurvEd/desktop/python-runtime/ms-playwright

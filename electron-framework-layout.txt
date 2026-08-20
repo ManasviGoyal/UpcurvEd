@@ -1,0 +1,47 @@
+=== SOURCE ELECTRON ===
+total 0
+drwxr-xr-x   7 isabelayepes  staff  224 Dec 31  1979 .
+drwxr-xr-x  10 isabelayepes  staff  320 Dec 31  1979 ..
+lrwxr-xr-x   1 isabelayepes  staff   35 Aug 19 22:12 Electron Framework -> Versions/Current/Electron Framework
+lrwxr-xr-x   1 isabelayepes  staff   24 Aug 19 22:12 Helpers -> Versions/Current/Helpers
+lrwxr-xr-x   1 isabelayepes  staff   26 Aug 19 22:12 Libraries -> Versions/Current/Libraries
+lrwxr-xr-x   1 isabelayepes  staff   26 Aug 19 22:12 Resources -> Versions/Current/Resources
+drwxr-xr-x   4 isabelayepes  staff  128 Dec 31  1979 Versions
+=== SOURCE VERSIONS ===
+total 0
+drwxr-xr-x  4 isabelayepes  staff  128 Dec 31  1979 .
+drwxr-xr-x  7 isabelayepes  staff  224 Dec 31  1979 ..
+drwxr-xr-x  6 isabelayepes  staff  192 Dec 31  1979 A
+lrwxr-xr-x  1 isabelayepes  staff    1 Aug 19 22:12 Current -> A
+=== SOURCE ROOT LINK ===
+Versions/Current/Electron Framework
+=== BUILT APP: release/mac-arm64/UpcurvEd.app ===
+total 0
+drwxr-xr-x   7 isabelayepes  staff  224 Aug 19 22:16 .
+drwxr-xr-x  10 isabelayepes  staff  320 Aug 19 22:17 ..
+lrwxr-xr-x   1 isabelayepes  staff   35 Aug 19 22:16 Electron Framework -> Versions/Current/Electron Framework
+lrwxr-xr-x   1 isabelayepes  staff   24 Aug 19 22:16 Helpers -> Versions/Current/Helpers
+lrwxr-xr-x   1 isabelayepes  staff   26 Aug 19 22:16 Libraries -> Versions/Current/Libraries
+lrwxr-xr-x   1 isabelayepes  staff   26 Aug 19 22:16 Resources -> Versions/Current/Resources
+drwxr-xr-x   4 isabelayepes  staff  128 Aug 19 22:16 Versions
+total 0
+drwxr-xr-x  4 isabelayepes  staff  128 Aug 19 22:16 .
+drwxr-xr-x  7 isabelayepes  staff  224 Aug 19 22:16 ..
+drwxr-xr-x  7 isabelayepes  staff  224 Aug 19 22:20 A
+lrwxr-xr-x  1 isabelayepes  staff    1 Aug 19 22:16 Current -> A
+Versions/Current/Electron Framework
+=== INSTALLED APP ===
+total 0
+drwxr-xr-x@  7 isabelayepes  admin  224 Aug 19 22:21 .
+drwxr-xr-x@ 10 isabelayepes  admin  320 Aug 19 22:21 ..
+lrwxr-xr-x   1 isabelayepes  admin   35 Aug 19 22:21 Electron Framework -> Versions/Current/Electron Framework
+lrwxr-xr-x   1 isabelayepes  admin   24 Aug 19 22:21 Helpers -> Versions/Current/Helpers
+lrwxr-xr-x   1 isabelayepes  admin   26 Aug 19 22:21 Libraries -> Versions/Current/Libraries
+lrwxr-xr-x   1 isabelayepes  admin   26 Aug 19 22:21 Resources -> Versions/Current/Resources
+drwxr-xr-x@  4 isabelayepes  admin  128 Aug 19 22:21 Versions
+total 0
+drwxr-xr-x@ 4 isabelayepes  admin  128 Aug 19 22:21 .
+drwxr-xr-x@ 7 isabelayepes  admin  224 Aug 19 22:21 ..
+drwxr-xr-x@ 6 isabelayepes  admin  192 Aug 19 22:21 A
+lrwxr-xr-x  1 isabelayepes  admin    1 Aug 19 22:21 Current -> A
+Versions/Current/Electron Framework

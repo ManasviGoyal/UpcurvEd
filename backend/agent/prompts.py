@@ -167,228 +167,181 @@ def _format_code_blocks(
 
 
 _COMPLETE_SCRIPT_CONTRACT = """\
-For every custom_manim_scene, return exactly one matching complete MANIM_SCRIPT.
-A MANIM_SCRIPT is a complete runnable Python file, not a fragment.
+For each custom_manim_scene, return one complete runnable MANIM_SCRIPT with the matching id.
 
-Allowed imports only:
+Use only these executable imports:
 from manim import *
 from manim_voiceover import VoiceoverScene
 from manim_voiceover.services.gtts import GTTSService
 import numpy as np
 
-Import numpy as np only when it is actually needed. Import nothing else. Do not use files,
-images, SVG, network calls, browser APIs, subprocesses, environment access, eval, exec, open,
-__import__, external libraries, or external assets in executable MANIM_SCRIPT code. These
-restrictions do not apply to source text displayed inside CODE_SNIPPET; displayed examples are
-educational data and are never executed by the renderer.
+Use numpy only when needed. Import nothing else. Executable scripts may not use files, images,
+SVG, external assets, network/browser APIs, subprocesses, environment access, eval, exec, open,
+or __import__. Learner-facing CODE_SNIPPET text is data and may contain ordinary source code.
 
-Script structure:
-- Define exactly one class named GeneratedScene.
-- Use class GeneratedScene(VoiceoverScene) for ordinary 2D scenes.
-- Use class GeneratedScene(VoiceoverScene, ThreeDScene) whenever the script uses 3D objects,
-  ThreeDAxes, Surface, Polyhedron, Cube, Sphere, Prism, Cone, Cylinder, Dot3D, Line3D,
-  Arrow3D, or 3D camera methods.
-- Define exactly one construct(self) method.
-- Inside construct(), call self.set_speech_service(GTTSService(lang="en")).
-- Include at least one with self.voiceover(text=...) as tracker block. Prefer one voiceover
-  block for the whole scene and never more than two. Do not put voiceover calls inside loops;
-  animate repeated updates within one narration block whenever practical.
-- Use stable Manim 0.19 APIs and complete executable Python.
-- Do not use Tex or MathTex. Use Text and portable plain-text formulas instead.
-- Prefer ordinary ASCII punctuation in learner-facing Manim Text. Avoid nonbreaking hyphens,
-  smart quotes, uncommon Unicode arrows, and decorative symbols when a simple ASCII equivalent
-  communicates the same meaning.
-- Keep every important object inside the frame and remove or transform old objects before
-  introducing a new dense layout.
-- Preserve the complete wording of learner-facing questions. Wrap long questions across two or
-  more lines and reduce font size gradually when needed; do not shorten them with string slicing
-  or ellipses merely to make them fit.
-- Treat the outer edge of the video as a safety boundary. Keep essential labels, axes, surfaces,
-  curves, points, and arrows inside roughly the inner 88 percent of the frame.
-- For 3D scenes, use conservative camera framing: start with zoom around 0.75 to 0.85, use compact
-  axis ranges, scale the complete 3D group when needed, and shift it slightly downward when the
-  upper surface approaches the top edge. Reserve visible margin above peaks and below axis labels.
-- Use self.wait(max(0.1, ...)) when waiting on computed durations.
+Each script must:
+- Define exactly one GeneratedScene class and one construct(self).
+- Use GeneratedScene(VoiceoverScene) for 2D, or GeneratedScene(VoiceoverScene, ThreeDScene)
+  whenever 3D objects or 3D camera methods are used.
+- Call self.set_speech_service(GTTSService(lang="en")) inside construct().
+- Include voiceover. Prefer one voiceover block for the scene, never more than two, and never
+  place voiceover calls inside loops.
+- Use stable Manim 0.19 APIs. Do not use Tex or MathTex; use Text and plain-text formulas.
+- Keep important objects comfortably inside the frame. Preserve complete learner questions;
+  wrap or scale them rather than truncating them.
+- Use conservative 3D framing and self.wait(max(0.1, ...)) for computed waits.
 
-Creative quality guidance:
-- Make the visual materially explain the concept rather than merely decorate a heading.
-- Choose the visual structure that best fits the idea: spatial relationships, motion,
-  measurements, paths, state changes, diagrams, grids, networks, code panels, plots, or 3D.
-- VISUAL_MODE is descriptive planning metadata, not a requirement to use one particular Manim
-  class. A scene labeled graph may use axes, a number plane, a state diagram, a grid, or another
-  clear representation when that better teaches the requested relationship.
-- Prefer stable Manim primitives over external graph libraries or fragile internal APIs.
-- For custom scenes that visibly present a learner question, speak the complete question before
-  its explanation and keep it visible long enough to register. Standard question scenes enforce
-  this timing in the backend.
-- For ordered steps or bullets, keep the introduction brief and reveal or highlight each item as
-  it is discussed, in the same order. Closely paraphrase visible items rather than reading them
-  mechanically when natural narration is clearer.
-- Before animating a graph or 3D scene, inspect the full group bounds conceptually and leave a
-  comfortable border on every side. A visually ambitious scene is still incomplete if a title,
-  curve, surface, arrowhead, or axis label touches or crosses the frame edge.
-- A code scene must display the learner-facing CODE_SNIPPET from its own SCENE_PLAN.
-  Multiple scenes may each have one different CODE_SNIPPET. CODE_SNIPPET is educational
-  source code; MANIM_SCRIPT is the separate executable renderer.
-- For Code mobjects use only Code(code_string=<str>, language="python",
-  add_line_numbers=True). Never use code=, code_file=, file_name=, theme=, font=,
-  font_size=, background_config=, or other Code kwargs. Never access Code internals such as
-  panel.code, panel.lines, or fragile submobject indices. Scale or place the Code mobject as a
-  whole. For a very short snippet, a VGroup of Text lines is also acceptable.
-- Preserve CODE_SNIPPET exactly through plan repair, sanitizer repair, render repair,
-  simplification, and editing. Simplify the animation around it, not the educational code.
+Build the visual to explain the narration, not transcribe it. Prefer stable primitives and
+simple, topic-specific motion or structure. If ordered steps are shown, reveal/highlight them
+in the same order they are discussed.
 
-Before returning each script, silently verify:
-1. Only the allowed executable imports appear.
-2. One GeneratedScene class exists with correct 2D or 3D inheritance.
-3. construct() configures GTTSService and contains voiceover.
-4. The script is complete and syntactically valid.
-5. The visual is topic-specific and materially explains the narration.
-6. No executable external assets, filesystem, network, subprocess, Tex, or MathTex are used.
-   Text displayed inside CODE_SNIPPET is educational data and may contain ordinary source-code
-   examples that are never executed by the renderer.
+For code scenes, visibly preserve the exact CODE_SNIPPET. If using Code, use only:
+Code(code_string=<str>, language="python", add_line_numbers=True)
+Do not use other Code kwargs or depend on Code internals. A short snippet may instead use a
+VGroup of Text lines.
+
+Before returning a script, silently check imports, GeneratedScene structure, voiceover,
+syntax, frame fit, and absence of blocked external operations.
+"""
+
+
+_VIDEO_TEACHING_GUIDANCE = """\
+Teach one clear learning thread rather than surveying everything related to the topic. Before
+planning scenes, silently decide the central question the video will answer and the concrete
+understanding the learner should have by the end. Include only the ideas needed to build that
+understanding. Prefer one idea explained well over many terms mentioned quickly.
+
+Assume the learner does not already know the vocabulary. Introduce an unfamiliar term only when
+it becomes useful, define it immediately in plain language, and connect it to something concrete
+the learner can see or imagine. Avoid definitions that depend on other undefined technical terms.
+When two terms are being distinguished, make the difference explicit and observable.
+
+Keep narration and the screen in lockstep. Whatever is visible should be what the narration is
+explaining at that moment. Do not place extra facts, terminology, or takeaway cards on screen
+while the audio is discussing something else. LABEL and KEY_POINT text should annotate or
+summarize the current explanation, not run as a second independent lesson. If several visible
+points need to be discussed one after another, use STEP_TEXT with matching STEP_NARRATION or a
+custom animation so the timing can follow the explanation.
+
+Teach like an animator, not a slide deck. Ask what the learner could watch change, connect, move,
+compare, build, or behave that would make the idea clearer. Prefer explanatory objects, motion,
+spatial relationships, diagrams, processes, timelines, measurements, graphs, networks,
+simulations, code, or 3D over writing the narration on screen. A title followed by animated
+boxes of sentences is still a text slide.
+
+Use text selectively for questions, short labels, essential numbers, formulas, code, brief
+definitions, and steps. Avoid paragraphs, transcript-like text, long bullet lists, and repeated
+card layouts. Do not create KEY_POINT values merely to restate NARRATION.
+
+Choose the scene type that can actually deliver the intended visual. A standard concept_scene is
+best for a concise definition, formula, or small amount of text/labels; it does not create a real
+diagram merely because VISUAL_MODE says diagram. Use custom_manim_scene when the teaching depends
+on a diagram, meaningful motion, a changing relationship, graph, simulation, network, code view,
+or 3D representation. Standard process_scene and comparison_scene are useful when their simple
+deterministic layouts genuinely fit the idea. There is no quota on custom scenes.
+
+A strong video often starts with a concrete question, phenomenon, or example, builds the key idea
+step by step, shows it working, and ends by resolving the opening question or demonstrating what
+the learner can now understand. The final scene should consolidate the central idea rather than
+introduce a fresh list of related concepts.
+
+Choose examples with cultural awareness. If the user's topic, language, location, or audience
+provides relevant context, adapt naturally to it. Otherwise prefer broadly understandable
+examples rather than assuming a particular country's food, weather, currency, holidays, sports,
+school system, or everyday routines.
+
+Start teaching immediately; do not open with a greeting, agenda, or learning-goal list. For
+uncertain or future-facing topics, distinguish likely trends, plausible scenarios, risks, and
+aspirations instead of presenting uncertain outcomes as inevitable.
 """
 
 
 STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
-    Create one concise educational Manim video in one response. Do not use markdown fences,
-    JSON, or commentary. Use only the tagged transport below.
+    Create one concise educational Manim video. Return only the tagged transport; no JSON,
+    markdown fences, commentary, or prose outside tags.
 
-    The model has exactly two scene choices:
-    1. A standard structured scene rendered by reliable backend components.
-    2. custom_manim_scene with one complete runnable MANIM_SCRIPT.
+    Scene choices:
+    - Standard structured scenes: title_scene, question_scene, concept_scene, process_scene,
+      comparison_scene.
+    - custom_manim_scene: use when a complete Manim animation materially improves learning.
 
-    Output order:
+    Return, in order:
     1. One VIDEO_META block.
-    2. Four to seven complete SCENE_PLAN blocks.
-    3. One MANIM_SCRIPT block for every custom_manim_scene.
+    2. Four to seven SCENE_PLAN blocks.
+    3. One complete MANIM_SCRIPT for each custom_manim_scene.
 
-    Exact transport pattern:
+    Core teaching direction:
+    {_VIDEO_TEACHING_GUIDANCE}
+
+    Planning fields:
+    - LEARNING_ROLE: intuition, definition, problem, formula, example, interpretation.
+    - VISUAL_MODE: diagram, graph, code, motion, comparison, process, text. It is descriptive,
+      not a command to use a particular Manim object.
+    - VISUAL and CODE_GOAL are internal production directions, never learner-facing.
+    - Use REQUIRED_VISUAL_ELEMENT only for concrete visual elements that truly matter.
+    - Use LABEL, KEY_POINT, FORMULA, STEP_TEXT, or STEP_NARRATION only when they genuinely
+      belong on screen. Every visible field must correspond directly to what NARRATION is
+      explaining in that scene. Use STEP_TEXT/STEP_NARRATION when multiple visible ideas are
+      discussed sequentially; omit optional fields rather than filling them with redundant text.
+    - For a visible opening question, use question_scene and put the full wording in
+      LEARNER_QUESTION. NARRATION contains the explanation after the question; the backend speaks
+      the question first.
+    - For ordered steps, keep the introduction brief and align each STEP_NARRATION with its
+      STEP_TEXT. Worked math should show substitution, simplification, and the final answer.
+    - For comparison_scene, the first two LABEL values name the compared items. Add only the
+      short KEY_POINT criteria/takeaways that help the learner see the comparison.
+    - A source-code scene must be custom_manim_scene with VISUAL_MODE code, ESSENTIAL_VISUAL true,
+      one exact CODE_SNIPPET, and a matching MANIM_SCRIPT_REF.
+    - Set REQUIRES_3D true only when the script actually uses 3D objects or camera methods.
+
+    Transport shape:
     <VIDEO_META>
     <TITLE>Short video title</TITLE>
-    <SUBTITLE>Optional learner-facing subtitle</SUBTITLE>
+    <SUBTITLE>Optional short subtitle</SUBTITLE>
     <AUDIENCE>general learners</AUDIENCE>
     </VIDEO_META>
 
     <SCENE_PLAN id="1">
     <TYPE>question_scene</TYPE>
     <LEARNING_ROLE>problem</LEARNING_ROLE>
-    <LEARNER_QUESTION>A short question, puzzle, or surprising observation.</LEARNER_QUESTION>
+    <LEARNER_QUESTION>Complete learner question</LEARNER_QUESTION>
     <VISUAL_MODE>diagram</VISUAL_MODE>
     <TITLE>Short hook title</TITLE>
-    <NARRATION>Begin teaching immediately with the question or visible phenomenon.</NARRATION>
-    <VISUAL>Internal production direction for the hook.</VISUAL>
-    <DURATION_SEC>7</DURATION_SEC>
+    <NARRATION>Concise explanation that follows the spoken question.</NARRATION>
+    <VISUAL>Concrete internal direction for what the learner sees.</VISUAL>
+    <DURATION_SEC>8</DURATION_SEC>
     </SCENE_PLAN>
 
     <SCENE_PLAN id="2">
-    <TYPE>process_scene</TYPE>
-    <LEARNING_ROLE>example</LEARNING_ROLE>
-    <LEARNER_QUESTION>What should the learner understand here?</LEARNER_QUESTION>
-    <VISUAL_MODE>process</VISUAL_MODE>
-    <TITLE>Short scene title</TITLE>
-    <NARRATION>Brief introduction to the sequence.</NARRATION>
-    <FORMULA>portable plain-text formula when needed</FORMULA>
-    <STEP_TEXT>First visible instructional step</STEP_TEXT>
-    <STEP_NARRATION>Natural spoken explanation of that step.</STEP_NARRATION>
-    <STEP_TEXT>Second visible instructional step</STEP_TEXT>
-    <STEP_NARRATION>Natural spoken explanation of that step.</STEP_NARRATION>
-    <DURATION_SEC>18</DURATION_SEC>
-    </SCENE_PLAN>
-
-    For a creative scene:
-    <SCENE_PLAN id="3">
     <TYPE>custom_manim_scene</TYPE>
-    <LEARNING_ROLE>interpretation</LEARNING_ROLE>
-    <VISUAL_MODE>graph</VISUAL_MODE>
-    <TITLE>Topic-specific visual explanation</TITLE>
-    <NARRATION>Student-facing explanation.</NARRATION>
-    <VISUAL>Internal production direction for the animation.</VISUAL>
-    <REQUIRED_VISUAL_ELEMENT>first concrete element</REQUIRED_VISUAL_ELEMENT>
-    <REQUIRED_VISUAL_ELEMENT>second concrete element</REQUIRED_VISUAL_ELEMENT>
+    <LEARNING_ROLE>intuition</LEARNING_ROLE>
+    <VISUAL_MODE>motion</VISUAL_MODE>
+    <TITLE>Short scene title</TITLE>
+    <NARRATION>Natural learner-facing explanation.</NARRATION>
+    <VISUAL>Show the idea through a concrete transformation or relationship.</VISUAL>
+    <REQUIRED_VISUAL_ELEMENT>one essential visual element</REQUIRED_VISUAL_ELEMENT>
     <ESSENTIAL_VISUAL>true</ESSENTIAL_VISUAL>
     <REQUIRES_3D>false</REQUIRES_3D>
-    <CODE_GOAL>What the script must visibly demonstrate.</CODE_GOAL>
-    <MANIM_SCRIPT_REF>scene_3</MANIM_SCRIPT_REF>
+    <CODE_GOAL>What the animation must make understandable.</CODE_GOAL>
+    <MANIM_SCRIPT_REF>scene_2</MANIM_SCRIPT_REF>
     </SCENE_PLAN>
 
-    <MANIM_SCRIPT id="scene_3">
+    <MANIM_SCRIPT id="scene_2">
     complete runnable Python file
     </MANIM_SCRIPT>
 
-    For a code scene, CODE_SNIPPET belongs inside that scene's SCENE_PLAN:
-    <SCENE_PLAN id="4">
-    <TYPE>custom_manim_scene</TYPE>
-    <LEARNING_ROLE>example</LEARNING_ROLE>
-    <VISUAL_MODE>code</VISUAL_MODE>
-    <TITLE>Bellman update in Python</TITLE>
-    <NARRATION>The loop evaluates each action and keeps the highest expected return.</NARRATION>
-    <VISUAL>Show the source code in a readable dark panel and emphasize the update.</VISUAL>
-    <REQUIRED_VISUAL_ELEMENT>readable source code with line numbers</REQUIRED_VISUAL_ELEMENT>
-    <ESSENTIAL_VISUAL>true</ESSENTIAL_VISUAL>
-    <CODE_GOAL>Display and explain the exact learner-facing snippet.</CODE_GOAL>
-    <CODE_SNIPPET>def bellman_update(V, R, P, gamma):
-    for state in range(num_states):
-        V[state] = max(action_values[state])
-    return V</CODE_SNIPPET>
-    <MANIM_SCRIPT_REF>scene_4</MANIM_SCRIPT_REF>
-    </SCENE_PLAN>
-
     Transport rules:
-    - Never output JSON, dictionaries, markdown fences, or prose outside tags.
-    - Put each field in its own opening and closing tag. Close every SCENE_PLAN.
-    - Repeat REQUIRED_VISUAL_ELEMENT, LABEL, KEY_POINT, STEP_TEXT, and STEP_NARRATION as needed.
-    - A SCENE_PLAN may contain at most one CODE_SNIPPET, while multiple different scenes may
-      each contain their own CODE_SNIPPET. Preserve indentation and line breaks inside it.
+    - Put each field in its own opening/closing tag and close every SCENE_PLAN.
+    - Repeat LABEL, KEY_POINT, REQUIRED_VISUAL_ELEMENT, STEP_TEXT, and STEP_NARRATION only as
+      needed.
+    - A SCENE_PLAN may contain at most one CODE_SNIPPET. Preserve its indentation and line breaks.
     - Output all SCENE_PLAN blocks before all MANIM_SCRIPT blocks.
-    - Omit optional fields rather than returning empty tags.
-
-    Allowed TYPE values: title_scene, question_scene, concept_scene, process_scene,
-    comparison_scene, custom_manim_scene.
-    Allowed LEARNING_ROLE values: intuition, definition, problem, formula, example,
-    interpretation.
-    Allowed VISUAL_MODE values: diagram, graph, code, motion, comparison, process, text.
-
-    Teaching rules:
-    - Start with a short question, puzzle, surprising fact, concrete example, or visible action.
-      A very brief title hook is allowed, but do not open with a greeting, agenda, learning-goal
-      list, or phrases such as "In this video you will learn," "Today we will explore," or
-      "Welcome." Begin teaching within the first sentence.
-    - If the opening hook is a visible question, use question_scene and put its complete wording in
-      LEARNER_QUESTION; NARRATION is the explanation that follows. The backend guarantees the
-      question is spoken first. If code is important, show it after the question beat.
-    - Every scene should show meaningful learner-facing content throughout narration.
-    - Standard scenes should use KEY_POINT, LABEL, FORMULA, STEP_TEXT, or a clear question.
-    - For STEP_TEXT, KEY_POINT, or bullet sequences, keep any introduction to one short sentence,
-      then discuss items in display order while they are revealed or highlighted. Keep narration
-      semantically aligned with the current visible item.
-    - For comparison_scene, use the first two LABEL values for the two things being compared and
-      include two to four KEY_POINT values containing the actual comparison takeaways or criteria.
-      Do not leave a long comparison narration supported only by two category names. Narration
-      should move through those KEY_POINT values in the same order they are shown.
-    - Worked mathematics should show completed substitution, simplification, and final answer.
-    - Teach meaning before notation when that order helps comprehension.
-    - VISUAL_MODE is advisory. Choose the Manim representation that best explains the idea; do
-      not add irrelevant axes or plot objects merely because the mode says graph.
-    - Every scene whose central visual is source code must use VISUAL_MODE code,
-      custom_manim_scene, ESSENTIAL_VISUAL true, and one non-empty CODE_SNIPPET.
-    - Multiple different scenes may each carry one CODE_SNIPPET. Preserve the exact learner-facing
-      snippet in its own scene and visibly render it.
-    - Visual learning: in a typical 5-7 scene video, normally aim for 2-3 scenes where motion,
-      spatial relationships, diagrams, comparisons, simulations, code, graphs, networks, or other
-      topic-specific visuals materially improve understanding. Prefer the simplest implementation
-      that teaches the idea; creative means explanatory, not decorative. Never exceed three custom
-      Manim scenes.
-    - For uncertain or future-facing topics, distinguish likely trends, plausible scenarios,
-      risks, and aspirations; do not present uncertain outcomes as inevitable.
-    - Set REQUIRES_3D true only when the complete script genuinely uses 3D objects or camera.
-    - Internal fields VISUAL, CODE_GOAL, ESSENTIAL_VISUAL, REQUIRES_3D, and MANIM_SCRIPT_REF
-      are never learner-facing. CODE_SNIPPET is learner-facing content shown in the video.
+    - Omit empty optional tags.
 
     {_COMPLETE_SCRIPT_CONTRACT}
 
-    Minimal valid 2D example:
-    <MANIM_SCRIPT id="scene_example_2d">
+    Minimal valid custom script:
+    <MANIM_SCRIPT id="scene_example">
     from manim import *
     from manim_voiceover import VoiceoverScene
     from manim_voiceover.services.gtts import GTTSService
@@ -396,66 +349,13 @@ STRUCTURED_VIDEO_SYSTEM = _with_artifact_safety(f"""\
     class GeneratedScene(VoiceoverScene):
         def construct(self):
             self.set_speech_service(GTTSService(lang="en"))
-            left = Circle(radius=0.8, color=BLUE_C).shift(LEFT * 2)
-            right = Square(side_length=1.4, color=GREEN_C).shift(RIGHT * 2)
-            arrow = Arrow(left.get_right(), right.get_left(), buff=0.2)
-            with self.voiceover(text="A transformation connects the starting state to the result.") as tracker:
-                self.play(GrowFromCenter(left), run_time=0.7)
-                self.play(GrowArrow(arrow), GrowFromCenter(right), run_time=0.9)
-                self.wait(max(0.1, tracker.duration - 1.6))
-            self.wait(1.0)
-    </MANIM_SCRIPT>
-
-    Minimal valid code-panel example:
-    <MANIM_SCRIPT id="scene_example_code">
-    from manim import *
-    from manim_voiceover import VoiceoverScene
-    from manim_voiceover.services.gtts import GTTSService
-
-    class GeneratedScene(VoiceoverScene):
-        def construct(self):
-            self.set_speech_service(GTTSService(lang="en"))
-            snippet = "def update(value, reward, gamma):\n    return reward + gamma * value"
-            panel = Code(
-                code_string=snippet,
-                language="python",
-                add_line_numbers=True,
-            ).scale(0.82)
-            panel.move_to(ORIGIN)
-            frame = SurroundingRectangle(panel, color=TEAL_C, buff=0.22)
-            with self.voiceover(text="This function combines immediate reward with discounted future value.") as tracker:
-                self.play(FadeIn(panel), Create(frame), run_time=1.2)
-                self.play(Indicate(panel), run_time=0.8)
-                self.wait(max(0.1, tracker.duration - 2.0))
-            self.wait(1.0)
-    </MANIM_SCRIPT>
-
-    Minimal valid 3D inheritance example:
-    <MANIM_SCRIPT id="scene_example_3d">
-    from manim import *
-    from manim_voiceover import VoiceoverScene
-    from manim_voiceover.services.gtts import GTTSService
-    import numpy as np
-
-    class GeneratedScene(VoiceoverScene, ThreeDScene):
-        def construct(self):
-            self.set_speech_service(GTTSService(lang="en"))
-            self.set_camera_orientation(phi=65 * DEGREES, theta=-45 * DEGREES, zoom=0.8)
-            axes = ThreeDAxes(
-                x_range=[-2.5, 2.5, 1],
-                y_range=[-2.5, 2.5, 1],
-                z_range=[0, 2.5, 0.5],
-                x_length=5.4,
-                y_length=5.4,
-                z_length=3.0,
-            )
-            surface = Surface(lambda u, v: axes.c2p(u, v, 0.18 * (u*u + v*v)),
-                              u_range=[-2, 2], v_range=[-2, 2], resolution=(16, 16))
-            visual_group = Group(axes, surface).scale(0.82).shift(DOWN * 0.3)
-            with self.voiceover(text="The bowl shape has one lowest region.") as tracker:
-                self.play(Create(axes), FadeIn(surface), run_time=1.5)
+            start = Circle(radius=0.7, color=BLUE_C).shift(LEFT * 2)
+            end = Square(side_length=1.2, color=GREEN_C).shift(RIGHT * 2)
+            arrow = Arrow(start.get_right(), end.get_left(), buff=0.2)
+            with self.voiceover(text="The starting state changes into the result.") as tracker:
+                self.play(GrowFromCenter(start), run_time=0.6)
+                self.play(GrowArrow(arrow), GrowFromCenter(end), run_time=0.9)
                 self.wait(max(0.1, tracker.duration - 1.5))
-            self.wait(1.0)
     </MANIM_SCRIPT>
 """)
 
@@ -511,6 +411,13 @@ STRUCTURED_VIDEO_EDIT_SYSTEM = _with_artifact_safety(f"""\
     Edit one structured educational video. Do not use markdown fences or JSON. Return one
     complete VIDEO_META block, complete SCENE_PLAN blocks, and complete MANIM_SCRIPT blocks
     only for custom scenes that are new or changed. Omitted existing scripts are preserved.
+
+    Keep the edited video focused and visual-first. Preserve one clear learning thread instead of
+    expanding into loosely related terminology. Narration carries the detailed explanation while
+    the screen demonstrates it through purposeful visuals. Define unfamiliar terms when first
+    needed, avoid paragraphs or repeated text cards, and use custom Manim freely when it materially
+    improves understanding. Use culturally appropriate examples when context is known and broadly
+    understandable examples otherwise.
 
     You may add, remove, combine, split, or reorder scenes. Keep or improve the opening hook;
     do not replace it with a greeting, agenda, or learning-goal list. Preserve useful material
@@ -646,7 +553,9 @@ STRUCTURED_VIDEO_BATCH_SIMPLIFY_SYSTEM = _with_artifact_safety(f"""\
     Return only one complete MANIM_SCRIPT block for every requested id, in the same order.
     Do not return JSON, markdown, commentary, or scripts for scenes that already rendered.
 
-    Preserve narration, core concept, and meaningful visual explanation. Deliberately reduce
+    Preserve narration, core concept, and meaningful visual explanation. Simplifying a scene
+    should reduce technical fragility, not replace an explanatory visual with a transcript or
+    paragraph of text. Deliberately reduce
     technical fragility: use stable Manim primitives, fewer objects, simpler transformations,
     and fewer delicate APIs. Preserve the educational representation that matters, but do not
     add axes, plots, or extra structures merely to satisfy VISUAL_MODE metadata. A code scene
