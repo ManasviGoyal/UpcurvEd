@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (example: v1.0.1)"
+        description: "Release tag to publish (example: v1.0.2)"
         required: true
         type: string
 
@@ -18,6 +18,8 @@ jobs:
   build:
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+
     strategy:
       fail-fast: false
       matrix:
@@ -28,13 +30,11 @@ jobs:
             dist_command: npm run desktop:dist:win -- --publish never
 
           - label: macos-x64
-            # GitHub's current standard Intel macOS runner.
             os: macos-15-intel
             python_arch: x64
             dist_command: npm run desktop:dist:mac:x64 -- --publish never
 
           - label: macos-arm64
-            # Native Apple Silicon runner so the bundled Python runtime is arm64.
             os: macos-14
             python_arch: arm64
             dist_command: npm run desktop:dist:mac:arm64 -- --publish never
@@ -45,7 +45,12 @@ jobs:
             dist_command: npm run desktop:dist:linux -- --publish never
 
     env:
+      # Do not search the runner for a Developer ID certificate.
+      # mac.identity: "-" in electron-builder.yml explicitly creates the
+      # complete ad-hoc macOS app signature used by the unsigned release.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # electron-builder must not try to publish from an individual matrix job.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -62,7 +67,7 @@ jobs:
             package-lock.json
             frontend/package-lock.json
 
-      - name: Setup Python
+      - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -71,13 +76,14 @@ jobs:
       - name: Show build environment
         shell: bash
         run: |
+          set -e
           echo "runner.os=${{ runner.os }}"
           echo "runner.arch=${{ runner.arch }}"
           echo "expected python architecture=${{ matrix.python_arch }}"
           node -p "'node ' + process.version + ' ' + process.platform + ' ' + process.arch"
           python -c "import platform, sys; print('python', sys.version.split()[0], platform.platform(), platform.machine())"
 
-      - name: Install Linux system deps (manim/manimpango/sox)
+      - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -89,19 +95,175 @@ jobs:
             sox \
             libsox-fmt-all
 
-      - name: Install macOS system deps (manim/manimpango/sox)
+      - name: Install macOS system dependencies
         if: runner.os == 'macOS'
         run: |
           brew install pkg-config cairo pango sox
 
-      - name: Install root deps
+      - name: Install root dependencies
         run: npm ci
 
-      - name: Install frontend deps
+      - name: Install frontend dependencies
         run: npm --prefix frontend ci
+
+      - name: Show pinned desktop build tools
+        shell: bash
+        run: |
+          node -e "console.log('electron', require('electron/package.json').version)"
+          node -e "console.log('electron-builder', require('electron-builder/package.json').version)"
 
       - name: Build installer
         run: ${{ matrix.dist_command }}
+
+      # Windows validation happens against the unpacked app produced by
+      # electron-builder before we trust/upload the NSIS installer.
+      - name: Validate Windows packaged runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installer = Get-ChildItem -Path release -Filter "*.exe" -File |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "No Windows installer (.exe) was produced."
+          }
+
+          $unpacked = Get-ChildItem -Path release -Directory |
+            Where-Object { $_.Name -match "^win.*unpacked$" } |
+            Select-Object -First 1
+          if (-not $unpacked) {
+            throw "Could not find electron-builder Windows unpacked output."
+          }
+
+          $appExe = Join-Path $unpacked.FullName "UpcurvEd.exe"
+          $pyHome = Join-Path $unpacked.FullName "resources\python-runtime\python"
+          $py = Join-Path $pyHome "python.exe"
+          $backendRoot = Join-Path $unpacked.FullName "resources\app.asar.unpacked"
+
+          if (-not (Test-Path $appExe)) {
+            throw "Packaged UpcurvEd.exe is missing: $appExe"
+          }
+          if (-not (Test-Path $py)) {
+            throw "Bundled Python is missing: $py"
+          }
+          if (-not (Test-Path (Join-Path $backendRoot "backend"))) {
+            throw "Unpacked backend is missing from packaged app."
+          }
+
+          $env:PYTHONHOME = $pyHome
+          $env:PYTHONNOUSERSITE = "1"
+          $env:PYTHONSAFEPATH = "1"
+          $env:PYTHONPATH = $backendRoot
+
+          & $py -c "import cairo, scipy.linalg, PIL.Image, av, ssl, hashlib, manim; print('native/runtime imports OK')"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled Python native/runtime import smoke test failed."
+          }
+
+          & $py -c "import backend.api.main; print('backend_ok True')"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged backend import smoke test failed."
+          }
+
+          Write-Host "Windows packaged runtime validation passed."
+          Write-Host "Installer: $($installer.FullName)"
+
+      # The important lesson from the macOS debugging: validating only the
+      # unpacked .app is not enough. Mount and inspect the FINAL DMG.
+      - name: Validate final macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DMG="$(find release -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          if [ -z "$DMG" ]; then
+            echo "No macOS DMG was produced."
+            exit 1
+          fi
+
+          MOUNT="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true
+            rm -rf "$MOUNT"
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT" >/dev/null
+
+          APP="$(find "$MOUNT" -maxdepth 2 -type d -name 'UpcurvEd.app' -print -quit)"
+          if [ -z "$APP" ]; then
+            echo "UpcurvEd.app is missing from final DMG."
+            exit 1
+          fi
+
+          FRAMEWORK="$APP/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework"
+          if [ ! -f "$FRAMEWORK" ]; then
+            echo "Electron Framework binary is missing from final DMG."
+            exit 1
+          fi
+
+          FRAMEWORK_BYTES="$(stat -f%z "$FRAMEWORK")"
+          echo "Electron Framework bytes: $FRAMEWORK_BYTES"
+          if [ "$FRAMEWORK_BYTES" -lt 100000000 ]; then
+            echo "Electron Framework is unexpectedly small; refusing to publish."
+            exit 1
+          fi
+
+          echo "Verifying complete ad-hoc app signature..."
+          codesign --verify --deep --strict --verbose=4 "$APP"
+
+          PY_HOME="$APP/Contents/Resources/python-runtime/python"
+          PY="$PY_HOME/bin/python3"
+          BACKEND_ROOT="$APP/Contents/Resources/app.asar.unpacked"
+
+          if [ ! -x "$PY" ]; then
+            echo "Bundled Python is missing or not executable: $PY"
+            exit 1
+          fi
+
+          if [ ! -d "$BACKEND_ROOT/backend" ]; then
+            echo "Unpacked backend is missing from packaged app."
+            exit 1
+          fi
+
+          echo "Smoke-testing bundled native/runtime imports from final DMG..."
+          env \
+            PYTHONHOME="$PY_HOME" \
+            PYTHONNOUSERSITE=1 \
+            PYTHONSAFEPATH=1 \
+            PYTHONPATH="$BACKEND_ROOT" \
+            "$PY" -c "import cairo, scipy.linalg, PIL.Image, av, ssl, hashlib, manim; print('native/runtime imports OK')"
+
+          echo "Smoke-testing packaged backend import from final DMG..."
+          env \
+            PYTHONHOME="$PY_HOME" \
+            PYTHONNOUSERSITE=1 \
+            PYTHONSAFEPATH=1 \
+            PYTHONPATH="$BACKEND_ROOT" \
+            "$PY" -c "import backend.api.main; print('backend_ok True')"
+
+          echo "macOS final-DMG validation passed."
+          echo "DMG: $DMG"
+
+      - name: Validate Linux artifacts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE="$(find release -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          if [ -z "$APPIMAGE" ]; then
+            echo "No Linux AppImage was produced."
+            exit 1
+          fi
+          test -s "$APPIMAGE"
+          echo "Linux artifact validation passed: $APPIMAGE"
+
+      - name: List release outputs
+        shell: bash
+        run: |
+          find release -maxdepth 3 -type f -print || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -116,6 +278,7 @@ jobs:
             release/**/*.yaml
             release/**/*.blockmap
           if-no-files-found: error
+          retention-days: 14
 
   publish:
     name: Publish GitHub Release
@@ -123,24 +286,35 @@ jobs:
     needs: build
 
     steps:
-      - name: Download all artifacts
+      - name: Download all validated artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
 
-      - name: Resolve tag
+      - name: Resolve release tag
         id: meta
         shell: bash
         run: |
+          set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
+
+          if [[ "$TAG" != v* ]]; then
+            echo "Release tag must begin with v (example: v1.0.2)."
+            exit 1
+          fi
+
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish release assets
+      - name: Show release assets
+        shell: bash
+        run: find release-assets -type f -maxdepth 3 -print
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
