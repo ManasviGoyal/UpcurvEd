@@ -121,8 +121,15 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          ulimit -n 65535 || ulimit -n 10240 || true
-          echo "open file limit: $(ulimit -n)"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # `ulimit -n` on its own is capped by kern.maxfilesperproc, so raising only
+            # the soft limit silently lands on a ceiling far below what electron-builder
+            # needs. Raise the kernel caps first, then the shell limit.
+            sudo sysctl -w kern.maxfiles=200000 kern.maxfilesperproc=100000 || true
+            sudo launchctl limit maxfiles 100000 200000 || true
+          fi
+          ulimit -n 100000 || ulimit -n 65535 || ulimit -n 24576 || ulimit -n 10240 || true
+          echo "==> open files: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
           ${{ matrix.dist_command }}
 
       - name: Build installer (Windows)
@@ -340,6 +347,14 @@ jobs:
           name: UpcurvEd ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           target_commitish: ${{ github.sha }}
+          # Explicit, not defaulted. `releases/latest` — which the landing page links
+          # to — skips drafts and prereleases entirely, so either state would 404 every
+          # download button while the release page still looked fine. Stating them also
+          # overrides a pre-existing draft: this action updates a release that already
+          # exists for the tag and would otherwise inherit its draft status.
+          draft: false
+          prerelease: false
+          make_latest: "true"
           files: |
             release-assets/**
           fail_on_unmatched_files: true

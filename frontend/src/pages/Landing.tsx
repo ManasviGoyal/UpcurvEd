@@ -8,9 +8,12 @@ import { trackEvent } from "@/lib/analytics";
 // Direct release-asset links. On a public repo these need no GitHub account: the URL
 // redirects to a signed CDN link served with `Content-Disposition: attachment`, so the
 // browser starts the download without ever showing a GitHub page. `latest/download/`
-// always resolves to the newest release, and electron-builder is configured to emit
-// version-less filenames so these URLs never need editing.
-const RELEASE_ASSETS = "https://github.com/ManasviGoyal/UpcurvEd/releases/latest/download";
+// always resolves to the newest published release, and electron-builder is configured to
+// emit version-less filenames so these URLs never need editing.
+//
+// The owner/repo is not written here — vite.config.ts derives it from the root
+// package.json `repository` field at build time.
+const RELEASE_ASSETS = __RELEASE_ASSETS_BASE__;
 
 const DOWNLOADS = {
   windows: `${RELEASE_ASSETS}/UpcurvEd-win-x64.exe`,

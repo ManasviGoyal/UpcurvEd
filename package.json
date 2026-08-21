@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "description": "Desktop runtime for UpcurvEd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManasviGoyal/UpcurvEd.git"
+  },
   "author": "Manasvi Goyal and Isabela Yepes",
   "contributors": [
     "Manasvi Goyal",

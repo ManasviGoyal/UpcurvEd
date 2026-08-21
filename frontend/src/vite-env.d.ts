@@ -1,5 +1,8 @@
 /// <reference types="vite/client" />
 
+/** Injected by vite.config.ts from the root package.json `repository` field. */
+declare const __RELEASE_ASSETS_BASE__: string;
+
 interface DesktopBridge {
   isDesktop: boolean;
   platform: string;
