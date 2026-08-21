@@ -4893,7 +4893,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         isCaptionsOn &&
         hasCaptions;
 
-      let subtitleText = activeScript || srtText || undefined;
+      // activeScript is not always subtitles -- it also holds the bot's plain chat
+      // message (see setActiveScript(lastBotMessage?.content)). Prose has no timing
+      // cues, so ffmpeg cannot probe it and fails with an opaque "Unable to open".
+      // Prefer whichever source is actually timed.
+      const hasTimingCues = (value?: string | null) =>
+        Boolean(value && /\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->/.test(value));
+      let subtitleText = hasTimingCues(activeScript)
+        ? activeScript
+        : hasTimingCues(srtText)
+          ? srtText
+          : undefined;
 
       // If captions are currently displayed from a generated blob URL, the backend
       // cannot fetch that URL directly, so send the caption text in the request.
