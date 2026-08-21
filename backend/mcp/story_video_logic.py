@@ -11,6 +11,11 @@ import sys
 from typing import Any
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.multimodal import (
+    NEEDS_CLARIFICATION_MESSAGE,
+    call_multimodal_llm,
+    is_needs_clarification,
+)
 from backend.agent.llm.provider_config import (
     resolve_provider_and_key as _pick_provider_and_key,
 )
@@ -1847,6 +1852,9 @@ def generate_story_video(
     provider_keys: dict[str, str] | None = None,
     story_options: dict[str, Any] | None = None,
     job_id: str | None = None,
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
 ) -> dict[str, Any]:
     from uuid import uuid4
 
@@ -1854,15 +1862,30 @@ def generate_story_video(
     options = story_options or {}
     host_character = str(options.get("host_character") or "").strip() or None
     theme = str(options.get("theme") or "").strip() or None
-    raw = call_llm(
+    llm_result = call_multimodal_llm(
         provider=prov,
         api_key=key,
         model=model,
         system=STORY_PLAN_SYSTEM,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
+        learner_prompt=(learner_prompt if learner_prompt is not None else prompt),
+        images=images,
+        provider_keys=provider_keys,
+        default_image_prompt_used=default_image_prompt_used,
         temperature=0.35,
         max_tokens=3600,
     )
+    raw = llm_result.text
+    generation_diagnostics = llm_result.metadata.to_dict()
+    if is_needs_clarification(raw):
+        return {
+            "ok": False,
+            "status": "needs_clarification",
+            "error": "needs_clarification",
+            "message": NEEDS_CLARIFICATION_MESSAGE,
+            "video_url": None,
+            "generation_diagnostics": generation_diagnostics,
+        }
     plan = _normalize_story_plan(_extract_story_plan(raw, prompt), prompt)
     host_payload = _resolve_host_payload(host_character)
     draw_js_by_scene, fallback_js_by_scene = _prepare_story_drawings(
@@ -1961,6 +1984,7 @@ def generate_story_video(
         "video_url": to_static_url(final_mp4),
         "vtt_url": to_static_url(vtt_path),
         "story_plan": plan,
+        "generation_diagnostics": generation_diagnostics,
     }
 
 
@@ -2557,20 +2581,38 @@ def generate_story_slider(
     model: str | None = None,
     provider_keys: dict[str, str] | None = None,
     story_options: dict[str, Any] | None = None,
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
 ) -> dict[str, Any]:
     prov, key = _pick_provider_and_key(provider, provider_keys)
     options = story_options or {}
     host_character = str(options.get("host_character") or "").strip() or None
     theme = str(options.get("theme") or "").strip() or None
-    raw = call_llm(
+    llm_result = call_multimodal_llm(
         provider=prov,
         api_key=key,
         model=model,
         system=STORY_PLAN_SYSTEM,
         user=_story_prompt(prompt, host_character=host_character, theme=theme),
+        learner_prompt=(learner_prompt if learner_prompt is not None else prompt),
+        images=images,
+        provider_keys=provider_keys,
+        default_image_prompt_used=default_image_prompt_used,
         temperature=0.35,
         max_tokens=3600,
     )
+    raw = llm_result.text
+    generation_diagnostics = llm_result.metadata.to_dict()
+    if is_needs_clarification(raw):
+        return {
+            "ok": False,
+            "status": "needs_clarification",
+            "error": "needs_clarification",
+            "message": NEEDS_CLARIFICATION_MESSAGE,
+            "widget_html": None,
+            "generation_diagnostics": generation_diagnostics,
+        }
     plan = _normalize_story_plan(_extract_story_plan(raw, prompt), prompt)
     host_payload = _resolve_host_payload(host_character)
     draw_js_by_scene, fallback_js_by_scene = _prepare_story_drawings(
@@ -2593,4 +2635,5 @@ def generate_story_slider(
         "status": "ok",
         "widget_html": html,
         "story_plan": plan,
+        "generation_diagnostics": generation_diagnostics,
     }

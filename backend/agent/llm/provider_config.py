@@ -50,6 +50,11 @@ def default_openrouter_model() -> str:
     )
 
 
+def default_openrouter_vision_model() -> str:
+    """Return the image-understanding helper model used for text-only OpenRouter selections."""
+    return _env_value("OPENROUTER_VISION_MODEL") or "openrouter/free"
+
+
 def default_openai_model() -> str:
     """Return the configured direct OpenAI model."""
     return _env_value("OPENAI_MODEL") or "gpt-5.6"

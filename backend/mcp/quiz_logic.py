@@ -7,6 +7,11 @@ except ImportError:  # optional fallback, continue without json5
 from typing import Any
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.multimodal import (
+    NEEDS_CLARIFICATION_MESSAGE,
+    call_multimodal_llm,
+    is_needs_clarification,
+)
 from backend.agent.llm.provider_config import (
     resolve_provider_and_key as _pick_provider_and_key,
 )
@@ -338,21 +343,38 @@ def _generate_quiz_json_with_call_llm(
     provider: str | None,
     model: str | None,
     provider_keys: dict[str, str] | None,
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
 ) -> dict[str, Any]:
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
     # The unified client selects the configured default model for every provider.
     user_prompt = build_quiz_user_prompt(prompt, num_questions, difficulty, context)
     # Strict system instruction lives in backend.agent.prompts.
     strict_system = QUIZ_GENERATE_SYSTEM
-    text = call_llm(
+    llm_result = call_multimodal_llm(
         provider=prov,
         api_key=api_key,
         model=model,
         system=strict_system,
         user=user_prompt,
+        learner_prompt=(learner_prompt if learner_prompt is not None else prompt),
+        images=images,
+        provider_keys=provider_keys,
+        default_image_prompt_used=default_image_prompt_used,
         temperature=0.4,  # Moderate temperature for question variety while maintaining accuracy
     )
-    return _parse_quiz_json(text)
+    if is_needs_clarification(llm_result.text):
+        return {
+            "ok": False,
+            "status": "needs_clarification",
+            "error": "needs_clarification",
+            "message": NEEDS_CLARIFICATION_MESSAGE,
+            "generation_diagnostics": llm_result.metadata.to_dict(),
+        }
+    quiz = _parse_quiz_json(llm_result.text)
+    quiz["generation_diagnostics"] = llm_result.metadata.to_dict()
+    return quiz
 
 
 def generate_quiz_embedded(
@@ -364,6 +386,9 @@ def generate_quiz_embedded(
     model: str | None = None,
     provider_keys: dict[str, str] | None = None,
     context: str | None = None,
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
 ) -> dict[str, Any]:
     """Generate a quiz JSON suitable for direct embedding (no Google Form).
 
@@ -378,7 +403,12 @@ def generate_quiz_embedded(
         provider=provider,
         model=model,
         provider_keys=provider_keys,
+        learner_prompt=learner_prompt,
+        images=images,
+        default_image_prompt_used=default_image_prompt_used,
     )
+    if quiz.get("status") == "needs_clarification":
+        return quiz
     # Safety: ensure exactly num_questions questions (LLM may under/over produce)
     questions = (quiz.get("questions") or [])[:num_questions]
     quiz["questions"] = questions
@@ -387,6 +417,7 @@ def generate_quiz_embedded(
         "description": quiz.get("description") or "Generated quiz",
         "questions": questions,
         "count": len(questions),
+        "generation_diagnostics": quiz.get("generation_diagnostics"),
     }
 
 

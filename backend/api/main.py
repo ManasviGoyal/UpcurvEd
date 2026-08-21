@@ -23,6 +23,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.agent.llm.clients import call_llm, track_llm_calls
+from backend.agent.llm.multimodal import (
+    MAX_GENERATION_IMAGES,
+    resolve_effective_learner_prompt,
+)
 from backend.agent.llm.provider_config import (
     ProviderName,
     get_provider_key as _get_provider_key,
@@ -458,8 +462,31 @@ if not _get_bucket_name():
     app.mount("/static", StaticFiles(directory=str(STORAGE)), name="static")
 
 
+class GenerationImageIn(BaseModel):
+    dataUrl: str
+    mimeType: Literal["image/png", "image/jpeg", "image/webp"]
+    name: str | None = None
+
+
+def _generation_image_payload(images: list[GenerationImageIn]) -> list[dict[str, str]]:
+    if len(images) > MAX_GENERATION_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Up to {MAX_GENERATION_IMAGES} images can be attached to one generation.",
+        )
+    return [
+        {
+            "data_url": image.dataUrl,
+            "mime_type": image.mimeType,
+            "name": image.name or f"image_{index}",
+        }
+        for index, image in enumerate(images, start=1)
+    ]
+
+
 class GenerateIn(BaseModel):
     prompt: str
+    images: list[GenerationImageIn] = Field(default_factory=list)
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
@@ -473,6 +500,7 @@ class GenerateIn(BaseModel):
 
 class QuizIn(BaseModel):
     prompt: str
+    images: list[GenerationImageIn] = Field(default_factory=list)
     num_questions: int = 5
     difficulty: Literal["easy", "medium", "hard"] | None = "medium"
     keys: dict[str, str] = {}
@@ -488,6 +516,7 @@ class QuizIn(BaseModel):
 
 class PodcastIn(BaseModel):
     prompt: str
+    images: list[GenerationImageIn] = Field(default_factory=list)
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
@@ -500,6 +529,7 @@ class PodcastIn(BaseModel):
 
 class WidgetIn(BaseModel):
     prompt: str
+    images: list[GenerationImageIn] = Field(default_factory=list)
     keys: dict[str, str] = {}
     provider: ProviderName | None = None
     model: str | None = None
@@ -962,16 +992,15 @@ def _caption_text_to_transcript(caption_text: str) -> str:
 def _ffmpeg_filter_path(path: pathlib.Path) -> str:
     """Quote and escape a path for use inside an ffmpeg filter argument.
 
-    ffmpeg splits filter options on ":", so on Windows the drive letter ended the
-    filename early and the rest of the path was passed to the filter's next option,
-    original_size. Escaping the colon alone is not enough; the value must also be
-    wrapped in single quotes.
+    ffmpeg splits filter options on ":", so on Windows the drive letter can end
+    the filename early and the rest of the path may be parsed as another filter
+    option. Escape filter-sensitive characters and quote the complete filename.
     """
     escaped = (
         path.as_posix()
         .replace("\\", "\\\\")
-        .replace("'", "\'")
-        .replace(":", "\:")
+        .replace("'", "\\'")
+        .replace(":", "\\:")
     )
     return f"'{escaped}'"
 
@@ -1065,6 +1094,17 @@ def _publish_structured_video_result(
     generation_mode: str | None = None,
 ) -> dict:
     """Publish a structured video result locally or to GCS."""
+    if str(result.get("status") or "").strip() == "needs_clarification":
+        return {
+            "ok": False,
+            "status": "needs_clarification",
+            "error": "needs_clarification",
+            "message": str(result.get("message") or ""),
+            "video_url": None,
+            "scene_results": [],
+            "generation_diagnostics": result.get("generation_diagnostics"),
+        }
+
     video_url = result.get("video_url")
     render_ok = bool(result.get("ok") and video_url)
     job_id = result.get("job_id") or fallback_job_id or "unknown"
@@ -1257,13 +1297,42 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     model,
                     gen_mode,
                 )
+                image_payload = _generation_image_payload(body.images)
+                effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+                    body.prompt,
+                    image_payload,
+                )
                 story_res = _generate_story_slider(
-                    prompt=_with_audience_guidance(body.prompt, body.audience),
+                    prompt=_with_audience_guidance(effective_prompt, body.audience),
+                    learner_prompt=body.prompt,
+                    images=image_payload,
+                    default_image_prompt_used=default_image_prompt_used,
                     provider=provider,
                     model=model,
                     provider_keys=provider_keys,
                     story_options=body.storyOptions or {},
                 )
+                if story_res.get("status") == "needs_clarification":
+                    _append_artifact_generation_audit(
+                        generation_type="story",
+                        job_id=job_id,
+                        operation="generate",
+                        outcome="needs_clarification",
+                        provider=provider,
+                        model=model,
+                        llm_calls=llm_counter.count,
+                        started_monotonic=started,
+                    )
+                    return {
+                        "ok": False,
+                        "status": "needs_clarification",
+                        "error": "needs_clarification",
+                        "message": story_res.get("message"),
+                        "widget_html": None,
+                        "generation_mode": "story",
+                        "generation_diagnostics": story_res.get("generation_diagnostics"),
+                    }
+
                 widget_html = story_res.get("widget_html")
                 if story_res.get("status") == "ok" and widget_html:
                     story_plan = story_res.get("story_plan") or {}
@@ -1297,6 +1366,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                         "story_plan": story_plan,
                         "generation_mode": "story",
                         "message": "Story scene slider generated.",
+                        "generation_diagnostics": story_res.get("generation_diagnostics"),
                         **download_meta,
                     }
 
@@ -1364,8 +1434,16 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             generate_structured_manim_video,
         )
 
+        image_payload = _generation_image_payload(body.images)
+        effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+            body.prompt,
+            image_payload,
+        )
         result = generate_structured_manim_video(
-            prompt=_with_audience_guidance(body.prompt, body.audience),
+            prompt=_with_audience_guidance(effective_prompt, body.audience),
+            learner_prompt=body.prompt,
+            images=image_payload,
+            default_image_prompt_used=default_image_prompt_used,
             provider_keys=provider_keys,
             provider=provider,
             model=model,
@@ -1382,7 +1460,12 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             generation_mode="standard",
         )
 
-        if response.get("ok"):
+        if response.get("status") == "needs_clarification":
+            logger.info(
+                "/generate needs clarification (job_id=%s)",
+                result.get("job_id"),
+            )
+        elif response.get("ok"):
             logger.info(
                 "/generate completed: ok (job_id=%s)",
                 result.get("job_id"),
@@ -1500,8 +1583,16 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 body.model,
             )
             provider_keys = _provider_keys_with_env(body.keys)
+            image_payload = _generation_image_payload(body.images)
+            effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+                body.prompt,
+                image_payload,
+            )
             quiz = _generate_quiz_embedded(
-                prompt=_with_audience_guidance(body.prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                learner_prompt=body.prompt,
+                images=image_payload,
+                default_image_prompt_used=default_image_prompt_used,
                 num_questions=body.num_questions,
                 difficulty=body.difficulty or "medium",
                 provider=provider,
@@ -1509,6 +1600,26 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 provider_keys=provider_keys,
                 context=body.context,
             )
+            if quiz.get("status") == "needs_clarification":
+                _append_artifact_generation_audit(
+                    generation_type="quiz",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="needs_clarification",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                )
+                return {
+                    "ok": False,
+                    "status": "needs_clarification",
+                    "error": "needs_clarification",
+                    "message": quiz.get("message"),
+                    "quiz": None,
+                    "generation_diagnostics": quiz.get("generation_diagnostics"),
+                }
+
             quiz_html = build_quiz_html(quiz, source_title=body.prompt)
             download_meta = _html_download_payload(
                 uid=uid,
@@ -1528,7 +1639,12 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
             )
-            return {"status": "ok", "quiz": quiz, **download_meta}
+            return {
+                "status": "ok",
+                "quiz": quiz,
+                "generation_diagnostics": quiz.get("generation_diagnostics"),
+                **download_meta,
+            }
         except Exception as exc:
             _append_artifact_generation_audit(
                 generation_type="quiz",
@@ -1592,6 +1708,26 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                 provider_keys=provider_keys,
                 context=context,
             )
+            if quiz.get("status") == "needs_clarification":
+                _append_artifact_generation_audit(
+                    generation_type="quiz",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="needs_clarification",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                )
+                return {
+                    "ok": False,
+                    "status": "needs_clarification",
+                    "error": "needs_clarification",
+                    "message": quiz.get("message"),
+                    "quiz": None,
+                    "generation_diagnostics": quiz.get("generation_diagnostics"),
+                }
+
             quiz_html = build_quiz_html(quiz, source_title="Media quiz")
             download_meta = _html_download_payload(
                 uid=uid,
@@ -1647,14 +1783,34 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                 body.model,
             )
             provider_keys = _provider_keys_with_env(body.keys)
+            image_payload = _generation_image_payload(body.images)
+            effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+                body.prompt,
+                image_payload,
+            )
             result = _generate_podcast(
-                prompt=_with_audience_guidance(body.prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                learner_prompt=body.prompt,
+                images=image_payload,
+                default_image_prompt_used=default_image_prompt_used,
                 provider=provider,
                 model=model,
                 provider_keys=provider_keys,
                 mode=body.mode or "standard",
                 job_id=job_id,
             )
+            if result.get("status") == "needs_clarification":
+                _append_artifact_generation_audit(
+                    generation_type="podcast",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="needs_clarification",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                )
+                return result
 
             gcs_bucket = _get_bucket_name()
             if gcs_bucket and result.get("video_url"):
@@ -2227,12 +2383,33 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             )
             provider_keys = _provider_keys_with_env(body.keys)
             logger.info("/widget called provider=%s model=%s", provider, model)
+            image_payload = _generation_image_payload(body.images)
+            effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+                body.prompt,
+                image_payload,
+            )
             result = _generate_widget(
-                prompt=_with_audience_guidance(body.prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                learner_prompt=body.prompt,
+                images=image_payload,
+                default_image_prompt_used=default_image_prompt_used,
                 provider=provider,
                 model=model,
                 provider_keys=provider_keys,
             )
+            if result.get("status") == "needs_clarification":
+                _append_artifact_generation_audit(
+                    generation_type="widget",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="needs_clarification",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                )
+                return result
+
             widget_html = result["widget_html"]
             download_meta = _html_download_payload(
                 uid=uid,
@@ -2260,6 +2437,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 "ok": True,
                 "status": "ok",
                 "widget_html": widget_html,
+                "generation_diagnostics": result.get("generation_diagnostics"),
                 **download_meta,
             }
         except Exception as exc:

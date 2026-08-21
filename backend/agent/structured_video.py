@@ -25,6 +25,11 @@ from typing import Any
 
 from backend.agent.code_sanitize import SanitizeResult, sanitize_manim_script, sanitize_minimally
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.multimodal import (
+    NEEDS_CLARIFICATION_MESSAGE,
+    call_multimodal_llm,
+    is_needs_clarification,
+)
 from backend.agent.llm.provider_config import (
     get_default_model,
     resolve_provider_and_key as _pick_provider_and_key,
@@ -1014,6 +1019,8 @@ def _raise_for_voice_failures(states: dict[int, dict[str, Any]]) -> None:
 def _audit_outcome(metrics: dict[str, Any], *, failed: bool) -> str:
     if failed:
         return "failed"
+    if metrics.get("needs_clarification"):
+        return "needs_clarification"
     if metrics.get("component_fallback_scene_ids"):
         return "completed_with_fallback"
     if metrics.get("simplified_scene_ids"):
@@ -1093,6 +1100,12 @@ def _append_audit_and_cleanup(
                 "local_script_adjustments": metrics.get("local_script_adjustments"),
                 "voice_retry_count": metrics.get("voice_retry_count"),
                 "transport_salvages": metrics.get("transport_salvages"),
+                "image_count": metrics.get("image_count"),
+                "vision_mode": metrics.get("vision_mode"),
+                "vision_provider": metrics.get("vision_provider"),
+                "vision_model": metrics.get("vision_model"),
+                "vision_fallback_reason": metrics.get("vision_fallback_reason"),
+                "default_image_prompt_used": metrics.get("default_image_prompt_used"),
                 "failure_stage": failure_stage,
                 "during_stage": during_stage,
                 "error_category": error_category,
@@ -2825,7 +2838,9 @@ def _build_generation_diagnostics(
     simplified_count = len(set(metrics.get("simplified_scene_ids") or []))
     plan_repaired_by_model = bool(metrics.get("plan_repaired_by_model"))
 
-    if failed:
+    if metrics.get("needs_clarification"):
+        quality_status = "needs_clarification"
+    elif failed:
         quality_status = "failed"
     elif fallback_count:
         quality_status = "completed_with_fallback"
@@ -2852,6 +2867,13 @@ def _build_generation_diagnostics(
         "recovery_stages": list(dict.fromkeys(metrics.get("recovery_stages") or [])),
         "voice_retries": int(metrics.get("voice_retry_count") or 0),
         "failure_stage": failure_stage,
+        "input_modality": "image" if int(metrics.get("image_count") or 0) else "text",
+        "image_count": int(metrics.get("image_count") or 0),
+        "vision_mode": str(metrics.get("vision_mode") or "none"),
+        "vision_provider": str(metrics.get("vision_provider") or ""),
+        "vision_model": str(metrics.get("vision_model") or ""),
+        "vision_fallback_reason": str(metrics.get("vision_fallback_reason") or ""),
+        "default_image_prompt_used": bool(metrics.get("default_image_prompt_used")),
     }
     if error_category:
         diagnostics["error_category"] = error_category
@@ -3112,11 +3134,70 @@ def _new_metrics(operation: str = "generate") -> dict[str, Any]:
         "recovery_stages": [],
         "voice_retry_count": 0,
         "transport_salvages": 0,
+        "needs_clarification": False,
+        "image_count": 0,
+        "vision_mode": "none",
+        "vision_provider": "",
+        "vision_model": "",
+        "vision_fallback_reason": "",
+        "default_image_prompt_used": False,
         "_response_debug_contexts": [],
         "_debug_contexts_flushed": False,
         "_scene_diagnostics": {},
         "_detail_hashes": {},
     }
+
+def _record_multimodal_metadata(metrics: dict[str, Any], metadata: Any) -> None:
+    values = metadata.to_dict() if hasattr(metadata, "to_dict") else dict(metadata or {})
+    metrics["image_count"] = int(values.get("image_count") or 0)
+    metrics["vision_mode"] = str(values.get("vision_mode") or "none")
+    metrics["vision_provider"] = str(values.get("vision_provider") or "")
+    metrics["vision_model"] = str(values.get("vision_model") or "")
+    metrics["vision_fallback_reason"] = str(values.get("vision_fallback_reason") or "")
+    metrics["default_image_prompt_used"] = bool(values.get("default_image_prompt_used"))
+
+
+def _clarification_result(
+    *,
+    job_id: str,
+    provider_name: str | None,
+    model: str | None,
+    metrics: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a valid non-failure outcome when the model declines to guess learner intent."""
+    metrics["needs_clarification"] = True
+    diagnostics = _build_generation_diagnostics(
+        None,
+        provider_name=provider_name,
+        model=model,
+        metrics=metrics,
+    )
+    _append_audit_and_cleanup(
+        job_id=job_id,
+        plan=None,
+        provider_name=provider_name,
+        model=model,
+        metrics=metrics,
+        failed=False,
+        has_final_artifact=False,
+    )
+    logger.info(
+        "structured_video_needs_clarification job_id=%s provider=%s model=%s",
+        job_id,
+        provider_name,
+        model,
+    )
+    return {
+        "ok": False,
+        "status": "needs_clarification",
+        "error": "needs_clarification",
+        "message": NEEDS_CLARIFICATION_MESSAGE,
+        "job_id": job_id,
+        "video_url": None,
+        "scene_results": [],
+        "generation_diagnostics": diagnostics,
+    }
+
 
 def _failure_result(
     *,
@@ -3209,6 +3290,9 @@ def _failure_result(
 def generate_structured_manim_video(
     prompt: str,
     *,
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
     provider: str | None = None,
     model: str | None = None,
     provider_keys: dict[str, str] | None = None,
@@ -3240,17 +3324,31 @@ def generate_structured_manim_video(
             provider_name,
             resolved_model,
         )
-        metrics["llm_calls"] += 1
-        raw = call_llm(
-            provider=provider_name,
+        multimodal = call_multimodal_llm(
+            provider=provider_name,  # type: ignore[arg-type]
             api_key=api_key,
             model=resolved_model,
             system=STRUCTURED_VIDEO_SYSTEM,
             user=build_structured_video_user_prompt(prompt),
+            learner_prompt=str(learner_prompt if learner_prompt is not None else prompt),
+            images=images,
+            provider_keys=provider_keys,
+            default_image_prompt_used=default_image_prompt_used,
             temperature=0.28,
             max_tokens=_INITIAL_MAX_TOKENS,
+            on_model_call=lambda: metrics.__setitem__(
+                "llm_calls", int(metrics.get("llm_calls") or 0) + 1
+            ),
         )
-        raw_text = _coerce_llm_text(raw)
+        _record_multimodal_metadata(metrics, multimodal.metadata)
+        raw_text = _coerce_llm_text(multimodal.text)
+        if is_needs_clarification(raw_text):
+            return _clarification_result(
+                job_id=final_job_id,
+                provider_name=provider_name,
+                model=resolved_model,
+                metrics=metrics,
+            )
         parsed, scripts, bodies, plan_text, repaired_plan_text, plan_was_repaired = (
             _parse_structured_response(raw_text)
         )

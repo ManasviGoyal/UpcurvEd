@@ -439,10 +439,10 @@ function patchMacPythonFrameworkLinks() {
 
 function validateBundledRuntime(python) {
   const validationCode = [
-    "import sys, pathlib, ctypes, _ctypes",
+    "import sys, pathlib, ctypes, _ctypes, inspect",
     "import cairo, numpy, scipy, scipy.linalg, manim, manim_voiceover",
     "from PIL import Image",
-    "import av, ssl, hashlib",
+    "import av, ssl, hashlib, certifi, anthropic, google.generativeai as genai",
     "from manim_voiceover.services.gtts import GTTSService",
     "import edge_tts",
     "from backend.tts.manim_service import EdgeTTSService",
@@ -454,7 +454,7 @@ function validateBundledRuntime(python) {
     "inside = lambda value: pathlib.Path(value).resolve() == root or root in pathlib.Path(value).resolve().parents",
     "assert pathlib.Path(sys.prefix).resolve() == root, (sys.prefix, root)",
     "assert pathlib.Path(sys.base_prefix).resolve() == root, (sys.base_prefix, root)",
-    "modules = {'_ctypes': _ctypes, 'cairo': cairo, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover}",
+    "modules = {'_ctypes': _ctypes, 'cairo': cairo, 'numpy': numpy, 'scipy': scipy, 'manim': manim, 'manim_voiceover': manim_voiceover, 'anthropic': anthropic, 'certifi': certifi, 'google.generativeai': genai}",
     // Statically linked extensions have no __file__ (python-build-standalone compiles _ctypes into
     // the interpreter). Those cannot come from outside the bundle, but prove they really are
     // built in rather than letting a missing __file__ excuse a module that escaped the runtime.
@@ -465,7 +465,17 @@ function validateBundledRuntime(python) {
     "assert not bad, bad",
     "outside_site = [p for p in sys.path if p and 'site-packages' in p and not inside(p)]",
     "assert not outside_site, outside_site",
+    "anthropic_version = str(getattr(anthropic, '__version__', ''))",
+    "assert anthropic_version.startswith('1.'), f'Expected Anthropic SDK v1.x, found {anthropic_version}'",
+    "anthropic_client = anthropic.Anthropic(api_key='runtime-validation-placeholder')",
+    "anthropic_params = inspect.signature(anthropic_client.messages.create).parameters",
+    "assert 'temperature' not in anthropic_params, 'Anthropic SDK call shape does not match v1 migration'",
+    "ca_bundle = pathlib.Path(certifi.where()).resolve()",
+    "assert ca_bundle.is_file(), f'certifi CA bundle missing: {ca_bundle}'",
+    "assert inside(ca_bundle), f'certifi CA bundle escaped bundled runtime: {ca_bundle}'",
     "print('Bundled runtime OK')",
+    "print('anthropic', anthropic_version, anthropic.__file__)",
+    "print('certifi_ca', ca_bundle)",
     "print('executable', sys.executable)",
     "print('prefix', sys.prefix)",
     "print('scipy', scipy.__file__)",

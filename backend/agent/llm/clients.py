@@ -1,7 +1,9 @@
 # backend/agent/llm/clients.py
 from __future__ import annotations
 
+import base64
 import os
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -60,6 +62,42 @@ def _require_prompt(user: str) -> str:
     return text
 
 
+def _normalize_images(images: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    for index, image in enumerate(images or [], start=1):
+        if not isinstance(image, dict):
+            raise LLMError(f"Image {index} is invalid.")
+        data_url = str(image.get("data_url") or image.get("dataUrl") or "").strip()
+        mime_type = str(image.get("mime_type") or image.get("mimeType") or "").strip().lower()
+        if not data_url or not mime_type:
+            raise LLMError(f"Image {index} is missing data or MIME type.")
+        output.append({"data_url": data_url, "mime_type": mime_type})
+    return output
+
+
+def _base64_bytes_from_data_url(data_url: str, expected_mime: str) -> bytes:
+    match = re.fullmatch(
+        r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\r\n]+)",
+        str(data_url or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise LLMError("Image data URL is invalid.")
+    mime_type = match.group(1).lower()
+    if expected_mime and mime_type != str(expected_mime).lower():
+        raise LLMError("Image MIME type does not match its data URL.")
+    try:
+        payload = re.sub(r"\s+", "", match.group(2))
+        return base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise LLMError("Image contains invalid base64 data.") from exc
+
+
+def _base64_payload_from_data_url(data_url: str, expected_mime: str) -> str:
+    raw = _base64_bytes_from_data_url(data_url, expected_mime)
+    return base64.b64encode(raw).decode("ascii")
+
+
 def _json_error_message(
     data: object,
     *,
@@ -88,9 +126,11 @@ def _call_openrouter(
     user: str,
     temperature: float = 0.2,
     max_tokens: int | None = None,
+    images: list[dict[str, str]] | None = None,
 ) -> str:
     model = str(model or default_openrouter_model()).strip()
     prompt = _require_prompt(user)
+    image_list = _normalize_images(images)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -105,10 +145,18 @@ def _call_openrouter(
         ),
     }
 
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = []
     if system and str(system).strip():
         messages.append({"role": "system", "content": str(system)})
-    messages.append({"role": "user", "content": prompt})
+    if image_list:
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image["data_url"]}}
+            for image in image_list
+        )
+        messages.append({"role": "user", "content": content})
+    else:
+        messages.append({"role": "user", "content": prompt})
 
     payload: dict[str, Any] = {
         "model": model,
@@ -207,26 +255,33 @@ def _call_openai(
     user: str,
     temperature: float = 0.2,
     max_tokens: int | None = None,
+    images: list[dict[str, str]] | None = None,
 ) -> str:
     """Call the direct OpenAI Responses API without adding an SDK dependency."""
     model = str(model or default_openai_model()).strip()
     prompt = _require_prompt(user)
+    image_list = _normalize_images(images)
+
+    if image_list:
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+        content.extend(
+            {"type": "input_image", "image_url": image["data_url"], "detail": "auto"}
+            for image in image_list
+        )
+        input_value: Any = [{"role": "user", "content": content}]
+    else:
+        input_value = prompt
 
     payload: dict[str, Any] = {
         "model": model,
-        "input": prompt,
+        "input": input_value,
     }
     if system and str(system).strip():
         payload["instructions"] = str(system)
     if max_tokens is not None:
         payload["max_output_tokens"] = int(max_tokens)
 
-    # Current GPT-5-family models expose an explicit no-reasoning mode. Keeping
-    # reasoning off is appropriate for UpcurvEd's format-sensitive generation
-    # calls and avoids spending output budget on hidden reasoning.
     if model.startswith("gpt-5"):
-        # The -pro variants always reason and reject an explicit effort override,
-        # so leave the request alone and let the API apply its own default.
         if not model.endswith("-pro"):
             payload["reasoning"] = {
                 "effort": os.environ.get("OPENAI_REASONING_EFFORT", "none")
@@ -279,6 +334,7 @@ def call_claude(
     user: str,
     max_tokens: int = 2048,
     temperature: float = 0.2,
+    images: list[dict[str, str]] | None = None,
 ) -> str:
     """Use Anthropic's official SDK and return concatenated text blocks."""
     try:
@@ -290,13 +346,36 @@ def call_claude(
             ) from exc
 
         prompt = _require_prompt(user)
+        image_list = _normalize_images(images)
+        if image_list:
+            content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            for image in image_list:
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image["mime_type"],
+                            "data": _base64_payload_from_data_url(
+                                image["data_url"], image["mime_type"]
+                            ),
+                        },
+                    }
+                )
+            user_content: Any = content
+        else:
+            user_content = prompt
+
         client = anthropic.Anthropic(api_key=api_key)
+        # Anthropic SDK v1 removed direct sampling parameters such as
+        # ``temperature`` from Messages.create(). Keep ``temperature`` in this
+        # wrapper's signature so the shared call_llm interface stays stable,
+        # but do not forward it to Claude.
         message = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system or "",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": user_content}],
         )
         out_parts: list[str] = []
         for block in message.content or []:
@@ -332,6 +411,7 @@ def call_gemini(
     user: str,
     max_output_tokens: int = 8192,
     temperature: float = 0.2,
+    images: list[dict[str, str]] | None = None,
 ) -> str:
     """Use Google's official google-generativeai SDK."""
     try:
@@ -343,6 +423,7 @@ def call_gemini(
             ) from exc
 
         prompt = _require_prompt(user)
+        image_list = _normalize_images(images)
         _with_genai_key(api_key)
         safety_settings = {
             "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
@@ -359,7 +440,20 @@ def call_gemini(
             },
             safety_settings=safety_settings,
         )
-        response = model_client.generate_content(prompt)
+        if image_list:
+            content: list[Any] = [prompt]
+            for image in image_list:
+                content.append(
+                    {
+                        "mime_type": image["mime_type"],
+                        "data": _base64_bytes_from_data_url(
+                            image["data_url"], image["mime_type"]
+                        ),
+                    }
+                )
+            response = model_client.generate_content(content)
+        else:
+            response = model_client.generate_content(prompt)
 
         try:
             text = (response.text or "").strip()
@@ -371,14 +465,14 @@ def call_gemini(
                 candidates = getattr(response, "candidates", []) or []
                 parts: list[str] = []
                 for candidate in candidates:
-                    content = getattr(candidate, "content", None)
-                    if not content and isinstance(candidate, dict):
-                        content = candidate.get("content")
-                    if content is None:
+                    content_obj = getattr(candidate, "content", None)
+                    if not content_obj and isinstance(candidate, dict):
+                        content_obj = candidate.get("content")
+                    if content_obj is None:
                         continue
-                    content_parts = getattr(content, "parts", None)
-                    if content_parts is None and isinstance(content, dict):
-                        content_parts = content.get("parts")
+                    content_parts = getattr(content_obj, "parts", None)
+                    if content_parts is None and isinstance(content_obj, dict):
+                        content_parts = content_obj.get("parts")
                     for part in content_parts or []:
                         value = getattr(part, "text", None)
                         if value is None and isinstance(part, dict):
@@ -423,6 +517,7 @@ def call_llm(
     temperature: float = 0.2,
     max_tokens: int | None = None,
     max_output_tokens: int | None = None,
+    images: list[dict[str, str]] | None = None,
 ) -> str:
     """Dispatch to the selected provider using centralized model defaults."""
     resolved_model = str(model or get_default_model(provider) or "").strip()
@@ -437,6 +532,7 @@ def call_llm(
             user=user,
             temperature=temperature,
             max_tokens=output_limit or 2048,
+            images=images,
         )
     if provider == "gemini":
         return call_gemini(
@@ -446,6 +542,7 @@ def call_llm(
             user=user,
             temperature=temperature,
             max_output_tokens=output_limit or 8192,
+            images=images,
         )
     if provider == "openai":
         return _call_openai(
@@ -455,6 +552,7 @@ def call_llm(
             user=user,
             temperature=temperature,
             max_tokens=output_limit,
+            images=images,
         )
     if provider == "openrouter":
         return _call_openrouter(
@@ -464,5 +562,6 @@ def call_llm(
             user=user,
             temperature=temperature,
             max_tokens=output_limit,
+            images=images,
         )
     raise LLMError(f"Unknown provider: {provider}")

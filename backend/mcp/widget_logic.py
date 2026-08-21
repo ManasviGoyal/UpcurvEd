@@ -10,6 +10,11 @@ import re
 from html import escape
 
 from backend.agent.llm.clients import call_llm
+from backend.agent.llm.multimodal import (
+    NEEDS_CLARIFICATION_MESSAGE,
+    call_multimodal_llm,
+    is_needs_clarification,
+)
 from backend.agent.llm.provider_config import (
     resolve_provider_and_key as _pick_provider_and_key,
 )
@@ -723,25 +728,44 @@ def generate_widget(
     provider: str | None = None,
     model: str | None = None,
     provider_keys: dict[str, str] | None = None,
-) -> dict[str, str]:
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
+) -> dict[str, object]:
     prov, api_key = _pick_provider_and_key(provider, provider_keys)
     logger.info("widget: calling LLM provider=%s model=%s", prov, model)
 
     html: str | None = None
     generation_path = "primary"
     first_error: Exception | None = None
+    generation_diagnostics: dict[str, object] | None = None
 
     try:
-        raw = call_llm(
+        llm_result = call_multimodal_llm(
             provider=prov,
             api_key=api_key,
             model=model,
             system=WIDGET_SYSTEM,
             user=build_widget_user_prompt(prompt),
+            learner_prompt=(learner_prompt if learner_prompt is not None else prompt),
+            images=images,
+            provider_keys=provider_keys,
+            default_image_prompt_used=default_image_prompt_used,
             temperature=0.15,
             max_tokens=5000,
             max_output_tokens=5000,
         )
+        raw = llm_result.text
+        generation_diagnostics = llm_result.metadata.to_dict()
+        if is_needs_clarification(raw):
+            return {
+                "ok": False,
+                "status": "needs_clarification",
+                "error": "needs_clarification",
+                "message": NEEDS_CLARIFICATION_MESSAGE,
+                "widget_html": None,
+                "generation_diagnostics": generation_diagnostics,
+            }
         if not raw or not raw.strip():
             raise RuntimeError("LLM returned empty widget.")
 
@@ -763,6 +787,11 @@ def generate_widget(
             generation_path = "repaired_primary"
 
     except Exception as exc:
+        # Never let an image-backed request silently degrade into a prompt-only fallback.
+        # Once images are involved, a failed primary/repair path should surface as a real
+        # generation failure rather than producing a widget that may ignore the source image.
+        if images:
+            raise
         first_error = exc
         logger.warning(
             "widget: primary path failed (%s); generating a fresh simple fallback",
@@ -822,5 +851,6 @@ def generate_widget(
         "status": "ok",
         "widget_html": html,
         "generation_path": generation_path,
+        "generation_diagnostics": generation_diagnostics,
     }
 

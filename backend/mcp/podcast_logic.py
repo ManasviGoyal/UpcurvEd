@@ -2,11 +2,16 @@
 import logging
 import re
 from tempfile import NamedTemporaryFile
+from typing import Any
 
 from gtts import gTTS
 from langdetect import detect
 
-from backend.agent.llm.clients import call_llm
+from backend.agent.llm.multimodal import (
+    NEEDS_CLARIFICATION_MESSAGE,
+    call_multimodal_llm,
+    is_needs_clarification,
+)
 from backend.agent.llm.provider_config import (
     resolve_provider_and_key as _pick_provider_and_key,
 )
@@ -398,7 +403,10 @@ def generate_podcast(
     provider_keys: dict[str, str] | None = None,
     mode: str = "standard",
     job_id: str | None = None,
-) -> dict[str, str]:
+    learner_prompt: str | None = None,
+    images: list[object] | None = None,
+    default_image_prompt_used: bool = False,
+) -> dict[str, Any]:
     """
     Generate a podcast script from LLM, TTS to mp3 with language inferred via
     langdetect, and produce a naive SRT caption file. Returns {status, job_id,
@@ -417,17 +425,23 @@ def generate_podcast(
             status_code=400,
         ) from e
 
-    # Generate script
+    # Generate script. Images are used only for this first content-planning call;
+    # TTS/caption steps never need the original image bytes.
     logger.info("podcast: calling LLM provider=%s model=%s", prov, model)
     try:
-        script = call_llm(
+        llm_result = call_multimodal_llm(
             provider=prov,
             api_key=api_key,
             model=model,
             system=ARTIFACT_SAFETY_INSTRUCTION,
             user=_podcast_prompt(prompt, mode=mode),
+            learner_prompt=(learner_prompt if learner_prompt is not None else prompt),
+            images=images,
+            provider_keys=provider_keys,
+            default_image_prompt_used=default_image_prompt_used,
             temperature=0.5,  # Higher temperature for more natural, varied dialogue
         )
+        script = llm_result.text
     except Exception as e:
         raise DiagnosticError(
             str(e) or type(e).__name__,
@@ -436,6 +450,17 @@ def generate_podcast(
             provider=prov,
             model=model,
         ) from e
+    generation_diagnostics = llm_result.metadata.to_dict()
+    if is_needs_clarification(script):
+        return {
+            "ok": False,
+            "status": "needs_clarification",
+            "error": "needs_clarification",
+            "message": NEEDS_CLARIFICATION_MESSAGE,
+            "video_url": None,
+            "generation_diagnostics": generation_diagnostics,
+        }
+
     if not script or not script.strip():
         raise DiagnosticError(
             "Model returned empty podcast script.",
@@ -537,4 +562,5 @@ def generate_podcast(
         "vtt_url": to_static_url(vtt_path),
         "lang": lang,
         "script": script,  # Fallback for quiz when VTT unavailable
+        "generation_diagnostics": generation_diagnostics,
     }
