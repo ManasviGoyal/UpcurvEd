@@ -960,12 +960,20 @@ def _caption_text_to_transcript(caption_text: str) -> str:
 
 
 def _ffmpeg_filter_path(path: pathlib.Path) -> str:
-    return (
+    """Quote and escape a path for use inside an ffmpeg filter argument.
+
+    ffmpeg splits filter options on ":", so on Windows the drive letter ended the
+    filename early and the rest of the path was passed to the filter's next option,
+    original_size. Escaping the colon alone is not enough; the value must also be
+    wrapped in single quotes.
+    """
+    escaped = (
         path.as_posix()
         .replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
+        .replace("'", "\'")
+        .replace(":", "\:")
     )
+    return f"'{escaped}'"
 
 
 def _burn_captions_with_ffmpeg(

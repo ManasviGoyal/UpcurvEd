@@ -16,6 +16,10 @@ files:
   - "!tests/**"
   - "!.github/**"
 
+# Default is `maximum` (LZMA), which makes installs slow to unpack. `normal` trades
+# ~10-15% download size for a noticeably faster install, and speeds up CI builds too.
+compression: normal
+
 asar: true
 asarUnpack:
   - backend/**/*

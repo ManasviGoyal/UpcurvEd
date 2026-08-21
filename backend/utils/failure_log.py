@@ -350,8 +350,17 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
     """Build a deterministic aggregate summary from strict typed audit records."""
     values = entries if entries is not None else _read_audit_entries()
     rows_by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    # The write path validates strictly, but this read path must not. A single
+    # malformed or older record in an accumulated audit log would otherwise raise
+    # and permanently break every future export on that machine.
+    skipped_records = 0
     for item in values:
-        rows_by_type[_validate_generation_type(item.get("type"))].append(item)
+        try:
+            generation_type = _validate_generation_type(item.get("type"))
+        except ValueError:
+            skipped_records += 1
+            continue
+        rows_by_type[generation_type].append(item)
 
     operations = Counter(str(item.get("operation") or "generate") for item in values)
     providers = Counter(str(item.get("provider") or "unknown") for item in values)
@@ -502,7 +511,10 @@ def build_generation_export() -> Path:
 
     entries = _read_audit_entries()
     summary = build_generation_summary(entries)
-    date_stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    # Second-precision, not just the date: on Windows the previous export can still
+    # be held open by the response that served it, and a same-name overwrite then
+    # fails with PermissionError.
+    date_stamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
     export_path = _EXPORTS_ROOT / f"upcurved_generation_diagnostics_{date_stamp}.zip"
     readme = """UpcurvEd generation diagnostics
 

@@ -213,6 +213,45 @@ function copyPythonRuntime(command, prefixArgs) {
   return basePrefix;
 }
 
+function bundledSitePackagesDir() {
+  return process.platform === "win32"
+    ? path.join(PYTHON_DIR, "Lib", "site-packages")
+    : path.join(PYTHON_DIR, "lib", "python3.12", "site-packages");
+}
+
+// Third-party packages ship their own test suites (numpy's, networkx's, and so on),
+// at the package root and nested inside submodules. None are imported when the app runs,
+// but each is a file the installer writes and the OS virus-scans. Scoped to site-packages
+// only, so the stdlib is untouched; `numpy.testing`-style public helpers are a different
+// name and are left alone. The workflow's post-build import check catches any surprise.
+function pruneBundledTestSuites() {
+  const sitePackages = bundledSitePackagesDir();
+  if (!fs.existsSync(sitePackages)) return;
+
+  let removedDirs = 0;
+  const stack = [sitePackages];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const full = path.join(current, entry.name);
+      if (entry.name === "tests" || entry.name === "test") {
+        fs.rmSync(full, { recursive: true, force: true });
+        removedDirs += 1;
+      } else {
+        stack.push(full);
+      }
+    }
+  }
+  console.log(`[desktop] pruned ${removedDirs} third-party test director(ies) from the bundled runtime`);
+}
+
 function purgeCopiedSitePackages() {
   // Never inherit third-party packages from the build machine. Python.org/Homebrew/framework
   // installs may have a populated site-packages under sys.base_prefix; copying it makes release
@@ -521,6 +560,8 @@ function main() {
   if (process.platform !== "win32") {
     fs.chmodSync(ffmpegTarget, 0o755);
   }
+
+  pruneBundledTestSuites();
 
   console.log(`[desktop] bundled Python runtime ready at ${PYTHON_DIR}`);
   console.log(`[desktop] bundled ffmpeg ready at ${ffmpegTarget}`);
