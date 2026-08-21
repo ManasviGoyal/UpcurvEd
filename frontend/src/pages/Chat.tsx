@@ -171,6 +171,17 @@ const clarificationMessageFrom = (value: any): string | null => {
   return message || NEEDS_CLARIFICATION_MESSAGE;
 };
 
+type MultimodalGenerationDiagnostics = GenerationDiagnostics & {
+  input_modality?: "text" | "image";
+  image_count?: number;
+  vision_mode?: "none" | "native" | "helper" | string;
+  vision_provider?: string;
+  vision_model?: string;
+  vision_fallback_reason?: string;
+  default_image_prompt_used?: boolean;
+  artifact_generated?: boolean;
+};
+
 const diagnosticCount = (value: unknown): number | undefined => {
   if (value === undefined || value === null || value === "") return undefined;
   const count = Number(value);
@@ -186,13 +197,23 @@ const diagnosticText = (value: unknown): string | undefined => {
 
 const normalizeGenerationDiagnostics = (
   value: unknown,
-): GenerationDiagnostics | undefined => {
+): MultimodalGenerationDiagnostics | undefined => {
   if (!value || typeof value !== "object") return undefined;
   const raw = value as Record<string, unknown>;
-  const status = diagnosticText(raw.quality_status) as
-    | GenerationQualityStatus
-    | undefined;
-  if (!status) return undefined;
+  const hasDiagnosticSignal = [
+    raw.quality_status,
+    raw.provider,
+    raw.model,
+    raw.llm_calls,
+    raw.input_modality,
+    raw.image_count,
+    raw.vision_mode,
+  ].some((entry) => entry !== undefined && entry !== null && entry !== "");
+  if (!hasDiagnosticSignal) return undefined;
+
+  const status = (
+    diagnosticText(raw.quality_status) || "standard"
+  ) as GenerationQualityStatus;
 
   const recoveryStages = Array.isArray(raw.recovery_stages)
     ? raw.recovery_stages
@@ -221,6 +242,18 @@ const normalizeGenerationDiagnostics = (
     recovery_stages: recoveryStages,
     failure_stage: diagnosticText(raw.failure_stage) || null,
     summary: diagnosticText(raw.summary),
+    input_modality:
+      diagnosticText(raw.input_modality) === "image" ? "image" : "text",
+    image_count: diagnosticCount(raw.image_count),
+    vision_mode: diagnosticText(raw.vision_mode),
+    vision_provider: diagnosticText(raw.vision_provider),
+    vision_model: diagnosticText(raw.vision_model),
+    vision_fallback_reason: diagnosticText(raw.vision_fallback_reason),
+    default_image_prompt_used: Boolean(raw.default_image_prompt_used),
+    artifact_generated:
+      raw.artifact_generated === undefined
+        ? undefined
+        : Boolean(raw.artifact_generated),
   };
 };
 
@@ -229,7 +262,7 @@ const humanizeDiagnosticToken = (value: string): string =>
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const compactModelLabel = (diagnostics: GenerationDiagnostics): string => {
+const compactModelLabel = (diagnostics: MultimodalGenerationDiagnostics): string => {
   const provider = diagnostics.provider
     ? humanizeDiagnosticToken(diagnostics.provider)
     : "";
@@ -238,11 +271,12 @@ const compactModelLabel = (diagnostics: GenerationDiagnostics): string => {
 };
 
 const GenerationDiagnosticsPanel: FC<{
-  diagnostics?: GenerationDiagnostics;
+  diagnostics?: MultimodalGenerationDiagnostics;
 }> = ({ diagnostics }) => {
   if (!diagnostics) return null;
 
   const firstLine: string[] = [];
+  const sourceLine: string[] = [];
   const secondLine: string[] = [];
   const modelLabel = compactModelLabel(diagnostics);
 
@@ -252,6 +286,23 @@ const GenerationDiagnosticsPanel: FC<{
       `${diagnostics.llm_calls} model ${diagnostics.llm_calls === 1 ? "call" : "calls"}`,
     );
   }
+  if (diagnostics.image_count) {
+    sourceLine.push(
+      `${diagnostics.image_count} ${diagnostics.image_count === 1 ? "image" : "images"}`,
+    );
+    if (diagnostics.vision_mode === "helper") {
+      const helperLabel = [
+        diagnostics.vision_provider
+          ? humanizeDiagnosticToken(diagnostics.vision_provider)
+          : "",
+        diagnostics.vision_model || "",
+      ].filter(Boolean).join(" · ");
+      sourceLine.push(helperLabel ? `Vision helper: ${helperLabel}` : "Vision helper");
+    } else if (diagnostics.vision_mode === "native") {
+      sourceLine.push("Native vision");
+    }
+  }
+
   if (typeof diagnostics.total_scenes === "number") {
     secondLine.push(
       `${diagnostics.total_scenes} ${diagnostics.total_scenes === 1 ? "scene" : "scenes"}`,
@@ -296,9 +347,10 @@ const GenerationDiagnosticsPanel: FC<{
   return (
     <div
       className="mt-3 border-t border-border/70 pt-2 text-[11px] text-muted-foreground"
-      aria-label="Video generation diagnostics"
+      aria-label="Generation diagnostics"
     >
       {firstLine.length > 0 && <p>{firstLine.join(" · ")}</p>}
+      {sourceLine.length > 0 && <p className="mt-0.5">{sourceLine.join(" · ")}</p>}
       {secondLine.length > 0 && <p className="mt-0.5">{secondLine.join(" · ")}</p>}
     </div>
   );
@@ -2477,7 +2529,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           title: `${podcastMode === "debate" ? "Debate Podcast" : "Podcast"}: ${sourceLabel.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
-          scriptGcsPath: data.script_gcs_path // GCS path for persistent script fallback
+          scriptGcsPath: data.script_gcs_path, // GCS path for persistent script fallback
+          generationDiagnostics: normalizeGenerationDiagnostics(
+            data.generation_diagnostics,
+          ),
         };
 
         // Use the same chat ID we started with to ensure message goes to correct chat
@@ -2805,6 +2860,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           widgetCode: data.widget_html,
           title: `Widget: ${sourceLabel.slice(0, 50)}`,
           downloadFilename: widgetDownloadFilename,
+          generationDiagnostics: normalizeGenerationDiagnostics(
+            data.generation_diagnostics,
+          ),
         };
         await processAndAddMessage(
           "✅ Interactive widget generated.",
@@ -3639,6 +3697,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             widgetCode: data.widget_html,
             title: `Story Scenes: ${sourceLabel.slice(0, 50)}...`,
             downloadFilename: storyDownloadFilename,
+            generationDiagnostics: normalizeGenerationDiagnostics(
+              data.generation_diagnostics,
+            ),
           };
           setCurrentMediaMeta({ type: 'widget', artifactKind: 'story' });
           setWidgetHtml(data.widget_html);
@@ -5201,7 +5262,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               />
                             </div>
                           )}
-                          {msg.media?.type === 'video' && (
+                          {msg.media?.generationDiagnostics && (
                             <GenerationDiagnosticsPanel
                               diagnostics={msg.media.generationDiagnostics}
                             />

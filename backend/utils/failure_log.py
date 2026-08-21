@@ -20,7 +20,7 @@ GENERATION_AUDIT_PATH = STORAGE / "generation_audit.jsonl"
 _INSTALLATION_ID_PATH = STORAGE / ".generation_installation_id"
 _EXPORTS_ROOT = STORAGE / "exports"
 _RETENTION_MARKER = ".diagnostic_retention.json"
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _ALLOWED_GENERATION_TYPES = {"video", "story", "podcast", "quiz", "widget"}
 
 _EXCEPTION_LINE = re.compile(
@@ -180,6 +180,24 @@ def append_generation_audit(entry: dict[str, Any]) -> dict[str, Any]:
             ),
         },
         "duration_seconds": round(max(0.0, float(entry.get("duration_seconds") or 0.0)), 3),
+        "input_modality": (
+            "image"
+            if _clean_text(entry.get("input_modality"), 20).lower() == "image"
+            or int(entry.get("image_count") or 0) > 0
+            else "text"
+        ),
+        "image_count": max(0, min(3, int(entry.get("image_count") or 0))),
+        "vision_mode": _clean_text(entry.get("vision_mode") or "none", 40).lower() or "none",
+        "vision_provider": _clean_text(entry.get("vision_provider"), 80),
+        "vision_model": _clean_text(entry.get("vision_model"), 180),
+        "vision_fallback_reason": _clean_text(entry.get("vision_fallback_reason"), 120),
+        "default_image_prompt_used": bool(entry.get("default_image_prompt_used")),
+        "artifact_generated": bool(
+            entry.get("artifact_generated")
+            if entry.get("artifact_generated") is not None
+            else str(entry.get("outcome") or "").strip()
+            not in {"failed", "needs_clarification"}
+        ),
     }
 
     failure_stage = _clean_text(entry.get("failure_stage"), 100)
@@ -346,6 +364,30 @@ def _summarize_outcomes(values: list[dict[str, Any]]) -> dict[str, dict[str, Any
     return summary
 
 
+def _request_count_summary(values: list[dict[str, Any]]) -> dict[str, int]:
+    """Keep clarification separate from technical failure in aggregate reporting."""
+    total = len(values)
+    needs_clarification = sum(
+        1 for item in values if str(item.get("outcome") or "") == "needs_clarification"
+    )
+    failed = sum(1 for item in values if str(item.get("outcome") or "") == "failed")
+    generated = sum(
+        1
+        for item in values
+        if bool(
+            item.get("artifact_generated")
+            if item.get("artifact_generated") is not None
+            else str(item.get("outcome") or "") not in {"failed", "needs_clarification"}
+        )
+    )
+    return {
+        "total_requests": total,
+        "generated": generated,
+        "needs_clarification": needs_clarification,
+        "failed": failed,
+    }
+
+
 def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Build a deterministic aggregate summary from strict typed audit records."""
     values = entries if entries is not None else _read_audit_entries()
@@ -364,6 +406,27 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
 
     operations = Counter(str(item.get("operation") or "generate") for item in values)
     providers = Counter(str(item.get("provider") or "unknown") for item in values)
+    input_modalities = Counter(str(item.get("input_modality") or "text") for item in values)
+    vision_modes = Counter(str(item.get("vision_mode") or "none") for item in values)
+    vision_providers = Counter(
+        str(item.get("vision_provider"))
+        for item in values
+        if str(item.get("vision_provider") or "").strip()
+    )
+    vision_models = Counter(
+        str(item.get("vision_model"))
+        for item in values
+        if str(item.get("vision_model") or "").strip()
+    )
+    vision_fallback_reasons = Counter(
+        str(item.get("vision_fallback_reason"))
+        for item in values
+        if str(item.get("vision_fallback_reason") or "").strip()
+    )
+    total_images = sum(max(0, int(item.get("image_count") or 0)) for item in values)
+    default_image_prompt_runs = sum(
+        1 for item in values if bool(item.get("default_image_prompt_used"))
+    )
     failure_stages = Counter(
         str(item.get("failure_stage"))
         for item in values
@@ -471,6 +534,14 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
             "average_duration_seconds": round(type_duration / len(rows), 3) if rows else 0.0,
             "operations": dict(sorted(type_operations.items())),
             "outcomes": _summarize_outcomes(rows),
+            "request_counts": _request_count_summary(rows),
+            "input_modalities": dict(
+                sorted(Counter(str(item.get("input_modality") or "text") for item in rows).items())
+            ),
+            "vision_modes": dict(
+                sorted(Counter(str(item.get("vision_mode") or "none") for item in rows).items())
+            ),
+            "images_total": sum(max(0, int(item.get("image_count") or 0)) for item in rows),
         }
 
     return {
@@ -487,7 +558,15 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         "by_type": by_type,
         "operations": dict(sorted(operations.items())),
         "outcomes": _summarize_outcomes(values),
+        "request_counts": _request_count_summary(values),
         "providers": dict(sorted(providers.items())),
+        "input_modalities": dict(sorted(input_modalities.items())),
+        "vision_modes": dict(sorted(vision_modes.items())),
+        "vision_providers": dict(sorted(vision_providers.items())),
+        "vision_models": dict(sorted(vision_models.items())),
+        "vision_fallback_reasons": dict(sorted(vision_fallback_reasons.items())),
+        "images_total": total_images,
+        "default_image_prompt_runs": default_image_prompt_runs,
         "failure_stages": dict(sorted(failure_stages.items())),
         "during_stages": dict(sorted(during_stages.items())),
         "error_categories": dict(sorted(error_categories.items())),
@@ -525,7 +604,8 @@ user names, email addresses, local filesystem paths, or full tracebacks.
 Files:
 - generation_audit.jsonl: one compact JSON record per video, story, podcast, quiz, or widget generation/edit.
 - generation_summary.json: deterministic aggregate counts by type, outcome, provider, model,
-  exact LLM calls, failure stage, root error category, service retries, and recovery path.
+  exact LLM calls, separate clarification/failure counts, image/vision routing, failure stage,
+  root error category, service retries, and recovery path.
 """
 
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

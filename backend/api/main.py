@@ -140,6 +140,73 @@ def _generation_job_id(value: object | None) -> str:
     return safe_job_id(str(value or uuid4().hex[:12]))
 
 
+def _artifact_generation_diagnostics(
+    *,
+    generation_diagnostics: object | None,
+    outcome: str,
+    provider: str | None,
+    model: str | None,
+    llm_calls: int,
+    image_count: int = 0,
+    default_image_prompt_used: bool = False,
+    failure_stage: str | None = None,
+) -> dict[str, object]:
+    """Normalize privacy-safe diagnostics shared by non-video artifact routes."""
+    raw = (
+        dict(generation_diagnostics)
+        if isinstance(generation_diagnostics, dict)
+        else {}
+    )
+    resolved_image_count = max(
+        0,
+        min(
+            MAX_GENERATION_IMAGES,
+            int(raw.get("image_count") or image_count or 0),
+        ),
+    )
+    resolved_outcome = str(outcome or "unknown").strip() or "unknown"
+    quality_status = str(raw.get("quality_status") or "").strip()
+    if not quality_status:
+        if resolved_outcome == "needs_clarification":
+            quality_status = "needs_clarification"
+        elif resolved_outcome == "failed":
+            quality_status = "failed"
+        else:
+            quality_status = "standard"
+
+    return {
+        **raw,
+        "quality_status": quality_status,
+        "provider": str(raw.get("provider") or provider or ""),
+        "model": str(raw.get("model") or model or ""),
+        # The route-level tracker includes helper + selected-model calls and is authoritative.
+        "llm_calls": max(0, int(llm_calls)),
+        "failure_stage": (
+            str(raw.get("failure_stage") or failure_stage or "").strip() or None
+        ),
+        "input_modality": (
+            "image"
+            if resolved_image_count > 0
+            or str(raw.get("input_modality") or "").strip().lower() == "image"
+            else "text"
+        ),
+        "image_count": resolved_image_count,
+        "vision_mode": str(raw.get("vision_mode") or "none").strip() or "none",
+        "vision_provider": str(raw.get("vision_provider") or "").strip(),
+        "vision_model": str(raw.get("vision_model") or "").strip(),
+        "vision_fallback_reason": str(
+            raw.get("vision_fallback_reason") or ""
+        ).strip(),
+        "default_image_prompt_used": bool(
+            raw.get("default_image_prompt_used") or default_image_prompt_used
+        ),
+        "artifact_generated": resolved_outcome not in {
+            "failed",
+            "needs_clarification",
+        },
+    }
+
+
 def _append_artifact_generation_audit(
     *,
     generation_type: str,
@@ -152,7 +219,20 @@ def _append_artifact_generation_audit(
     started_monotonic: float,
     failure_stage: str | None = None,
     error_summary: object | None = None,
-) -> None:
+    generation_diagnostics: object | None = None,
+    image_count: int = 0,
+    default_image_prompt_used: bool = False,
+) -> dict[str, object]:
+    diagnostics = _artifact_generation_diagnostics(
+        generation_diagnostics=generation_diagnostics,
+        outcome=outcome,
+        provider=provider,
+        model=model,
+        llm_calls=llm_calls,
+        image_count=image_count,
+        default_image_prompt_used=default_image_prompt_used,
+        failure_stage=failure_stage,
+    )
     try:
         append_generation_audit(
             {
@@ -170,6 +250,18 @@ def _append_artifact_generation_audit(
                 "duration_seconds": max(
                     0.0, time.monotonic() - started_monotonic
                 ),
+                "input_modality": diagnostics.get("input_modality"),
+                "image_count": diagnostics.get("image_count"),
+                "vision_mode": diagnostics.get("vision_mode"),
+                "vision_provider": diagnostics.get("vision_provider"),
+                "vision_model": diagnostics.get("vision_model"),
+                "vision_fallback_reason": diagnostics.get(
+                    "vision_fallback_reason"
+                ),
+                "default_image_prompt_used": diagnostics.get(
+                    "default_image_prompt_used"
+                ),
+                "artifact_generated": diagnostics.get("artifact_generated"),
             }
         )
     except Exception as exc:
@@ -179,6 +271,7 @@ def _append_artifact_generation_audit(
             job_id,
             exc,
         )
+    return diagnostics
 
 
 def _safe_client_created_at(value: object, fallback_ms: int) -> int:
@@ -1321,7 +1414,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     story_options=body.storyOptions or {},
                 )
                 if story_res.get("status") == "needs_clarification":
-                    _append_artifact_generation_audit(
+                    generation_diagnostics = _append_artifact_generation_audit(
                         generation_type="story",
                         job_id=job_id,
                         operation="generate",
@@ -1330,6 +1423,9 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                         model=model,
                         llm_calls=llm_counter.count,
                         started_monotonic=started,
+                        generation_diagnostics=story_res.get("generation_diagnostics"),
+                        image_count=len(image_payload),
+                        default_image_prompt_used=default_image_prompt_used,
                     )
                     return {
                         "ok": False,
@@ -1338,7 +1434,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                         "message": story_res.get("message"),
                         "widget_html": None,
                         "generation_mode": "story",
-                        "generation_diagnostics": story_res.get("generation_diagnostics"),
+                        "generation_diagnostics": generation_diagnostics,
                     }
 
                 widget_html = story_res.get("widget_html")
@@ -1357,7 +1453,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                         html_text=widget_html,
                         job_id=job_id,
                     )
-                    _append_artifact_generation_audit(
+                    generation_diagnostics = _append_artifact_generation_audit(
                         generation_type="story",
                         job_id=job_id,
                         operation="generate",
@@ -1366,6 +1462,9 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                         model=model,
                         llm_calls=llm_counter.count,
                         started_monotonic=started,
+                        generation_diagnostics=story_res.get("generation_diagnostics"),
+                        image_count=len(image_payload),
+                        default_image_prompt_used=default_image_prompt_used,
                     )
                     return {
                         "ok": True,
@@ -1374,7 +1473,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                         "story_plan": story_plan,
                         "generation_mode": "story",
                         "message": "Story scene slider generated.",
-                        "generation_diagnostics": story_res.get("generation_diagnostics"),
+                        "generation_diagnostics": generation_diagnostics,
                         **download_meta,
                     }
 
@@ -1395,6 +1494,9 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     started_monotonic=started,
                     failure_stage="story_generation",
                     error_summary=detail,
+                    generation_diagnostics=story_res.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
                 )
                 return {
                     "ok": False,
@@ -1415,6 +1517,10 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     started_monotonic=started,
                     failure_stage="story_generation",
                     error_summary=exc,
+                    image_count=len(locals().get("image_payload") or []),
+                    default_image_prompt_used=bool(
+                        locals().get("default_image_prompt_used", False)
+                    ),
                 )
                 logger.exception("/generate story failed with exception: %s", exc)
                 return diagnostic_error_response(
@@ -1609,7 +1715,7 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 context=body.context,
             )
             if quiz.get("status") == "needs_clarification":
-                _append_artifact_generation_audit(
+                generation_diagnostics = _append_artifact_generation_audit(
                     generation_type="quiz",
                     job_id=job_id,
                     operation="generate",
@@ -1618,6 +1724,9 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                     model=model,
                     llm_calls=llm_counter.count,
                     started_monotonic=started,
+                    generation_diagnostics=quiz.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
                 )
                 return {
                     "ok": False,
@@ -1625,7 +1734,7 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                     "error": "needs_clarification",
                     "message": quiz.get("message"),
                     "quiz": None,
-                    "generation_diagnostics": quiz.get("generation_diagnostics"),
+                    "generation_diagnostics": generation_diagnostics,
                 }
 
             quiz_html = build_quiz_html(quiz, source_title=body.prompt)
@@ -1637,7 +1746,7 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 html_text=quiz_html,
                 job_id=job_id,
             )
-            _append_artifact_generation_audit(
+            generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="quiz",
                 job_id=job_id,
                 operation="generate",
@@ -1646,11 +1755,14 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 model=model,
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
+                generation_diagnostics=quiz.get("generation_diagnostics"),
+                image_count=len(image_payload),
+                default_image_prompt_used=default_image_prompt_used,
             )
             return {
                 "status": "ok",
                 "quiz": quiz,
-                "generation_diagnostics": quiz.get("generation_diagnostics"),
+                "generation_diagnostics": generation_diagnostics,
                 **download_meta,
             }
         except Exception as exc:
@@ -1665,6 +1777,10 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 started_monotonic=started,
                 failure_stage="quiz_generation",
                 error_summary=exc,
+                image_count=len(locals().get("image_payload") or []),
+                default_image_prompt_used=bool(
+                    locals().get("default_image_prompt_used", False)
+                ),
             )
             logger.exception("/quiz/embedded failed: %s", exc)
             return diagnostic_error_response(
@@ -1808,7 +1924,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                 job_id=job_id,
             )
             if result.get("status") == "needs_clarification":
-                _append_artifact_generation_audit(
+                result["generation_diagnostics"] = _append_artifact_generation_audit(
                     generation_type="podcast",
                     job_id=job_id,
                     operation="generate",
@@ -1817,6 +1933,9 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                     model=model,
                     llm_calls=llm_counter.count,
                     started_monotonic=started,
+                    generation_diagnostics=result.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
                 )
                 return result
 
@@ -1960,7 +2079,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                 or result.get("video_url")
             )
             if succeeded:
-                _append_artifact_generation_audit(
+                result["generation_diagnostics"] = _append_artifact_generation_audit(
                     generation_type="podcast",
                     job_id=job_id,
                     operation="generate",
@@ -1969,6 +2088,9 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                     model=model,
                     llm_calls=llm_counter.count,
                     started_monotonic=started,
+                    generation_diagnostics=result.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
                 )
             else:
                 detail = (
@@ -1977,7 +2099,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                     or result.get("message")
                     or "Podcast generation failed."
                 )
-                _append_artifact_generation_audit(
+                result["generation_diagnostics"] = _append_artifact_generation_audit(
                     generation_type="podcast",
                     job_id=job_id,
                     operation="generate",
@@ -1988,6 +2110,9 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                     started_monotonic=started,
                     failure_stage="podcast_generation",
                     error_summary=detail,
+                    generation_diagnostics=result.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
                 )
             return result
         except Exception as exc:
@@ -2002,6 +2127,10 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                 started_monotonic=started,
                 failure_stage="podcast_generation",
                 error_summary=exc,
+                image_count=len(locals().get("image_payload") or []),
+                default_image_prompt_used=bool(
+                    locals().get("default_image_prompt_used", False)
+                ),
             )
             logger.exception("/podcast failed: %s", exc)
             return diagnostic_error_response(
@@ -2406,7 +2535,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 provider_keys=provider_keys,
             )
             if result.get("status") == "needs_clarification":
-                _append_artifact_generation_audit(
+                result["generation_diagnostics"] = _append_artifact_generation_audit(
                     generation_type="widget",
                     job_id=job_id,
                     operation="generate",
@@ -2415,6 +2544,9 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                     model=model,
                     llm_calls=llm_counter.count,
                     started_monotonic=started,
+                    generation_diagnostics=result.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
                 )
                 return result
 
@@ -2427,7 +2559,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 html_text=widget_html,
                 job_id=job_id,
             )
-            _append_artifact_generation_audit(
+            generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="widget",
                 job_id=job_id,
                 operation="generate",
@@ -2436,6 +2568,9 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 model=model,
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
+                generation_diagnostics=result.get("generation_diagnostics"),
+                image_count=len(image_payload),
+                default_image_prompt_used=default_image_prompt_used,
             )
             logger.info(
                 "/widget completed: ok, html_len=%d",
@@ -2445,7 +2580,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 "ok": True,
                 "status": "ok",
                 "widget_html": widget_html,
-                "generation_diagnostics": result.get("generation_diagnostics"),
+                "generation_diagnostics": generation_diagnostics,
                 **download_meta,
             }
         except Exception as exc:
@@ -2460,6 +2595,10 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 started_monotonic=started,
                 failure_stage="widget_generation",
                 error_summary=exc,
+                image_count=len(locals().get("image_payload") or []),
+                default_image_prompt_used=bool(
+                    locals().get("default_image_prompt_used", False)
+                ),
             )
             logger.exception("/widget failed: %s", exc)
             return diagnostic_error_response(

@@ -1100,12 +1100,16 @@ def _append_audit_and_cleanup(
                 "local_script_adjustments": metrics.get("local_script_adjustments"),
                 "voice_retry_count": metrics.get("voice_retry_count"),
                 "transport_salvages": metrics.get("transport_salvages"),
+                "input_modality": (
+                    "image" if int(metrics.get("image_count") or 0) > 0 else "text"
+                ),
                 "image_count": metrics.get("image_count"),
                 "vision_mode": metrics.get("vision_mode"),
                 "vision_provider": metrics.get("vision_provider"),
                 "vision_model": metrics.get("vision_model"),
                 "vision_fallback_reason": metrics.get("vision_fallback_reason"),
                 "default_image_prompt_used": metrics.get("default_image_prompt_used"),
+                "artifact_generated": bool(has_final_artifact),
                 "failure_stage": failure_stage,
                 "during_stage": during_stage,
                 "error_category": error_category,
