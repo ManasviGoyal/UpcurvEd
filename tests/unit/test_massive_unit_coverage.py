@@ -62,15 +62,6 @@ class TestPromptsComprehensive:
         assert "error msg" in result
 
 
-class TestGraphComprehensive:
-    """Test graph.py (26% -> 50%)."""
-
-    def test_run_to_code_callable(self):
-        from backend.agent.graph import run_to_code
-
-        assert callable(run_to_code)
-
-
 class TestJobRunnerComprehensive:
     """Test job_runner.py (38% -> 50%)."""
 

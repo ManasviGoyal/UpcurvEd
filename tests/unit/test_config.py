@@ -96,65 +96,6 @@ class TestFailureLogPath:
         assert backend.config.FAILURE_LOG_PATH == "storage/failure_log.jsonl"
 
 
-class TestRagConfiguration:
-    """Test RAG-related configuration."""
-
-    @patch.dict(os.environ, {"RAG_USE_CLOUD": "true"})
-    def test_rag_use_cloud_true(self):
-        """Test RAG_USE_CLOUD set to true."""
-        import importlib
-
-        import backend.config
-
-        importlib.reload(backend.config)
-
-        assert backend.config.RAG_USE_CLOUD is True
-
-    @patch.dict(os.environ, {"RAG_USE_CLOUD": "false"})
-    def test_rag_use_cloud_false(self):
-        """Test RAG_USE_CLOUD set to false."""
-        import importlib
-
-        import backend.config
-
-        importlib.reload(backend.config)
-
-        assert backend.config.RAG_USE_CLOUD is False
-
-    @patch.dict(os.environ, {"RAG_SERVICE_URL": "http://rag-service:9000"})
-    def test_custom_rag_service_url(self):
-        """Test custom RAG service URL."""
-        import importlib
-
-        import backend.config
-
-        importlib.reload(backend.config)
-
-        assert backend.config.RAG_SERVICE_URL == "http://rag-service:9000"
-
-    @patch.dict(os.environ, {"RAG_DB_PATH": "/data/chroma"})
-    def test_custom_rag_db_path(self):
-        """Test custom RAG database path."""
-        import importlib
-
-        import backend.config
-
-        importlib.reload(backend.config)
-
-        assert backend.config.RAG_DB_PATH == "/data/chroma"
-
-    @patch.dict(os.environ, {"RAG_COLLECTION_NAME": "custom_collection"})
-    def test_custom_collection_name(self):
-        """Test custom collection name."""
-        import importlib
-
-        import backend.config
-
-        importlib.reload(backend.config)
-
-        assert backend.config.RAG_COLLECTION_NAME == "custom_collection"
-
-
 class TestDefaultValues:
     """Test all default configuration values."""
 
@@ -166,10 +107,6 @@ class TestDefaultValues:
             "MAX_CONTEXT_CHARS",
             "CLEANUP_FAILED_JOBS",
             "FAILURE_LOG_PATH",
-            "RAG_USE_CLOUD",
-            "RAG_SERVICE_URL",
-            "RAG_DB_PATH",
-            "RAG_COLLECTION_NAME",
         ]:
             os.environ.pop(key, None)
 
@@ -182,7 +119,3 @@ class TestDefaultValues:
         assert backend.config.MAX_CONTEXT_CHARS == 500
         assert backend.config.CLEANUP_FAILED_JOBS is False
         assert backend.config.FAILURE_LOG_PATH == "storage/failure_log.jsonl"
-        assert backend.config.RAG_USE_CLOUD is True
-        assert backend.config.RAG_SERVICE_URL == "http://localhost:8001"
-        assert backend.config.RAG_DB_PATH == "rag-data/processed/chroma_db"
-        assert backend.config.RAG_COLLECTION_NAME == "manim_knowledge"

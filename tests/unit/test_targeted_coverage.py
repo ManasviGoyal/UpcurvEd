@@ -373,43 +373,6 @@ class TestLLMClientsExhaustive:
 
 
 # ============================================================================
-# graph.py - Lines 10, 14-16, 20-46, 59-78 (26 statements)
-# ============================================================================
-class TestGraphExhaustive:
-    """Exhaust graph.py - 26 missing statements."""
-
-    def test_run_to_code_exists(self):
-        from backend.agent.graph import run_to_code
-
-        assert callable(run_to_code)
-
-    def test_graph_module_imports(self):
-        """Test that graph module imports correctly."""
-        try:
-            from backend.agent import graph
-
-            assert hasattr(graph, "run_to_code")
-        except Exception:
-            pytest.skip("Graph import failed")
-
-
-# ============================================================================
-# graph_wo_rag_retry.py - Lines 8-12, 22-41 (18 statements)
-# ============================================================================
-class TestGraphWoRagRetryExhaustive:
-    """Exhaust graph_wo_rag_retry.py - 18 missing statements."""
-
-    def test_module_exists(self):
-        """Test that graph_wo_rag_retry module exists."""
-        try:
-            from backend.agent import graph_wo_rag_retry
-
-            assert graph_wo_rag_retry is not None
-        except Exception:
-            pytest.skip("Module not found")
-
-
-# ============================================================================
 # mcp/podcast_logic.py - Lines 32, 56, 79-94, 121-173, 189-254 (~50 tests)
 # ============================================================================
 class TestPodcastLogicExhaustive:
