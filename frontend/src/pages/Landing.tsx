@@ -17,9 +17,10 @@ const RELEASE_ASSETS = __RELEASE_ASSETS_BASE__;
 
 const DOWNLOADS = {
   windows: `${RELEASE_ASSETS}/UpcurvEd-win-x64.exe`,
+  // Apple Silicon only. The Intel build is still published as a release asset;
+  // it is simply not surfaced here.
   macArm: `${RELEASE_ASSETS}/UpcurvEd-mac-arm64.dmg`,
-  macIntel: `${RELEASE_ASSETS}/UpcurvEd-mac-x64.dmg`,
-  linux: `${RELEASE_ASSETS}/UpcurvEd-linux-x64.AppImage`,
+  linux: `${RELEASE_ASSETS}/UpcurvEd-linux-x86_64.AppImage`,
 } as const;
 
 export default function Landing({ setView: _setView }: { setView?: (view: string) => void }) {
@@ -48,7 +49,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
   };
 
   // The <a href> performs the download; this only records the click.
-  const handleDownloadClick = (platform: "windows" | "mac-arm64" | "mac-x64" | "linux") => {
+  const handleDownloadClick = (platform: "windows" | "mac-arm64" | "linux") => {
     trackEvent("download_click", { platform });
   };
 
@@ -376,17 +377,6 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               </a>
             </div>
 
-            {/* The macOS button above is Apple Silicon; Intel Macs need the x64 build. */}
-            <p className={`text-sm ${textTertiary}`}>
-              On an Intel Mac?{" "}
-              <a
-                href={DOWNLOADS.macIntel}
-                onClick={() => handleDownloadClick("mac-x64")}
-                className="font-semibold underline underline-offset-4 hover:text-purple-400"
-              >
-                Download the Intel build
-              </a>
-            </p>
           </div>
         </div>
       </div>
