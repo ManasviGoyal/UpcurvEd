@@ -13,7 +13,6 @@ const IMG = {
     apiKeyEntry: "/setup-guide/common/api-key-entry.png",
   },
   mac: {
-    openZip: "/setup-guide/mac/01-open-zip.png",
     dmgFile: "/setup-guide/mac/02-dmg-file.png",
     dragToApplications: "/setup-guide/mac/03-drag-to-applications.png",
     copyProgress: "/setup-guide/mac/04-copy-progress.png",
@@ -371,12 +370,9 @@ export default function SetupGuide() {
                     <h3 className={headingClass}>Open the installer</h3>
                     <ol className={listClass}>
                       <li>
-                        Once the ZIP is downloaded, open it and click the folder.
-                        <Shot src={IMG.mac.openZip} alt="Downloaded ZIP opened in Finder" />
-                      </li>
-                      <li>
-                        Click the file <strong>UpcurvEd-1.0.0-mac-arm64.dmg</strong>.
-                        <Shot src={IMG.mac.dmgFile} alt="The UpcurvEd mac arm64 .dmg file" />
+                        Once the download finishes, open your <strong>Downloads</strong> folder and click the
+                        file <strong>UpcurvEd-mac-arm64.dmg</strong>.
+                        <Shot src={IMG.mac.dmgFile} alt="The UpcurvEd mac arm64 .dmg file in Finder" />
                       </li>
                       <li>
                         You will see this popup — drag the application icon to the Applications folder.
@@ -451,7 +447,7 @@ export default function SetupGuide() {
                     <ol className={listClass}>
                       <li>
                         Once the download finishes, open your <strong>Downloads</strong> folder and find{" "}
-                        <strong>UpcurvEd-1.0.0-win-x64.exe</strong>.
+                        <strong>UpcurvEd-win-x64.exe</strong>.
                         <Shot
                           src={IMG.win.downloadedInstaller}
                           alt="The downloaded UpcurvEd installer in the Downloads folder"
