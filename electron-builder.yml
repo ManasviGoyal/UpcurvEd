@@ -29,7 +29,9 @@ extraResources:
 extraMetadata:
   main: desktop/main.cjs
 
-artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+# No ${version}: keeps release filenames stable so the landing page can link to
+# releases/latest/download/<name> permanently, without editing URLs each release.
+artifactName: ${productName}-${os}-${arch}.${ext}
 
 mac:
   icon: desktop/icons/icon.icns

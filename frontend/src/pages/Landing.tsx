@@ -5,6 +5,20 @@ import FeedbackModal from "@/components/landing/FeedbackModal";
 import NoticeOfConsentModal from "@/components/landing/NoticeOfConsentModal";
 import { trackEvent } from "@/lib/analytics";
 
+// Direct release-asset links. On a public repo these need no GitHub account: the URL
+// redirects to a signed CDN link served with `Content-Disposition: attachment`, so the
+// browser starts the download without ever showing a GitHub page. `latest/download/`
+// always resolves to the newest release, and electron-builder is configured to emit
+// version-less filenames so these URLs never need editing.
+const RELEASE_ASSETS = "https://github.com/ManasviGoyal/UpcurvEd/releases/latest/download";
+
+const DOWNLOADS = {
+  windows: `${RELEASE_ASSETS}/UpcurvEd-win-x64.exe`,
+  macArm: `${RELEASE_ASSETS}/UpcurvEd-mac-arm64.dmg`,
+  macIntel: `${RELEASE_ASSETS}/UpcurvEd-mac-x64.dmg`,
+  linux: `${RELEASE_ASSETS}/UpcurvEd-linux-x64.AppImage`,
+} as const;
+
 export default function Landing({ setView: _setView }: { setView?: (view: string) => void }) {
   const navigate = useNavigate();
   const [isDark, setIsDark] = useState(true);
@@ -12,12 +26,6 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
   const [isDocsOpen, setIsDocsOpen] = useState(false);
   const [isConsentOpen, setIsConsentOpen] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
-  const windowsDownloadUrl =
-    (import.meta.env.VITE_WINDOWS_DOWNLOAD_URL as string | undefined) || "";
-  const macDownloadUrl =
-    (import.meta.env.VITE_MAC_DOWNLOAD_URL as string | undefined) || "";
-  const linuxDownloadUrl =
-    (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) || "";
   const iconColor = isDark ? "FFFFFF" : "0F172A";
   const appleLogo = `https://cdn.simpleicons.org/apple/${iconColor}`;
   const linuxLogo = `https://cdn.simpleicons.org/linux/${iconColor}`;
@@ -36,10 +44,9 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
     });
   };
 
-  const handleDownloadClick = (platform: "windows" | "mac" | "linux", url: string) => {
-    trackEvent("download_click", { platform, has_url: Boolean(url) });
-    if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+  // The <a href> performs the download; this only records the click.
+  const handleDownloadClick = (platform: "windows" | "mac-arm64" | "mac-x64" | "linux") => {
+    trackEvent("download_click", { platform });
   };
 
   const handleDocsOpen = () => {
@@ -318,20 +325,15 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               Download UpcurvEd Desktop
             </h3>
             <div className="flex flex-wrap items-center justify-center gap-4">
-              <button
-                type="button"
-                onClick={() => handleDownloadClick("windows", windowsDownloadUrl)}
-                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors disabled:cursor-not-allowed ${
+              <a
+                href={DOWNLOADS.windows}
+                onClick={() => handleDownloadClick("windows")}
+                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors ${
                   isDark
-                    ? "border-teal-500 text-white hover:bg-teal-500 hover:text-white disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
-                    : "border-teal-500 text-slate-900 hover:bg-teal-500 hover:text-white disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500"
+                    ? "border-teal-500 text-white hover:bg-teal-500 hover:text-white"
+                    : "border-teal-500 text-slate-900 hover:bg-teal-500 hover:text-white"
                 }`}
-                disabled={!windowsDownloadUrl}
-                title={
-                  windowsDownloadUrl
-                    ? "Download for Windows"
-                    : "Windows download URL not configured"
-                }
+                title="Download for Windows"
               >
                 <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                   <path
@@ -340,38 +342,48 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                   />
                 </svg>
                 Download for Windows
-              </button>
+              </a>
 
-              <button
-                type="button"
-                onClick={() => handleDownloadClick("mac", macDownloadUrl)}
-                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors disabled:cursor-not-allowed ${
+              <a
+                href={DOWNLOADS.macArm}
+                onClick={() => handleDownloadClick("mac-arm64")}
+                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors ${
                   isDark
-                    ? "border-purple-500 text-white hover:bg-purple-500 hover:text-white disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
-                    : "border-purple-500 text-slate-900 hover:bg-purple-500 hover:text-white disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500"
+                    ? "border-purple-500 text-white hover:bg-purple-500 hover:text-white"
+                    : "border-purple-500 text-slate-900 hover:bg-purple-500 hover:text-white"
                 }`}
-                disabled={!macDownloadUrl}
-                title={macDownloadUrl ? "Download for macOS" : "macOS download URL not configured"}
+                title="Download for macOS (Apple Silicon)"
               >
                 <img src={appleLogo} alt="Apple logo" className="h-5 w-5" loading="lazy" />
                 Download for macOS
-              </button>
+              </a>
 
-              <button
-                type="button"
-                onClick={() => handleDownloadClick("linux", linuxDownloadUrl)}
-                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors disabled:cursor-not-allowed ${
+              <a
+                href={DOWNLOADS.linux}
+                onClick={() => handleDownloadClick("linux")}
+                className={`inline-flex min-w-[240px] items-center justify-center gap-3 rounded-xl border px-6 py-4 text-base font-semibold transition-colors ${
                   isDark
-                    ? "border-blue-500 text-white hover:bg-blue-500 hover:text-white disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
-                    : "border-blue-500 text-slate-900 hover:bg-blue-500 hover:text-white disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500"
+                    ? "border-blue-500 text-white hover:bg-blue-500 hover:text-white"
+                    : "border-blue-500 text-slate-900 hover:bg-blue-500 hover:text-white"
                 }`}
-                disabled={!linuxDownloadUrl}
-                title={linuxDownloadUrl ? "Download for Linux" : "Linux download URL not configured"}
+                title="Download for Linux"
               >
                 <img src={linuxLogo} alt="Linux logo" className="h-5 w-5" loading="lazy" />
                 Download for Linux
-              </button>
+              </a>
             </div>
+
+            {/* The macOS button above is Apple Silicon; Intel Macs need the x64 build. */}
+            <p className={`text-sm ${textTertiary}`}>
+              On an Intel Mac?{" "}
+              <a
+                href={DOWNLOADS.macIntel}
+                onClick={() => handleDownloadClick("mac-x64")}
+                className="font-semibold underline underline-offset-4 hover:text-purple-400"
+              >
+                Download the Intel build
+              </a>
+            </p>
           </div>
         </div>
       </div>

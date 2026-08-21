@@ -112,7 +112,21 @@ jobs:
           node -e "console.log('electron', require('electron/package.json').version)"
           node -e "console.log('electron-builder', require('electron-builder/package.json').version)"
 
+      # Split by OS purely so the ulimit below can be applied. macOS defaults to a
+      # soft limit of 256 open files; electron-builder blows through that while
+      # signing the app bundle, because the embedded Python runtime contains tens of
+      # thousands of files (kubernetes, chromadb, manim, Playwright browsers). The
+      # arm64 runner hit it as `EMFILE: too many open files` mid-signing.
       - name: Build installer
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -n 65535 || ulimit -n 10240 || true
+          echo "open file limit: $(ulimit -n)"
+          ${{ matrix.dist_command }}
+
+      - name: Build installer (Windows)
+        if: runner.os == 'Windows'
         run: ${{ matrix.dist_command }}
 
       # Windows validation happens against the unpacked app produced by
@@ -269,14 +283,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: upcurved-desktop-${{ matrix.label }}
+          # Single '*', not '**': electron-builder writes installers to the top level of
+          # release/, while release/win-unpacked/ and release/*/UpcurvEd.app/ hold the
+          # packed Python runtime. A recursive glob swept in thousands of its files
+          # (pip.exe, ziptestdata.zip, *.so.yml), which then hit GitHub's secondary
+          # rate limit when the publish job uploaded them as release assets.
           path: |
-            release/**/*.exe
-            release/**/*.dmg
-            release/**/*.AppImage
-            release/**/*.zip
-            release/**/*.yml
-            release/**/*.yaml
-            release/**/*.blockmap
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.zip
+            release/*.yml
+            release/*.blockmap
+            !release/builder-debug.yml
           if-no-files-found: error
           retention-days: 14
 
