@@ -29,10 +29,13 @@ jobs:
             python_arch: x64
             dist_command: npm run desktop:dist:win -- --publish never
 
-          - label: macos-x64
-            os: macos-15-intel
-            python_arch: x64
-            dist_command: npm run desktop:dist:mac:x64 -- --publish never
+          # Disabled, not removed. The landing page only offers the Apple Silicon
+          # build, and this job was the release bottleneck at ~30 min against ~10 for
+          # every other platform. Uncomment to ship an Intel Mac build again.
+          # - label: macos-x64
+          #   os: macos-15-intel
+          #   python_arch: x64
+          #   dist_command: npm run desktop:dist:mac:x64 -- --publish never
 
           - label: macos-arm64
             os: macos-14
