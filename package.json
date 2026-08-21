@@ -1,7 +1,7 @@
 {
   "name": "upcurved-desktop",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Desktop runtime for UpcurvEd",
   "repository": {
     "type": "git",
