@@ -74,7 +74,6 @@ import {
   apiToggleShare,
   apiDeleteAccount,
   apiQuiz,
-  apiWidget,
   apiUrl,
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -95,6 +94,12 @@ import {
   createMessageIdentity,
   mergeMessages,
 } from "@/lib/messageOrdering";
+import {
+  MAX_GENERATION_IMAGES,
+  prepareGenerationImages,
+  validateGenerationImageFiles,
+} from "@/lib/generationImages";
+import type { GenerationImagePayload } from "@/lib/generationImages";
 
 interface ChatInterfaceProps {
   setView: (view: string) => void;
@@ -139,6 +144,31 @@ const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, heigh
       loading="eager"
     />
   );
+};
+
+const ImageAttachmentPreview: FC<{ file: File }> = ({ file }) => {
+  const previewUrl = useMemo(() => URL.createObjectURL(file), [file]);
+
+  useEffect(() => {
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
+  return (
+    <img
+      src={previewUrl}
+      alt=""
+      className="h-12 w-12 rounded-md border border-border object-cover"
+    />
+  );
+};
+
+const NEEDS_CLARIFICATION_MESSAGE =
+  "The model determined the prompt's learning intention was unclear. Please try again.";
+
+const clarificationMessageFrom = (value: any): string | null => {
+  if (String(value?.status || "").trim() !== "needs_clarification") return null;
+  const message = String(value?.message || "").trim();
+  return message || NEEDS_CLARIFICATION_MESSAGE;
 };
 
 const diagnosticCount = (value: unknown): number | undefined => {
@@ -340,6 +370,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const [query, setQuery] = useState("");
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
   const [isCaptionsOn, setIsCaptionsOn] = useState(false);
   const [activeScript, setActiveScript] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -515,6 +546,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
 
+    setUploadedFiles([]);
     setIsEditMode(true);
     setIsQuizMode(false);
     setQuotedMessage({
@@ -2225,16 +2257,88 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      setUploadedFiles((prev) => [...prev, ...Array.from(files)]);
+  const addGenerationImages = (incoming: File[]) => {
+    if (!incoming.length) return;
+    const validation = validateGenerationImageFiles(uploadedFiles, incoming);
+    if (validation.rejected.length > 0) {
+      const first = validation.rejected[0];
+      toast({
+        title: "Image not attached",
+        description: `${first.file.name || "Image"}: ${first.reason}`,
+        duration: 5000,
+      });
     }
+    if (validation.limitReached) {
+      toast({
+        title: `Up to ${MAX_GENERATION_IMAGES} images`,
+        description: `A generation can use up to ${MAX_GENERATION_IMAGES} images at a time.`,
+        duration: 4000,
+      });
+    }
+    if (validation.accepted.length > 0) {
+      setUploadedFiles((previous) => [
+        ...previous,
+        ...validation.accepted.slice(0, Math.max(0, MAX_GENERATION_IMAGES - previous.length)),
+      ]);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    addGenerationImages(Array.from(e.target.files || []));
     e.target.value = ""; // allow re-uploading the same file
+  };
+
+  const handleImagePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (isEditMode) return;
+    const clipboardItems = Array.from(e.clipboardData?.items || []) as DataTransferItem[];
+    const pastedImages = clipboardItems
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item, index) => {
+        const file = item.getAsFile();
+        if (!file) return null;
+        const extension = file.type === "image/jpeg"
+          ? "jpg"
+          : file.type === "image/webp"
+          ? "webp"
+          : "png";
+        return new File(
+          [file],
+          file.name || `pasted-image-${Date.now()}-${index + 1}.${extension}`,
+          { type: file.type, lastModified: Date.now() },
+        );
+      })
+      .filter((file): file is File => Boolean(file));
+
+    if (!pastedImages.length) return;
+    e.preventDefault();
+    addGenerationImages(pastedImages);
   };
 
   const removeFile = (index: number) => {
     setUploadedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const attachmentSummary = (files: readonly File[]): string => {
+    if (!files.length) return "";
+    const names = files.map((file) => file.name || "image").join(", ");
+    return `🖼️ ${files.length} ${files.length === 1 ? "image" : "images"} attached: ${names}`;
+  };
+
+  const userMessageWithAttachments = (prompt: string, files: readonly File[]): string =>
+    [prompt.trim(), attachmentSummary(files)].filter(Boolean).join("\n\n");
+
+  const prepareAttachedImages = async (files: readonly File[]): Promise<GenerationImagePayload[]> => {
+    if (!files.length) return [];
+    try {
+      return await prepareGenerationImages(files);
+    } catch (error: any) {
+      toast({
+        title: "Could not prepare image",
+        description: error?.message || "Please try attaching the image again.",
+        duration: 5000,
+      });
+      throw error;
+    }
   };
 
   const handleSubmit = () => {
@@ -2244,7 +2348,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     // Show toast and keep prompt in input - user must select generation type
     toast({
       title: "Select a Generation Type",
-      description: "Please choose whether you'd like to create a Video, Podcast, or Quiz from your prompt.",
+      description: "Choose Video, Podcast, Quiz, or Widget for this prompt or image.",
       duration: 4000
     });
     // Don't clear query or add message - keep prompt in typing area
@@ -2252,47 +2356,52 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const generatePodcastFromPrompt = async () => {
     lastGenerateKindRef.current = 'podcast';
-    // If already loading, treat as cancel toggle
     if (podcastLoading && podcastAbortRef.current) {
       podcastAbortRef.current.abort();
       return;
     }
-    // Stop any current playback/progress immediately when starting generation
     stopPlayback();
-    // Build a candidate prompt first so we can warn if it's empty
-    let prompt = "";
-    if (query.trim()) {
-      prompt = query.trim();
-    }
-    if (!prompt) {
-      toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
+
+    const prompt = query.trim();
+    const sourceFiles = [...uploadedFiles];
+    if (!prompt && sourceFiles.length === 0) {
+      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
-    // Gate before posting user prompt into chat.
     if (!ensureLlmKey("podcast")) return;
-    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
-    // Persist (may migrate draft) BEFORE adding message so user prompt always visible
-    let persistedId = await ensurePersistedActiveChat(prompt);
-    // Use persistedId or activeChatId, or let processAndAddMessage create a local one
+    let images: GenerationImagePayload[];
+    try {
+      images = await prepareAttachedImages(sourceFiles);
+    } catch {
+      return;
+    }
+
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
+    const chatSeed = prompt || sourceFiles[0]?.name || "Image learning request";
+    const persistedId = await ensurePersistedActiveChat(chatSeed);
     const finalChatId = persistedId || activeChatId;
     if (!finalChatId) {
       toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
       return;
     }
     setActiveChatId(finalChatId);
-    // Add user message FIRST - this ensures prompt is visible in chat
-    await processAndAddMessage(prompt, true, undefined, persistedId);
-    // Now clear the query input AFTER message is added
+    await processAndAddMessage(
+      userMessageWithAttachments(prompt, sourceFiles),
+      true,
+      undefined,
+      persistedId,
+    );
     setQuery("");
-    // Pass the chat ID to generatePodcast to avoid duplicate chat creation
-    generatePodcast(prompt, finalChatId, requestAudience);
+    setUploadedFiles([]);
+    void generatePodcast(prompt, finalChatId, requestAudience, images);
   };
 
   async function generatePodcast(
     prompt: string,
     chatIdOverride?: string | number | null,
     requestAudience: AudienceLevel | undefined = undefined,
+    images: GenerationImagePayload[] = [],
   ) {
     setPodcastLoading(true);
     setApiError(null);
@@ -2332,6 +2441,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         model: llmConfig.model,
         mode: podcastMode,
         audience: requestAudience,
+        images,
         sessionId,
       };
       const controller = new AbortController();
@@ -2343,11 +2453,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         signal: controller.signal,
       });
       const { data, raw } = await parseResponse(res);
+      const clarificationMessage = clarificationMessageFrom(data);
+      if (clarificationMessage) {
+        setApiError(null);
+        await processAndAddMessage(clarificationMessage, false, undefined, chatIdForGeneration);
+        return;
+      }
       if (res.ok && data?.status === "ok" && data?.video_url) {
         // Use signed URL if available, otherwise use regular URL
         const audioUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(audioUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio', artifactKind: 'podcast', title: prompt });
+        const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio', artifactKind: 'podcast', title: sourceLabel });
         setSubtitleLang((data.lang as string) || undefined);
 
 
@@ -2357,7 +2474,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactKind: 'podcast' as any,
           url: audioUrl, // Use signed URL for persistence
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `${podcastMode === "debate" ? "Debate Podcast" : "Podcast"}: ${prompt.slice(0, 50)}...`,
+          title: `${podcastMode === "debate" ? "Debate Podcast" : "Podcast"}: ${sourceLabel.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           scriptGcsPath: data.script_gcs_path // GCS path for persistent script fallback
@@ -2411,10 +2528,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     storyOptions?: { host_character?: string; theme?: string }
   ) => {
     lastGenerateKindRef.current = 'video';
-    // If already generating, treat as cancel toggle
     if (busy && videoAbortRef.current) {
       videoAbortRef.current.abort();
-      // best-effort server-side cancel if a jobId exists
       if (currentVideoJobId.current) {
         fetch(apiUrl(`/jobs/cancel?jobId=${encodeURIComponent(currentVideoJobId.current)}`), {
           method: "POST",
@@ -2422,35 +2537,41 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
       return;
     }
-    // Stop any current playback/progress before starting generation
+
     stopPlayback();
-    // Build a candidate prompt first so we can warn if it's empty
-    let prompt = "";
-    if (query.trim()) {
-      prompt = query.trim();
-    }
-    if (!prompt) {
-      toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
+    const prompt = (promptOverride ?? query).trim();
+    const sourceFiles = [...uploadedFiles];
+    if (!prompt && sourceFiles.length === 0) {
+      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
-    // Gate before posting user prompt into chat.
     if (!ensureLlmKey("video")) return;
+
+    let images: GenerationImagePayload[];
+    try {
+      images = await prepareAttachedImages(sourceFiles);
+    } catch {
+      return;
+    }
+
     const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
-    // Persist (may migrate draft) BEFORE adding message so user prompt always visible
-    let persistedId = await ensurePersistedActiveChat(prompt);
-    // Use persistedId or activeChatId, or let processAndAddMessage create a local one
+    const chatSeed = prompt || sourceFiles[0]?.name || "Image learning request";
+    const persistedId = await ensurePersistedActiveChat(chatSeed);
     const finalChatId = persistedId || activeChatId;
     if (!finalChatId) {
       toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
       return;
     }
     setActiveChatId(finalChatId);
-    // Add user message FIRST - this ensures prompt is visible in chat
-    await processAndAddMessage(prompt, true, undefined, persistedId);
-    // Now clear the query input AFTER message is added
+    await processAndAddMessage(
+      userMessageWithAttachments(prompt, sourceFiles),
+      true,
+      undefined,
+      persistedId,
+    );
     setQuery("");
-    // Pass the chat ID to generateVideo to avoid duplicate chat creation
-    generateVideo(prompt, finalChatId, storyOptions, requestAudience);
+    setUploadedFiles([]);
+    void generateVideo(prompt, finalChatId, storyOptions, requestAudience, images);
   };
 
   const getLastUserPrompt = () => {
@@ -2482,86 +2603,112 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   };
 
   async function generateQuiz() {
-    // Cancel if already loading
     if (quizLoading && quizAbortRef.current) {
       quizAbortRef.current.abort();
       return;
     }
-    // Always use the current prompt typed in the box
-    const currentPrompt = (query || '').trim();
-    if (!currentPrompt) {
-      // Show popup for empty prompt (requested)
-      toast({ title: 'Enter a prompt', description: 'Please enter a prompt first.', duration: 4000 });
+
+    const currentPrompt = (query || "").trim();
+    const sourceFiles = [...uploadedFiles];
+    if (!currentPrompt && sourceFiles.length === 0) {
+      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
-    if (!ensureLlmKey('quiz')) return;
+    if (!ensureLlmKey("quiz")) return;
+
+    let images: GenerationImagePayload[];
+    try {
+      images = await prepareAttachedImages(sourceFiles);
+    } catch {
+      return;
+    }
+
     const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
     setQuizLoading(true);
     let persistedId: string | undefined;
     try {
-      const pendingPrompt = normalizePrompt(currentPrompt, 'quiz');
-      persistedId = await ensurePersistedActiveChat(pendingPrompt || 'Generate quiz');
-      // Use persistedId or activeChatId, or let processAndAddMessage create a local one
+      const pendingPrompt = normalizePrompt(currentPrompt, "quiz");
+      const chatSeed = pendingPrompt || sourceFiles[0]?.name || "Image learning request";
+      persistedId = await ensurePersistedActiveChat(chatSeed);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
         toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
         return;
       }
       setActiveChatId(finalChatId);
-      // Record the user's current prompt FIRST - this ensures prompt is visible in chat
-      await processAndAddMessage(pendingPrompt, true, undefined, persistedId);
-      // Now clear the query input AFTER message is added
+      await processAndAddMessage(
+        userMessageWithAttachments(pendingPrompt, sourceFiles),
+        true,
+        undefined,
+        persistedId,
+      );
       setQuery("");
+      setUploadedFiles([]);
+
       const llmConfig = buildLlmRequestConfig(apiKeys);
       const sessionId = ensureChatSessionId();
-  const jobId = makeJobId();
-  const body = { prompt: pendingPrompt || '', num_questions: 5, difficulty: 'medium', keys: llmConfig.keys, provider: llmConfig.provider, model: llmConfig.model, audience: requestAudience, sessionId, jobId, chatId: String(finalChatId) };
-      console.debug('POST /quiz/embedded', body);
+      const jobId = makeJobId();
+      const body = {
+        prompt: pendingPrompt || "",
+        images,
+        num_questions: 5,
+        difficulty: "medium",
+        keys: llmConfig.keys,
+        provider: llmConfig.provider,
+        model: llmConfig.model,
+        audience: requestAudience,
+        sessionId,
+        jobId,
+        chatId: String(finalChatId),
+      };
+      console.debug("POST /quiz/embedded", { ...body, images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })) });
       const controller = new AbortController();
       quizAbortRef.current = controller;
-      const res = await apiFetch('/quiz/embedded', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await apiFetch("/quiz/embedded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: controller.signal
+        signal: controller.signal,
       });
       const { data, raw: quizRawResponse } = await parseResponse(res);
-      // Use the same chat ID we started with
       const quizChatId = persistedId || activeChatId;
-      if (quizChatId && res.ok && data?.status === 'ok' && data?.quiz?.questions?.length) {
-        // Insert a hidden bot anchor message (no visible bubble) to attach the quiz UI
-        // Store quiz data in message extras so it persists on refresh
+      const clarificationMessage = clarificationMessageFrom(data);
+      if (clarificationMessage) {
+        setApiError(null);
+        await processAndAddMessage(clarificationMessage, false, undefined, quizChatId || persistedId);
+        return;
+      }
+      if (quizChatId && res.ok && data?.status === "ok" && data?.quiz?.questions?.length) {
         const quizPayload = {
           ...data.quiz,
           downloadUrl: toPlayableMediaUrl(data.download_url),
           downloadFilename: data.download_filename,
         };
-        const quizTitle = (quizPayload?.title as string) || 'Quiz';
-        const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
+        const quizTitle = (quizPayload?.title as string) || "Quiz";
+        const quizMsgId = await processAndAddMessage("", false, undefined, String(quizChatId), {
           quizAnchor: true,
           quizTitle,
-          quizData: quizPayload // Store quiz data in message for persistence
+          quizData: quizPayload,
         });
-          if (quizMsgId) {
-            // Initialize runtime for this quiz
-            setQuizzesByChat(prev => ({
-              ...prev,
-              [String(quizChatId)]: {
-                ...(prev[String(quizChatId)] || {}),
-                [quizMsgId]: { data: quizPayload, index: 0, answers: [], score: null, selected: null, revealed: false }
-              }
-            }));
-          }
+        if (quizMsgId) {
+          setQuizzesByChat((prev) => ({
+            ...prev,
+            [String(quizChatId)]: {
+              ...(prev[String(quizChatId)] || {}),
+              [quizMsgId]: { data: quizPayload, index: 0, answers: [], score: null, selected: null, revealed: false },
+            },
+          }));
+        }
       } else {
         const errorBody = responseErrorBody(res, data, quizRawResponse);
-        await processAndAddMessage(formatGenerationError('Quiz generation', errorBody), false, undefined, persistedId);
+        await processAndAddMessage(formatGenerationError("Quiz generation", errorBody), false, undefined, persistedId);
       }
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
+      if (err?.name === "AbortError") {
+        await processAndAddMessage("⏹️ Canceled quiz generation.", false, undefined, persistedId);
       } else {
         const body = thrownErrorBody(err);
-        await processAndAddMessage(formatGenerationError('Quiz generation', body, err?.message), false, undefined, persistedId);
+        await processAndAddMessage(formatGenerationError("Quiz generation", body, err?.message), false, undefined, persistedId);
       }
     } finally {
       setQuizLoading(false);
@@ -2570,20 +2717,27 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }
 
   async function generateWidgetFromPrompt() {
-    // Cancel toggle if already loading
     if (widgetLoading && widgetAbortRef.current) {
       widgetAbortRef.current.abort();
       return;
     }
 
     const prompt = query.trim();
-    if (!prompt) {
-      toast({ title: "Enter a prompt", description: "Please enter a prompt first.", duration: 4000 });
+    const sourceFiles = [...uploadedFiles];
+    if (!prompt && sourceFiles.length === 0) {
+      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
     if (!ensureLlmKey("widget")) return;
-    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
 
+    let images: GenerationImagePayload[];
+    try {
+      images = await prepareAttachedImages(sourceFiles);
+    } catch {
+      return;
+    }
+
+    const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
     setWidgetLoading(true);
     setWidgetProgress(5);
     if (widgetProgressTimer.current) window.clearInterval(widgetProgressTimer.current);
@@ -2594,49 +2748,69 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     let persistedId: string | undefined;
 
     try {
-      persistedId = await ensurePersistedActiveChat(prompt);
+      const chatSeed = prompt || sourceFiles[0]?.name || "Image learning request";
+      persistedId = await ensurePersistedActiveChat(chatSeed);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
         toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
         return;
       }
       setActiveChatId(finalChatId);
-
-      // Add user message first
-      await processAndAddMessage(prompt, true, undefined, persistedId);
+      await processAndAddMessage(
+        userMessageWithAttachments(prompt, sourceFiles),
+        true,
+        undefined,
+        persistedId,
+      );
       setQuery("");
+      setUploadedFiles([]);
 
       const llmConfig = buildLlmRequestConfig(apiKeys);
-
       const controller = new AbortController();
       widgetAbortRef.current = controller;
-
-      const data = await apiWidget({
+      const body = {
         prompt,
+        images,
         provider: llmConfig.provider,
         model: llmConfig.model,
         keys: llmConfig.keys,
-        chatId: String(finalChatId),
         audience: requestAudience,
-      }, controller.signal);
+        chatId: String(finalChatId),
+        sessionId: ensureChatSessionId(),
+        jobId: makeJobId(),
+      };
+      console.debug("POST /widget", { ...body, images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })) });
+      const res = await apiFetch("/widget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const { data, raw } = await parseResponse(res);
+      const clarificationMessage = clarificationMessageFrom(data);
+      if (clarificationMessage) {
+        setApiError(null);
+        await processAndAddMessage(clarificationMessage, false, undefined, String(finalChatId));
+        return;
+      }
 
-      if (data?.status === "ok" && data?.widget_html) {
-        // Store widget HTML in media attachment (no URL, no GCS — fully inline)
+      if (res.ok && data?.status === "ok" && data?.widget_html) {
+        const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
         const widgetDownloadUrl = toPlayableMediaUrl(data.download_url);
-        const widgetDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Widget: ${prompt.slice(0, 50)}`, "upcurved_widget.html");
+        const widgetDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Widget: ${sourceLabel.slice(0, 50)}`, "upcurved_widget.html");
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'widget',
           artifactKind: 'widget' as any,
           url: widgetDownloadUrl,
           widgetCode: data.widget_html,
-          title: `Widget: ${prompt.slice(0, 50)}`,
+          title: `Widget: ${sourceLabel.slice(0, 50)}`,
           downloadFilename: widgetDownloadFilename,
         };
-        const widgetMessageId = await processAndAddMessage(
+        await processAndAddMessage(
           "✅ Interactive widget generated.",
           false,
           mediaAttachment,
-          String(finalChatId)
+          String(finalChatId),
         );
         setVideoUrl(null);
         setCurrentMediaMeta({ type: 'widget', artifactKind: 'widget' });
@@ -2647,7 +2821,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         setHtmlDownloadUrl(widgetDownloadUrl || null);
         setHtmlDownloadFilename(widgetDownloadFilename || null);
       } else {
-        const friendly = formatGenerationError("Widget generation", data, "Widget response did not include widget_html.");
+        const errorBody = responseErrorBody(res, data, raw);
+        const friendly = formatGenerationError("Widget generation", errorBody, "Widget response did not include widget_html.");
         await processAndAddMessage(friendly, false, undefined, persistedId);
       }
     } catch (err: any) {
@@ -3369,6 +3544,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     chatIdOverride?: string | number | null,
     storyOptions?: { host_character?: string; theme?: string },
     requestAudience: AudienceLevel | undefined = undefined,
+    images: GenerationImagePayload[] = [],
   ) {
     // if already busy, treat as cancel
     if (busy && videoAbortRef.current) {
@@ -3414,6 +3590,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   try {
       // Defensive defaults: ensure keys object always exists
       const llmConfig = buildLlmRequestConfig(apiKeys);
+      const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
 
       // assign a client job id so backend can cancel the right process
       const jobId = makeJobId();
@@ -3426,12 +3603,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         model: llmConfig.model,
         mode: videoMode,
         audience: requestAudience,
+        images,
         storyOptions: videoMode === "story" ? (storyOptions || {}) : undefined,
         jobId,
         sessionId,
       };
 
-      console.debug("POST /generate", body);
+      console.debug("POST /generate", { ...body, images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })) });
 
       const controller = new AbortController();
       videoAbortRef.current = controller;
@@ -3443,17 +3621,23 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       });
 
       const { data, raw } = await parseResponse(res);
+      const clarificationMessage = clarificationMessageFrom(data);
+      if (clarificationMessage) {
+        setApiError(null);
+        await processAndAddMessage(clarificationMessage, false, undefined, chatIdForGeneration);
+        return;
+      }
 
       if (res.ok && data?.status === "ok") {
         if (videoMode === "story" && data?.widget_html) {
           const storyDownloadUrl = toPlayableMediaUrl(data.download_url);
-          const storyDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Story Scenes: ${prompt.slice(0, 50)}`, "upcurved_story.html");
+          const storyDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Story Scenes: ${sourceLabel.slice(0, 50)}`, "upcurved_story.html");
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
             artifactKind: 'story' as any,
             url: storyDownloadUrl,
             widgetCode: data.widget_html,
-            title: `Story Scenes: ${prompt.slice(0, 50)}...`,
+            title: `Story Scenes: ${sourceLabel.slice(0, 50)}...`,
             downloadFilename: storyDownloadFilename,
           };
           setCurrentMediaMeta({ type: 'widget', artifactKind: 'story' });
@@ -3483,7 +3667,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Use signed URL if available, otherwise use regular URL
         const videoUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(videoUrl);
-        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video', title: prompt });
+        setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'video', artifactKind: 'video', title: sourceLabel });
         setSubtitleLang((data.lang as string) || undefined);
 
         // Debug subtitle URL
@@ -3501,7 +3685,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactKind: 'video' as any,
           url: videoUrl,
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `${videoMode === "story" ? "Story Video" : "Video"}: ${prompt.slice(0, 50)}...`,
+          title: `${videoMode === "story" ? "Story Video" : "Video"}: ${sourceLabel.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           sceneCode: data.scene_code,  // Store scene code for video editing
@@ -5329,16 +5513,22 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               </div>
             )}
             {uploadedFiles.length > 0 && (
-              <div className="mb-2 space-y-1">
+              <div className="mb-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {uploadedFiles.map((file, index) => (
                   <div
-                    key={index}
-                    className="flex items-center justify-between rounded-lg bg-secondary px-3 py-2 text-sm"
+                    key={`${file.name}-${file.lastModified}-${index}`}
+                    className="flex min-w-0 items-center gap-2 rounded-lg bg-secondary px-2 py-2 text-sm"
                   >
-                    <span className="truncate">{file.name}</span>
+                    <ImageAttachmentPreview file={file} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate">{file.name}</p>
+                      <p className="text-[11px] text-muted-foreground">Image {index + 1} of {MAX_GENERATION_IMAGES}</p>
+                    </div>
                     <button
+                      type="button"
                       onClick={() => removeFile(index)}
-                      className="text-muted-foreground hover:text-foreground flex-shrink-0 ml-2"
+                      className="ml-1 flex-shrink-0 text-muted-foreground hover:text-foreground"
+                      aria-label={`Remove ${file.name || `image ${index + 1}`}`}
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -5347,22 +5537,46 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               </div>
             )}
             <div className="relative">
+              <input
+                ref={imageFileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                className="hidden"
+                onChange={handleFileUpload}
+                disabled={isEditMode || uploadedFiles.length >= MAX_GENERATION_IMAGES}
+              />
               <Textarea
                 ref={textareaRef}
                 placeholder={
                   isEditMode
                     ? `Describe what changes you want to make to this ${artifactLabel(quotedMessage?.artifactKind || normalizeArtifactKind(quotedMessage?.media, quotedMessage))}...`
                     : uploadedFiles.length > 0
-                    ? `${uploadedFiles.length} file(s) attached. Press Generate to continue.`
-                    : "Enter a prompt..."
+                    ? `${uploadedFiles.length} ${uploadedFiles.length === 1 ? "image" : "images"} attached. Add a prompt if you want, then choose a generation type.`
+                    : "Enter a prompt, attach an image, or paste a screenshot..."
                 }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onPaste={handleImagePaste}
                 onKeyDown={handleKeyDown}
                 rows={1}
-                className="min-h-[48px] resize-none pr-24 md:pr-36 py-3"
+                className={`min-h-[48px] resize-none pr-24 md:pr-36 py-3 ${isEditMode ? "" : "pl-12"}`}
                 disabled={false}
               />
+              {!isEditMode && (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="absolute left-1.5 top-1/2 h-8 w-8 -translate-y-1/2"
+                  onClick={() => imageFileInputRef.current?.click()}
+                  title={uploadedFiles.length >= MAX_GENERATION_IMAGES ? `Maximum ${MAX_GENERATION_IMAGES} images attached` : "Attach image"}
+                  aria-label="Attach image"
+                  disabled={uploadedFiles.length >= MAX_GENERATION_IMAGES}
+                >
+                  <Upload className="h-4 w-4" />
+                </Button>
+              )}
               <div className="absolute top-1/2 right-3 -translate-y-1/2 flex gap-1">
                 {isEditMode ? (
                   /* Edit mode: only show edit video button */
