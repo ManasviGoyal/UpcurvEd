@@ -895,6 +895,14 @@ def _write_caption_text(text: str, out_dir: pathlib.Path) -> pathlib.Path:
     if not clean:
         raise ValueError("subtitle_text is empty")
 
+    # ffmpeg probes the caption file; text with no timing cues fails deep inside the
+    # filter graph as "Unable to open", which points at the path rather than the real
+    # cause. Reject it here with a message the UI can actually show.
+    if "-->" not in clean:
+        raise ValueError(
+            "Captions are not in a timed subtitle format (no SRT/VTT cues found)."
+        )
+
     suffix = ".vtt" if clean.upper().startswith("WEBVTT") else ".srt"
     path = out_dir / f"captions{suffix}"
     path.write_text(clean + "\n", encoding="utf-8")
