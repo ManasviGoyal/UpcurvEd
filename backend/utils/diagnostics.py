@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
+from backend.agent.llm.clients import current_llm_usage_summary
+
 
 _MAX_PUBLIC_REASON_CHARS = 240
 
@@ -315,7 +317,8 @@ def diagnostic_payload(
 
     category = diagnostic_category(error)
     reason = public_error_message(error)
-    return {
+    usage_summary = current_llm_usage_summary()
+    payload: dict[str, Any] = {
         "ok": False,
         "status": "error",
         "error": reason,
@@ -329,6 +332,16 @@ def diagnostic_payload(
             "retryable": diagnostic_retryable(error),
         },
     }
+    if int(usage_summary.get("llm_calls") or 0) > 0:
+        payload["generation_diagnostics"] = {
+            "quality_status": "failed",
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "failure_stage": str(step or "generation"),
+            "summary": reason,
+            **usage_summary,
+        }
+    return payload
 
 
 def diagnostic_error_response(

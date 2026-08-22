@@ -190,6 +190,12 @@ const diagnosticCount = (value: unknown): number | undefined => {
     : undefined;
 };
 
+const diagnosticNumber = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+};
+
 const diagnosticText = (value: unknown): string | undefined => {
   const text = String(value ?? "").trim();
   return text || undefined;
@@ -208,6 +214,8 @@ const normalizeGenerationDiagnostics = (
     raw.input_modality,
     raw.image_count,
     raw.vision_mode,
+    raw.total_tokens,
+    raw.estimated_cost_usd,
   ].some((entry) => entry !== undefined && entry !== null && entry !== "");
   if (!hasDiagnosticSignal) return undefined;
 
@@ -226,12 +234,42 @@ const normalizeGenerationDiagnostics = (
   const legacyPlanRepairWasModelCall =
     Boolean(raw.plan_repaired)
     && recoveryStages.includes("plan_repair");
+  const callDetails = Array.isArray(raw.calls)
+    ? raw.calls
+        .filter((call): call is Record<string, unknown> => Boolean(call) && typeof call === "object")
+        .map((call) => ({
+          provider: diagnosticText(call.provider),
+          model: diagnosticText(call.model),
+          actual_model: diagnosticText(call.actual_model),
+          purpose: diagnosticText(call.purpose),
+          input_tokens: diagnosticCount(call.input_tokens),
+          output_tokens: diagnosticCount(call.output_tokens),
+          total_tokens: diagnosticCount(call.total_tokens),
+          usage_reported: Boolean(call.usage_reported),
+          status: diagnosticText(call.status),
+          pricing_known: Boolean(call.pricing_known),
+          estimated_cost_usd: diagnosticNumber(call.estimated_cost_usd) ?? null,
+        }))
+    : [];
 
   return {
     quality_status: status,
     provider: diagnosticText(raw.provider),
     model: diagnosticText(raw.model),
     llm_calls: diagnosticCount(raw.llm_calls),
+    input_tokens: diagnosticCount(raw.input_tokens),
+    cached_input_tokens: diagnosticCount(raw.cached_input_tokens),
+    cache_write_input_tokens: diagnosticCount(raw.cache_write_input_tokens),
+    output_tokens: diagnosticCount(raw.output_tokens),
+    total_tokens: diagnosticCount(raw.total_tokens),
+    estimated_cost_usd: diagnosticNumber(raw.estimated_cost_usd),
+    pricing_complete:
+      raw.pricing_complete === undefined ? undefined : Boolean(raw.pricing_complete),
+    usage_complete:
+      raw.usage_complete === undefined ? undefined : Boolean(raw.usage_complete),
+    unpriced_calls: diagnosticCount(raw.unpriced_calls),
+    usage_missing_calls: diagnosticCount(raw.usage_missing_calls),
+    calls: callDetails,
     total_scenes: diagnosticCount(raw.total_scenes),
     creative_scenes: diagnosticCount(raw.creative_scenes),
     repaired_scenes: repairedScenes,
@@ -262,6 +300,19 @@ const humanizeDiagnosticToken = (value: string): string =>
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
+const compactTokenCount = (tokens: number): string => {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M tokens`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 1 : 2)}K tokens`;
+  return `${tokens} ${tokens === 1 ? "token" : "tokens"}`;
+};
+
+const compactEstimatedCost = (cost: number): string => {
+  if (cost <= 0) return "$0";
+  if (cost < 0.0001) return `$${cost.toFixed(6)}`;
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(3)}`;
+};
+
 const compactModelLabel = (diagnostics: MultimodalGenerationDiagnostics): string => {
   const provider = diagnostics.provider
     ? humanizeDiagnosticToken(diagnostics.provider)
@@ -285,6 +336,20 @@ const GenerationDiagnosticsPanel: FC<{
     firstLine.push(
       `${diagnostics.llm_calls} model ${diagnostics.llm_calls === 1 ? "call" : "calls"}`,
     );
+  }
+  if (typeof diagnostics.total_tokens === "number" && diagnostics.total_tokens > 0) {
+    firstLine.push(compactTokenCount(diagnostics.total_tokens));
+  }
+  if (typeof diagnostics.estimated_cost_usd === "number") {
+    if (diagnostics.pricing_complete) {
+      firstLine.push(`est. ${compactEstimatedCost(diagnostics.estimated_cost_usd)}`);
+    } else if ((diagnostics.unpriced_calls || 0) > 0) {
+      firstLine.push(
+        diagnostics.estimated_cost_usd > 0
+          ? `known est. ${compactEstimatedCost(diagnostics.estimated_cost_usd)} · ${diagnostics.unpriced_calls} unpriced`
+          : `${diagnostics.unpriced_calls} ${diagnostics.unpriced_calls === 1 ? "call" : "calls"} unpriced`,
+      );
+    }
   }
   if (diagnostics.image_count) {
     sourceLine.push(
@@ -467,7 +532,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const [widgetLoading, setWidgetLoading] = useState(false);
   // Embedded quiz runtime state per chat, anchored to a specific messageId
   // quizzesByChat[chatId][messageId] => QuizRuntime
-  interface QuizData { title: string; description?: string; questions: { prompt: string; options: string[]; correctIndex: number }[]; downloadUrl?: string; downloadFilename?: string }
+  interface QuizData { title: string; description?: string; questions: { prompt: string; options: string[]; correctIndex: number }[]; downloadUrl?: string; downloadFilename?: string; generationDiagnostics?: MultimodalGenerationDiagnostics }
   interface QuizRuntime { data: QuizData; index: number; answers: number[]; score: number | null; selected: number | null; revealed: boolean }
   const [quizzesByChat, setQuizzesByChat] = useState<Record<string, Record<string, QuizRuntime>>>({});
   const [subtitleLang, setSubtitleLang] = useState<string | undefined>(undefined);
@@ -2738,6 +2803,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ...data.quiz,
           downloadUrl: toPlayableMediaUrl(data.download_url),
           downloadFilename: data.download_filename,
+          generationDiagnostics: normalizeGenerationDiagnostics(data.generation_diagnostics),
         };
         const quizTitle = (quizPayload?.title as string) || "Quiz";
         const quizMsgId = await processAndAddMessage("", false, undefined, String(quizChatId), {
@@ -3593,6 +3659,20 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (typeof generationDiagnostics?.llm_calls === "number") {
       lines.push(`Model calls used: ${generationDiagnostics.llm_calls}`);
     }
+    if (typeof generationDiagnostics?.total_tokens === "number" && generationDiagnostics.total_tokens > 0) {
+      lines.push(`Tokens used: ${generationDiagnostics.total_tokens.toLocaleString()}`);
+    }
+    if (typeof generationDiagnostics?.estimated_cost_usd === "number") {
+      if (generationDiagnostics.pricing_complete) {
+        lines.push(`Estimated model cost: ${compactEstimatedCost(generationDiagnostics.estimated_cost_usd)}`);
+      } else if ((generationDiagnostics.unpriced_calls || 0) > 0) {
+        lines.push(
+          generationDiagnostics.estimated_cost_usd > 0
+            ? `Estimated known model cost: ${compactEstimatedCost(generationDiagnostics.estimated_cost_usd)} (${generationDiagnostics.unpriced_calls} unpriced call${generationDiagnostics.unpriced_calls === 1 ? "" : "s"})`
+            : `Model cost unavailable for ${generationDiagnostics.unpriced_calls} call${generationDiagnostics.unpriced_calls === 1 ? "" : "s"}.`,
+        );
+      }
+    }
 
     return lines.join("\n").trimEnd();
   }
@@ -3987,6 +4067,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ...response.quiz,
           downloadUrl: toPlayableMediaUrl(response.download_url),
           downloadFilename: response.download_filename,
+          generationDiagnostics: normalizeGenerationDiagnostics(response.generation_diagnostics),
         };
         const quizTitle = (quizPayload?.title as string) || 'Media Quiz';
         const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
@@ -4083,6 +4164,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ...response.quiz,
           downloadUrl: toPlayableMediaUrl(response.download_url),
           downloadFilename: response.download_filename,
+          generationDiagnostics: normalizeGenerationDiagnostics(response.generation_diagnostics),
         };
         const quizTitle = (quizPayload?.title as string) || `${artifactLabel(kind)} Quiz`;
         const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
@@ -4237,6 +4319,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             ...data.quiz,
             downloadUrl: toPlayableMediaUrl(data.download_url),
             downloadFilename: data.download_filename,
+            generationDiagnostics: normalizeGenerationDiagnostics(data.generation_diagnostics),
           };
           const quizTitle = (quizPayload?.title as string) || 'Edited Quiz';
           const quizMsgId = await processAndAddMessage('', false, undefined, String(chatIdForGeneration), {
@@ -5527,6 +5610,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             )}
                           </div>
                         ); })()}
+                        {quizzesByChat[String(activeChatId)][String((msg as any).messageId)]?.data?.generationDiagnostics && (
+                          <div className="w-full max-w-lg px-1">
+                            <GenerationDiagnosticsPanel
+                              diagnostics={quizzesByChat[String(activeChatId)][String((msg as any).messageId)].data.generationDiagnostics}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

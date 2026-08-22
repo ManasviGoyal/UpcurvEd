@@ -24,7 +24,7 @@ import uuid
 from typing import Any
 
 from backend.agent.code_sanitize import SanitizeResult, sanitize_manim_script, sanitize_minimally
-from backend.agent.llm.clients import call_llm
+from backend.agent.llm.clients import call_llm, current_llm_usage_summary
 from backend.agent.llm.multimodal import (
     NEEDS_CLARIFICATION_MESSAGE,
     call_multimodal_llm,
@@ -1076,6 +1076,10 @@ def _append_audit_and_cleanup(
         or int(metrics.get("voice_retry_count") or 0) > 0
     )
 
+    usage_summary = current_llm_usage_summary()
+    if int(usage_summary.get("llm_calls") or 0) > 0:
+        metrics["llm_calls"] = int(usage_summary.get("llm_calls") or 0)
+
     try:
         append_generation_audit(
             {
@@ -1086,6 +1090,17 @@ def _append_audit_and_cleanup(
                 "provider": provider_name,
                 "model": model,
                 "llm_calls": metrics.get("llm_calls"),
+                "input_tokens": usage_summary.get("input_tokens"),
+                "cached_input_tokens": usage_summary.get("cached_input_tokens"),
+                "cache_write_input_tokens": usage_summary.get("cache_write_input_tokens"),
+                "output_tokens": usage_summary.get("output_tokens"),
+                "total_tokens": usage_summary.get("total_tokens"),
+                "estimated_cost_usd": usage_summary.get("estimated_cost_usd"),
+                "pricing_complete": usage_summary.get("pricing_complete"),
+                "usage_complete": usage_summary.get("usage_complete"),
+                "unpriced_calls": usage_summary.get("unpriced_calls"),
+                "usage_missing_calls": usage_summary.get("usage_missing_calls"),
+                "llm_call_details": usage_summary.get("calls"),
                 "total_scenes": len(scenes),
                 "creative_scenes": creative,
                 "rendered_initially": metrics.get("rendered_initially"),
@@ -1702,6 +1717,7 @@ def _prepare_custom_states(
             ),
             temperature=0.08,
             max_tokens=_SANITIZER_REPAIR_MAX_TOKENS,
+            purpose="video_sanitizer_repair",
         )
         raw_text = _coerce_llm_text(raw)
         requested_refs = [str(state["ref"]) for state in failures]
@@ -2015,6 +2031,7 @@ def _batch_runtime_repair(
             user=build_structured_video_batch_render_repair_prompt(failures=request),
             temperature=0.1,
             max_tokens=_RENDER_REPAIR_MAX_TOKENS,
+            purpose="video_render_repair",
         )
         raw_text = _coerce_llm_text(raw)
         requested_refs = [str(state["ref"]) for state in failures]
@@ -2151,6 +2168,7 @@ def _batch_simplify_remaining(
             user=build_structured_video_batch_simplify_prompt(failures=request),
             temperature=0.08,
             max_tokens=_SIMPLIFY_MAX_TOKENS,
+            purpose="video_simplify_retry",
         )
         raw_text = _coerce_llm_text(raw)
         requested_refs = [str(state["ref"]) for state in failures]
@@ -2879,6 +2897,10 @@ def _build_generation_diagnostics(
         "vision_fallback_reason": str(metrics.get("vision_fallback_reason") or ""),
         "default_image_prompt_used": bool(metrics.get("default_image_prompt_used")),
     }
+    usage_summary = current_llm_usage_summary()
+    if int(usage_summary.get("llm_calls") or 0) > 0:
+        diagnostics.update(usage_summary)
+        diagnostics["llm_calls"] = int(usage_summary.get("llm_calls") or 0)
     if error_category:
         diagnostics["error_category"] = error_category
     if during_stage:
@@ -3440,6 +3462,7 @@ def edit_structured_manim_video(
             user=build_structured_video_edit_user_prompt(original_plan, edit_instructions),
             temperature=0.18,
             max_tokens=_INITIAL_MAX_TOKENS,
+            purpose="video_edit",
         )
         raw_text = _coerce_llm_text(raw)
         parsed, scripts, bodies, plan_text, repaired_plan_text, plan_was_repaired = (

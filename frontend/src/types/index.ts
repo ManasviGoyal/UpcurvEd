@@ -16,13 +16,41 @@ export type GenerationQualityStatus =
   | 'recovered'
   | 'simplified'
   | 'completed_with_fallback'
-  | 'failed';
+  | 'failed'
+  | 'needs_clarification';
+
+export interface LlmCallDiagnostics {
+  provider?: string;
+  model?: string;
+  actual_model?: string;
+  purpose?: string;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  usage_reported?: boolean;
+  status?: string;
+  pricing_known?: boolean;
+  estimated_cost_usd?: number | null;
+}
 
 export interface GenerationDiagnostics {
   quality_status: GenerationQualityStatus;
   provider?: string;
   model?: string;
   llm_calls?: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+  pricing_complete?: boolean;
+  usage_complete?: boolean;
+  unpriced_calls?: number;
+  usage_missing_calls?: number;
+  calls?: LlmCallDiagnostics[];
   total_scenes?: number;
   creative_scenes?: number;
   repaired_scenes?: number;

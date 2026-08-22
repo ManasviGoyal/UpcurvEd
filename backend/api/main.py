@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend.agent.llm.clients import call_llm, track_llm_calls
+from backend.agent.llm.clients import call_llm, current_llm_usage_summary, track_llm_calls
 from backend.agent.llm.multimodal import (
     MAX_GENERATION_IMAGES,
     resolve_effective_learner_prompt,
@@ -174,13 +174,17 @@ def _artifact_generation_diagnostics(
         else:
             quality_status = "standard"
 
+    usage_summary = current_llm_usage_summary()
+    tracked_calls = max(0, int(usage_summary.get("llm_calls") or 0))
+
     return {
         **raw,
+        **(usage_summary if tracked_calls > 0 else {}),
         "quality_status": quality_status,
         "provider": str(raw.get("provider") or provider or ""),
         "model": str(raw.get("model") or model or ""),
         # The route-level tracker includes helper + selected-model calls and is authoritative.
-        "llm_calls": max(0, int(llm_calls)),
+        "llm_calls": tracked_calls if tracked_calls > 0 else max(0, int(llm_calls)),
         "failure_stage": (
             str(raw.get("failure_stage") or failure_stage or "").strip() or None
         ),
@@ -242,7 +246,18 @@ def _append_artifact_generation_audit(
                 "outcome": outcome,
                 "provider": provider,
                 "model": model,
-                "llm_calls": max(0, int(llm_calls)),
+                "llm_calls": max(0, int(diagnostics.get("llm_calls") or llm_calls or 0)),
+                "input_tokens": diagnostics.get("input_tokens"),
+                "cached_input_tokens": diagnostics.get("cached_input_tokens"),
+                "cache_write_input_tokens": diagnostics.get("cache_write_input_tokens"),
+                "output_tokens": diagnostics.get("output_tokens"),
+                "total_tokens": diagnostics.get("total_tokens"),
+                "estimated_cost_usd": diagnostics.get("estimated_cost_usd"),
+                "pricing_complete": diagnostics.get("pricing_complete"),
+                "usage_complete": diagnostics.get("usage_complete"),
+                "unpriced_calls": diagnostics.get("unpriced_calls"),
+                "usage_missing_calls": diagnostics.get("usage_missing_calls"),
+                "llm_call_details": diagnostics.get("calls"),
                 "failure_stage": failure_stage,
                 "error_summary": (
                     summarize_error(error_summary) if error_summary else None
@@ -1483,7 +1498,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     or story_res.get("message")
                     or "Story generation failed."
                 )
-                _append_artifact_generation_audit(
+                generation_diagnostics = _append_artifact_generation_audit(
                     generation_type="story",
                     job_id=job_id,
                     operation="generate",
@@ -1504,6 +1519,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     "error": "story_slider_failed",
                     "message": "Story generation failed.",
                     "video_url": None,
+                    "generation_diagnostics": generation_diagnostics,
                 }
             except Exception as exc:
                 _append_artifact_generation_audit(
@@ -1553,16 +1569,17 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
             body.prompt,
             image_payload,
         )
-        result = generate_structured_manim_video(
-            prompt=_with_audience_guidance(effective_prompt, body.audience),
-            learner_prompt=body.prompt,
-            images=image_payload,
-            default_image_prompt_used=default_image_prompt_used,
-            provider_keys=provider_keys,
-            provider=provider,
-            model=model,
-            job_id=body.jobId,
-        )
+        with track_llm_calls():
+            result = generate_structured_manim_video(
+                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                learner_prompt=body.prompt,
+                images=image_payload,
+                default_image_prompt_used=default_image_prompt_used,
+                provider_keys=provider_keys,
+                provider=provider,
+                model=model,
+                job_id=body.jobId,
+            )
         response = _publish_structured_video_result(
             result=result,
             uid=uid,
@@ -1646,17 +1663,18 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
     )
 
     try:
-        result = edit_structured_manim_video(
-            original_bundle=body.original_code,
-            edit_instructions=_with_audience_guidance(
-                body.edit_instructions,
-                body.audience,
-            ),
-            provider=provider,
-            model=model,
-            provider_keys=provider_keys,
-            job_id=body.jobId,
-        )
+        with track_llm_calls():
+            result = edit_structured_manim_video(
+                original_bundle=body.original_code,
+                edit_instructions=_with_audience_guidance(
+                    body.edit_instructions,
+                    body.audience,
+                ),
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+                job_id=body.jobId,
+            )
         response = _publish_structured_video_result(
             result=result,
             uid=uid,
@@ -1833,7 +1851,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                 context=context,
             )
             if quiz.get("status") == "needs_clarification":
-                _append_artifact_generation_audit(
+                generation_diagnostics = _append_artifact_generation_audit(
                     generation_type="quiz",
                     job_id=job_id,
                     operation="generate",
@@ -1842,6 +1860,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                     model=model,
                     llm_calls=llm_counter.count,
                     started_monotonic=started,
+                    generation_diagnostics=quiz.get("generation_diagnostics"),
                 )
                 return {
                     "ok": False,
@@ -1849,7 +1868,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                     "error": "needs_clarification",
                     "message": quiz.get("message"),
                     "quiz": None,
-                    "generation_diagnostics": quiz.get("generation_diagnostics"),
+                    "generation_diagnostics": generation_diagnostics,
                 }
 
             quiz_html = build_quiz_html(quiz, source_title="Media quiz")
@@ -1861,7 +1880,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                 html_text=quiz_html,
                 job_id=job_id,
             )
-            _append_artifact_generation_audit(
+            generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="quiz",
                 job_id=job_id,
                 operation="generate",
@@ -1870,8 +1889,14 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
                 model=model,
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
+                generation_diagnostics=quiz.get("generation_diagnostics"),
             )
-            return {"status": "ok", "quiz": quiz, **download_meta}
+            return {
+                "status": "ok",
+                "quiz": quiz,
+                "generation_diagnostics": generation_diagnostics,
+                **download_meta,
+            }
         except Exception as exc:
             _append_artifact_generation_audit(
                 generation_type="quiz",
@@ -2646,7 +2671,7 @@ def edit_widget_endpoint(
                 html_text=widget_html,
                 job_id=job_id,
             )
-            _append_artifact_generation_audit(
+            generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="widget",
                 job_id=job_id,
                 operation="edit",
@@ -2655,11 +2680,13 @@ def edit_widget_endpoint(
                 model=model,
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
+                generation_diagnostics=result.get("generation_diagnostics"),
             )
             return {
                 "ok": True,
                 "status": "ok",
                 "widget_html": widget_html,
+                "generation_diagnostics": generation_diagnostics,
                 **download_meta,
             }
         except Exception as exc:
@@ -2720,7 +2747,7 @@ def edit_story_endpoint(
                 html_text=story_html,
                 job_id=job_id,
             )
-            _append_artifact_generation_audit(
+            generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="story",
                 job_id=job_id,
                 operation="edit",
@@ -2736,6 +2763,7 @@ def edit_story_endpoint(
                 "widget_html": story_html,
                 "generation_mode": "story",
                 "message": "Story edited successfully.",
+                "generation_diagnostics": generation_diagnostics,
                 **download_meta,
             }
         except Exception as exc:
@@ -2805,7 +2833,7 @@ def edit_quiz_endpoint(
                 html_text=quiz_html,
                 job_id=job_id,
             )
-            _append_artifact_generation_audit(
+            generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="quiz",
                 job_id=job_id,
                 operation="edit",
@@ -2814,8 +2842,14 @@ def edit_quiz_endpoint(
                 model=model,
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
+                generation_diagnostics=quiz.get("generation_diagnostics"),
             )
-            return {"status": "ok", "quiz": quiz, **download_meta}
+            return {
+                "status": "ok",
+                "quiz": quiz,
+                "generation_diagnostics": generation_diagnostics,
+                **download_meta,
+            }
         except Exception as exc:
             _append_artifact_generation_audit(
                 generation_type="quiz",

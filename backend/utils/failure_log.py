@@ -20,7 +20,7 @@ GENERATION_AUDIT_PATH = STORAGE / "generation_audit.jsonl"
 _INSTALLATION_ID_PATH = STORAGE / ".generation_installation_id"
 _EXPORTS_ROOT = STORAGE / "exports"
 _RETENTION_MARKER = ".diagnostic_retention.json"
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _ALLOWED_GENERATION_TYPES = {"video", "story", "podcast", "quiz", "widget"}
 
 _EXCEPTION_LINE = re.compile(
@@ -134,6 +134,39 @@ def _clean_script_adjustments(values: Iterable[Any] | None) -> list[dict[str, An
     return output
 
 
+def _clean_llm_call_details(values: Iterable[Any] | None) -> list[dict[str, Any]]:
+    """Keep only privacy-safe per-call accounting fields."""
+    output: list[dict[str, Any]] = []
+    for value in values or []:
+        if not isinstance(value, dict):
+            continue
+        try:
+            estimated = value.get("estimated_cost_usd")
+            estimated_cost = round(max(0.0, float(estimated)), 10) if estimated is not None else None
+        except Exception:
+            estimated_cost = None
+        output.append(
+            {
+                "provider": _clean_text(value.get("provider"), 80),
+                "model": _clean_text(value.get("model"), 180),
+                "actual_model": _clean_text(value.get("actual_model"), 180),
+                "purpose": _clean_text(value.get("purpose") or "generation", 80),
+                "input_tokens": max(0, int(value.get("input_tokens") or 0)),
+                "cached_input_tokens": max(0, int(value.get("cached_input_tokens") or 0)),
+                "cache_write_input_tokens": max(0, int(value.get("cache_write_input_tokens") or 0)),
+                "output_tokens": max(0, int(value.get("output_tokens") or 0)),
+                "total_tokens": max(0, int(value.get("total_tokens") or 0)),
+                "usage_reported": bool(value.get("usage_reported")),
+                "status": _clean_text(value.get("status") or "unknown", 40),
+                "pricing_known": bool(value.get("pricing_known")),
+                "estimated_cost_usd": estimated_cost,
+            }
+        )
+        if len(output) >= 50:
+            break
+    return output
+
+
 def append_generation_audit(entry: dict[str, Any]) -> dict[str, Any]:
     """Append one privacy-safe generation record to ``generation_audit.jsonl``.
 
@@ -155,6 +188,17 @@ def append_generation_audit(entry: dict[str, Any]) -> dict[str, Any]:
         "provider": _clean_text(entry.get("provider"), 80),
         "model": _clean_text(entry.get("model"), 180),
         "llm_calls": max(0, int(entry.get("llm_calls") or 0)),
+        "input_tokens": max(0, int(entry.get("input_tokens") or 0)),
+        "cached_input_tokens": max(0, int(entry.get("cached_input_tokens") or 0)),
+        "cache_write_input_tokens": max(0, int(entry.get("cache_write_input_tokens") or 0)),
+        "output_tokens": max(0, int(entry.get("output_tokens") or 0)),
+        "total_tokens": max(0, int(entry.get("total_tokens") or 0)),
+        "estimated_cost_usd": round(max(0.0, float(entry.get("estimated_cost_usd") or 0.0)), 10),
+        "pricing_complete": bool(entry.get("pricing_complete")),
+        "usage_complete": bool(entry.get("usage_complete")),
+        "unpriced_calls": max(0, int(entry.get("unpriced_calls") or 0)),
+        "usage_missing_calls": max(0, int(entry.get("usage_missing_calls") or 0)),
+        "llm_call_details": _clean_llm_call_details(entry.get("llm_call_details") or []),
         "total_scenes": max(0, int(entry.get("total_scenes") or 0)),
         "creative_scenes": max(0, int(entry.get("creative_scenes") or 0)),
         "rendered_initially": max(0, int(entry.get("rendered_initially") or 0)),
@@ -439,12 +483,28 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
     local_script_adjustments: Counter[str] = Counter()
     total_duration = 0.0
     total_llm_calls = 0
+    total_input_tokens = 0
+    total_cached_input_tokens = 0
+    total_cache_write_input_tokens = 0
+    total_output_tokens = 0
+    total_tokens = 0
+    total_estimated_cost = 0.0
+    total_unpriced_calls = 0
+    total_usage_missing_calls = 0
     total_voice_retries = 0
     total_transport_salvages = 0
     model_rows: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "runs": 0,
             "llm_calls": 0,
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "unpriced_calls": 0,
+            "usage_missing_calls": 0,
             "duration_seconds": 0.0,
             "outcomes": Counter(),
             "failed_job_ids": set(),
@@ -457,8 +517,24 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
     for item in values:
         duration = max(0.0, float(item.get("duration_seconds") or 0.0))
         llm_calls = max(0, int(item.get("llm_calls") or 0))
+        input_tokens = max(0, int(item.get("input_tokens") or 0))
+        cached_input_tokens = max(0, int(item.get("cached_input_tokens") or 0))
+        cache_write_input_tokens = max(0, int(item.get("cache_write_input_tokens") or 0))
+        output_tokens = max(0, int(item.get("output_tokens") or 0))
+        item_total_tokens = max(0, int(item.get("total_tokens") or 0))
+        estimated_cost = max(0.0, float(item.get("estimated_cost_usd") or 0.0))
+        unpriced_calls = max(0, int(item.get("unpriced_calls") or 0))
+        usage_missing_calls = max(0, int(item.get("usage_missing_calls") or 0))
         total_duration += duration
         total_llm_calls += llm_calls
+        total_input_tokens += input_tokens
+        total_cached_input_tokens += cached_input_tokens
+        total_cache_write_input_tokens += cache_write_input_tokens
+        total_output_tokens += output_tokens
+        total_tokens += item_total_tokens
+        total_estimated_cost += estimated_cost
+        total_unpriced_calls += unpriced_calls
+        total_usage_missing_calls += usage_missing_calls
         recovery_stages.update(str(value) for value in item.get("recovery_stages") or [])
         if str(item.get("error_category") or "").strip():
             error_categories[str(item.get("error_category"))] += 1
@@ -486,6 +562,14 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         row = model_rows[key]
         row["runs"] += 1
         row["llm_calls"] += llm_calls
+        row["input_tokens"] += input_tokens
+        row["cached_input_tokens"] += cached_input_tokens
+        row["cache_write_input_tokens"] += cache_write_input_tokens
+        row["output_tokens"] += output_tokens
+        row["total_tokens"] += item_total_tokens
+        row["estimated_cost_usd"] += estimated_cost
+        row["unpriced_calls"] += unpriced_calls
+        row["usage_missing_calls"] += usage_missing_calls
         row["duration_seconds"] += duration
         row["creative_scenes"] += int(item.get("creative_scenes") or 0)
         row["fallback_scenes"] += len(item.get("component_fallback_scene_ids") or [])
@@ -511,6 +595,15 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
                 "model": model,
                 "runs": runs,
                 "total_llm_calls": int(row["llm_calls"]),
+                "input_tokens": int(row["input_tokens"]),
+                "cached_input_tokens": int(row["cached_input_tokens"]),
+                "cache_write_input_tokens": int(row["cache_write_input_tokens"]),
+                "output_tokens": int(row["output_tokens"]),
+                "total_tokens": int(row["total_tokens"]),
+                "estimated_cost_usd": round(float(row["estimated_cost_usd"]), 8),
+                "average_cost_per_run_usd": round(float(row["estimated_cost_usd"]) / runs, 8) if runs else 0.0,
+                "unpriced_calls": int(row["unpriced_calls"]),
+                "usage_missing_calls": int(row["usage_missing_calls"]),
                 "average_llm_calls": round(row["llm_calls"] / runs, 3) if runs else 0.0,
                 "average_duration_seconds": (
                     round(row["duration_seconds"] / runs, 3) if runs else 0.0
@@ -526,10 +619,27 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
     for generation_type, rows in sorted(rows_by_type.items()):
         type_duration = sum(max(0.0, float(item.get("duration_seconds") or 0.0)) for item in rows)
         type_llm_calls = sum(max(0, int(item.get("llm_calls") or 0)) for item in rows)
+        type_input_tokens = sum(max(0, int(item.get("input_tokens") or 0)) for item in rows)
+        type_cached_input_tokens = sum(max(0, int(item.get("cached_input_tokens") or 0)) for item in rows)
+        type_cache_write_input_tokens = sum(max(0, int(item.get("cache_write_input_tokens") or 0)) for item in rows)
+        type_output_tokens = sum(max(0, int(item.get("output_tokens") or 0)) for item in rows)
+        type_total_tokens = sum(max(0, int(item.get("total_tokens") or 0)) for item in rows)
+        type_estimated_cost = sum(max(0.0, float(item.get("estimated_cost_usd") or 0.0)) for item in rows)
+        type_unpriced_calls = sum(max(0, int(item.get("unpriced_calls") or 0)) for item in rows)
+        type_usage_missing_calls = sum(max(0, int(item.get("usage_missing_calls") or 0)) for item in rows)
         type_operations = Counter(str(item.get("operation") or "generate") for item in rows)
         by_type[generation_type] = {
             "total_runs": len(rows),
             "total_llm_calls": type_llm_calls,
+            "input_tokens": type_input_tokens,
+            "cached_input_tokens": type_cached_input_tokens,
+            "cache_write_input_tokens": type_cache_write_input_tokens,
+            "output_tokens": type_output_tokens,
+            "total_tokens": type_total_tokens,
+            "estimated_cost_usd": round(type_estimated_cost, 8),
+            "average_cost_per_run_usd": round(type_estimated_cost / len(rows), 8) if rows else 0.0,
+            "unpriced_calls": type_unpriced_calls,
+            "usage_missing_calls": type_usage_missing_calls,
             "average_llm_calls": round(type_llm_calls / len(rows), 3) if rows else 0.0,
             "average_duration_seconds": round(type_duration / len(rows), 3) if rows else 0.0,
             "operations": dict(sorted(type_operations.items())),
@@ -549,6 +659,15 @@ def build_generation_summary(entries: list[dict[str, Any]] | None = None) -> dic
         "generated_at": _now_iso(),
         "total_runs": len(values),
         "total_llm_calls": total_llm_calls,
+        "input_tokens": total_input_tokens,
+        "cached_input_tokens": total_cached_input_tokens,
+        "cache_write_input_tokens": total_cache_write_input_tokens,
+        "output_tokens": total_output_tokens,
+        "total_tokens": total_tokens,
+        "estimated_cost_usd": round(total_estimated_cost, 8),
+        "average_cost_per_run_usd": round(total_estimated_cost / len(values), 8) if values else 0.0,
+        "unpriced_calls": total_unpriced_calls,
+        "usage_missing_calls": total_usage_missing_calls,
         "average_llm_calls": round(total_llm_calls / len(values), 3) if values else 0.0,
         "average_duration_seconds": round(total_duration / len(values), 3) if values else 0.0,
         "runs_by_type": {
@@ -604,8 +723,9 @@ user names, email addresses, local filesystem paths, or full tracebacks.
 Files:
 - generation_audit.jsonl: one compact JSON record per video, story, podcast, quiz, or widget generation/edit.
 - generation_summary.json: deterministic aggregate counts by type, outcome, provider, model,
-  exact LLM calls, separate clarification/failure counts, image/vision routing, failure stage,
-  root error category, service retries, and recovery path.
+  exact LLM calls, input/output token totals, estimated model cost, pricing coverage,
+  separate clarification/failure counts, image/vision routing, failure stage, root error category,
+  service retries, and recovery path.
 """
 
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

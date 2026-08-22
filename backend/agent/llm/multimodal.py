@@ -344,6 +344,7 @@ def call_multimodal_llm(
             temperature=temperature,
             max_tokens=max_tokens,
             max_output_tokens=max_output_tokens,
+            purpose="generation",
         )
         return MultimodalCallResult(
             text=text,
@@ -368,6 +369,7 @@ def call_multimodal_llm(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 max_output_tokens=max_output_tokens,
+                purpose="generation",
             )
             return MultimodalCallResult(
                 text=text,
@@ -399,6 +401,7 @@ def call_multimodal_llm(
         temperature=0.05,
         max_tokens=3200,
         max_output_tokens=3200,
+        purpose="vision_helper",
     )
     text = run_call(
         provider=provider,
@@ -409,6 +412,7 @@ def call_multimodal_llm(
         temperature=temperature,
         max_tokens=max_tokens,
         max_output_tokens=max_output_tokens,
+        purpose="generation_after_vision_helper",
     )
     reason = (
         "native_image_request_rejected"

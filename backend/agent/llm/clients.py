@@ -6,8 +6,10 @@ import os
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Iterator
+
+from backend.agent.llm.usage import estimate_call_cost
 
 import requests
 
@@ -26,10 +28,64 @@ class LLMError(RuntimeError):
 
 
 @dataclass
+class LLMCallRecord:
+    """Privacy-safe token/cost record for one attempted model call."""
+
+    provider: str
+    model: str
+    purpose: str = "generation"
+    actual_model: str = ""
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    usage_reported: bool = False
+    status: str = "attempted"
+    pricing_known: bool = False
+    estimated_cost_usd: float | None = None
+    input_rate_per_1m: float | None = None
+    output_rate_per_1m: float | None = None
+    long_context_pricing_applied: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class LLMCallCounter:
-    """Request-local count of attempted model calls."""
+    """Request-local model call, token, and estimated-cost tracker."""
 
     count: int = 0
+    calls: list[LLMCallRecord] = field(default_factory=list)
+
+    def summary(self) -> dict[str, Any]:
+        input_tokens = sum(max(0, int(call.input_tokens)) for call in self.calls)
+        cached_input_tokens = sum(max(0, int(call.cached_input_tokens)) for call in self.calls)
+        cache_write_input_tokens = sum(max(0, int(call.cache_write_input_tokens)) for call in self.calls)
+        output_tokens = sum(max(0, int(call.output_tokens)) for call in self.calls)
+        total_tokens = sum(
+            max(0, int(call.total_tokens or (call.input_tokens + call.output_tokens)))
+            for call in self.calls
+        )
+        priced = [call for call in self.calls if call.pricing_known and call.estimated_cost_usd is not None]
+        usage_reported_calls = sum(1 for call in self.calls if call.usage_reported)
+        unpriced_calls = sum(1 for call in self.calls if call.usage_reported and not call.pricing_known)
+        estimated_cost = sum(float(call.estimated_cost_usd or 0.0) for call in priced)
+        return {
+            "llm_calls": int(self.count),
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "cache_write_input_tokens": cache_write_input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": round(estimated_cost, 10),
+            "pricing_complete": usage_reported_calls == self.count and unpriced_calls == 0,
+            "usage_complete": usage_reported_calls == self.count,
+            "unpriced_calls": unpriced_calls,
+            "usage_missing_calls": max(0, self.count - usage_reported_calls),
+            "calls": [call.to_dict() for call in self.calls],
+        }
 
 
 _ACTIVE_LLM_CALL_COUNTER: ContextVar[LLMCallCounter | None] = ContextVar(
@@ -40,7 +96,14 @@ _ACTIVE_LLM_CALL_COUNTER: ContextVar[LLMCallCounter | None] = ContextVar(
 
 @contextmanager
 def track_llm_calls() -> Iterator[LLMCallCounter]:
-    """Track every ``call_llm`` invocation in the current request context."""
+    """Track every ``call_llm`` invocation in the current request context.
+
+    Nested use shares the existing tracker so helper/fallback calls stay in one generation total.
+    """
+    existing = _ACTIVE_LLM_CALL_COUNTER.get()
+    if existing is not None:
+        yield existing
+        return
     counter = LLMCallCounter()
     token = _ACTIVE_LLM_CALL_COUNTER.set(counter)
     try:
@@ -49,10 +112,113 @@ def track_llm_calls() -> Iterator[LLMCallCounter]:
         _ACTIVE_LLM_CALL_COUNTER.reset(token)
 
 
-def _record_llm_call() -> None:
+def current_llm_usage_summary() -> dict[str, Any]:
     counter = _ACTIVE_LLM_CALL_COUNTER.get()
-    if counter is not None:
-        counter.count += 1
+    return counter.summary() if counter is not None else {
+        "llm_calls": 0,
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "pricing_complete": False,
+        "usage_complete": False,
+        "unpriced_calls": 0,
+        "usage_missing_calls": 0,
+        "calls": [],
+    }
+
+
+_ACTIVE_LLM_CALL_RECORD: ContextVar[LLMCallRecord | None] = ContextVar(
+    "upcurved_llm_call_record",
+    default=None,
+)
+
+
+def _record_llm_call(provider: str, model: str, purpose: str | None) -> LLMCallRecord | None:
+    counter = _ACTIVE_LLM_CALL_COUNTER.get()
+    if counter is None:
+        return None
+    counter.count += 1
+    record = LLMCallRecord(
+        provider=str(provider or ""),
+        model=str(model or ""),
+        purpose=str(purpose or "generation"),
+    )
+    counter.calls.append(record)
+    return record
+
+
+def _mark_current_call_success() -> None:
+    record = _ACTIVE_LLM_CALL_RECORD.get()
+    if record is not None and record.status == "attempted":
+        record.status = "ok"
+
+
+def _capture_current_call_usage(
+    *,
+    input_tokens: object | None,
+    output_tokens: object | None,
+    total_tokens: object | None = None,
+    cached_input_tokens: object | None = None,
+    cache_write_input_tokens: object | None = None,
+    actual_model: object | None = None,
+) -> None:
+    record = _ACTIVE_LLM_CALL_RECORD.get()
+    if record is None:
+        return
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return
+    try:
+        prompt_tokens = max(0, int(input_tokens or 0))
+    except Exception:
+        prompt_tokens = 0
+    try:
+        completion_tokens = max(0, int(output_tokens or 0))
+    except Exception:
+        completion_tokens = 0
+    try:
+        total = max(0, int(total_tokens or 0))
+    except Exception:
+        total = 0
+    if total <= 0:
+        total = prompt_tokens + completion_tokens
+    try:
+        cached_tokens = min(prompt_tokens, max(0, int(cached_input_tokens or 0)))
+    except Exception:
+        cached_tokens = 0
+    try:
+        cache_write_tokens = min(
+            max(0, prompt_tokens - cached_tokens),
+            max(0, int(cache_write_input_tokens or 0)),
+        )
+    except Exception:
+        cache_write_tokens = 0
+    record.input_tokens = prompt_tokens
+    record.cached_input_tokens = cached_tokens
+    record.cache_write_input_tokens = cache_write_tokens
+    record.output_tokens = completion_tokens
+    record.total_tokens = total
+    record.actual_model = str(actual_model or "").strip()
+    record.usage_reported = True
+    record.status = "ok"
+    pricing = estimate_call_cost(
+        provider=record.provider,
+        model=record.model,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        cached_input_tokens=cached_tokens,
+        cache_write_input_tokens=cache_write_tokens,
+    )
+    record.pricing_known = bool(pricing.get("pricing_known"))
+    cost = pricing.get("estimated_cost_usd")
+    record.estimated_cost_usd = float(cost) if cost is not None else None
+    input_rate = pricing.get("input_rate_per_1m")
+    output_rate = pricing.get("output_rate_per_1m")
+    record.input_rate_per_1m = float(input_rate) if input_rate is not None else None
+    record.output_rate_per_1m = float(output_rate) if output_rate is not None else None
+    record.long_context_pricing_applied = bool(pricing.get("long_context_pricing_applied"))
 
 
 def _require_prompt(user: str) -> str:
@@ -190,6 +356,15 @@ def _call_openrouter(
             f"OpenRouter returned non-JSON response: {response.text[:300]}"
         )
 
+    usage = data.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    _capture_current_call_usage(
+        input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+        output_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        actual_model=data.get("model"),
+    )
+
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         detail = _json_error_message(
@@ -214,6 +389,7 @@ def _call_openrouter(
             f"OpenRouter returned empty content. Model: {model}. finish_reason={finish}"
         )
 
+    _mark_current_call_success()
     return content
 
 
@@ -314,6 +490,19 @@ def _call_openai(
     if not isinstance(data, dict):
         raise RuntimeError(f"OpenAI returned non-JSON response: {response.text[:300]}")
 
+    usage = data.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    input_details = usage.get("input_tokens_details")
+    input_details = input_details if isinstance(input_details, dict) else {}
+    _capture_current_call_usage(
+        input_tokens=usage.get("input_tokens") or usage.get("prompt_tokens"),
+        output_tokens=usage.get("output_tokens") or usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        cached_input_tokens=input_details.get("cached_tokens"),
+        cache_write_input_tokens=input_details.get("cache_write_tokens"),
+        actual_model=data.get("model"),
+    )
+
     text = _extract_openai_response_text(data)
     if not text:
         status = data.get("status")
@@ -323,6 +512,7 @@ def _call_openai(
         raise RuntimeError(
             f"OpenAI returned empty content. Model: {model}. Reason: {detail}"
         )
+    _mark_current_call_success()
     return text
 
 
@@ -384,8 +574,20 @@ def call_claude(
             elif isinstance(block, dict) and block.get("type") == "text":
                 out_parts.append(str(block.get("text") or ""))
         text = "".join(out_parts).strip()
+        usage = getattr(message, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
+        output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
+        # UpcurvEd does not currently opt into Anthropic prompt caching, so its standard
+        # input/output token counts map directly to the maintained standard pricing table.
+        _capture_current_call_usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=(int(input_tokens or 0) + int(output_tokens or 0)) if usage is not None else None,
+            actual_model=getattr(message, "model", None),
+        )
         if not text:
             raise LLMError("Claude returned empty text.")
+        _mark_current_call_success()
         return text
     except Exception as exc:
         if isinstance(exc, LLMError):
@@ -455,6 +657,19 @@ def call_gemini(
         else:
             response = model_client.generate_content(prompt)
 
+        usage = getattr(response, "usage_metadata", None)
+        prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
+        candidate_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
+        thought_tokens = getattr(usage, "thoughts_token_count", 0) if usage is not None else 0
+        output_tokens = (int(candidate_tokens or 0) + int(thought_tokens or 0)) if usage is not None else None
+        total_tokens = getattr(usage, "total_token_count", None) if usage is not None else None
+        _capture_current_call_usage(
+            input_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            actual_model=model,
+        )
+
         try:
             text = (response.text or "").strip()
         except Exception:
@@ -500,6 +715,7 @@ def call_gemini(
             elif prompt_feedback:
                 error_message += f", prompt_feedback={prompt_feedback}"
             raise LLMError(error_message)
+        _mark_current_call_success()
         return text
     except Exception as exc:
         if isinstance(exc, LLMError):
@@ -518,50 +734,60 @@ def call_llm(
     max_tokens: int | None = None,
     max_output_tokens: int | None = None,
     images: list[dict[str, str]] | None = None,
+    purpose: str | None = None,
 ) -> str:
-    """Dispatch to the selected provider using centralized model defaults."""
+    """Dispatch to the selected provider and record request-local usage when available."""
     resolved_model = str(model or get_default_model(provider) or "").strip()
     output_limit = max_tokens or max_output_tokens
-    _record_llm_call()
+    record = _record_llm_call(str(provider), resolved_model, purpose)
+    record_token = _ACTIVE_LLM_CALL_RECORD.set(record) if record is not None else None
 
-    if provider == "claude":
-        return call_claude(
-            api_key=api_key,
-            model=resolved_model,
-            system=system,
-            user=user,
-            temperature=temperature,
-            max_tokens=output_limit or 2048,
-            images=images,
-        )
-    if provider == "gemini":
-        return call_gemini(
-            api_key=api_key,
-            model=resolved_model,
-            system=system,
-            user=user,
-            temperature=temperature,
-            max_output_tokens=output_limit or 8192,
-            images=images,
-        )
-    if provider == "openai":
-        return _call_openai(
-            api_key=api_key,
-            model=resolved_model,
-            system=system,
-            user=user,
-            temperature=temperature,
-            max_tokens=output_limit,
-            images=images,
-        )
-    if provider == "openrouter":
-        return _call_openrouter(
-            api_key=api_key,
-            model=resolved_model,
-            system=system,
-            user=user,
-            temperature=temperature,
-            max_tokens=output_limit,
-            images=images,
-        )
-    raise LLMError(f"Unknown provider: {provider}")
+    try:
+        if provider == "claude":
+            return call_claude(
+                api_key=api_key,
+                model=resolved_model,
+                system=system,
+                user=user,
+                temperature=temperature,
+                max_tokens=output_limit or 2048,
+                images=images,
+            )
+        if provider == "gemini":
+            return call_gemini(
+                api_key=api_key,
+                model=resolved_model,
+                system=system,
+                user=user,
+                temperature=temperature,
+                max_output_tokens=output_limit or 8192,
+                images=images,
+            )
+        if provider == "openai":
+            return _call_openai(
+                api_key=api_key,
+                model=resolved_model,
+                system=system,
+                user=user,
+                temperature=temperature,
+                max_tokens=output_limit,
+                images=images,
+            )
+        if provider == "openrouter":
+            return _call_openrouter(
+                api_key=api_key,
+                model=resolved_model,
+                system=system,
+                user=user,
+                temperature=temperature,
+                max_tokens=output_limit,
+                images=images,
+            )
+        raise LLMError(f"Unknown provider: {provider}")
+    except Exception:
+        if record is not None:
+            record.status = "failed"
+        raise
+    finally:
+        if record_token is not None:
+            _ACTIVE_LLM_CALL_RECORD.reset(record_token)
