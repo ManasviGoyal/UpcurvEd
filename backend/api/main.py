@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import zipfile
+import xml.etree.ElementTree as ET
 from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -25,6 +26,8 @@ from pydantic import BaseModel, Field
 from backend.agent.llm.clients import call_llm, current_llm_usage_summary, track_llm_calls
 from backend.agent.llm.multimodal import (
     MAX_GENERATION_IMAGES,
+    call_multimodal_llm,
+    is_needs_clarification,
     resolve_effective_learner_prompt,
 )
 from backend.agent.llm.provider_config import (
@@ -35,9 +38,14 @@ from backend.agent.llm.provider_config import (
 )
 from backend.agent.minigraph import echo_manim_code
 from backend.agent.prompts import (
+    DIAGRAM_EDIT_SYSTEM,
+    DIAGRAM_REPAIR_SYSTEM,
+    DIAGRAM_SYSTEM,
     STORY_EDIT_FULL_HTML_SYSTEM,
     STORY_EDIT_PATCH_SYSTEM,
-    build_flowchart_widget_prompt,
+    build_diagram_edit_user_prompt,
+    build_diagram_repair_user_prompt,
+    build_diagram_user_prompt,
     build_story_edit_full_html_user_prompt,
     build_story_edit_patch_user_prompt,
 )
@@ -2533,6 +2541,266 @@ def _edit_story_html(
     return html
 
 
+
+_SVG_BLOCKED_TAGS = {
+    "script",
+    "foreignobject",
+    "iframe",
+    "image",
+    "use",
+    "a",
+    "audio",
+    "video",
+    "animate",
+    "animatetransform",
+    "animatemotion",
+    "set",
+}
+_SVG_ALLOWED_TAGS = {
+    "svg",
+    "g",
+    "rect",
+    "circle",
+    "ellipse",
+    "line",
+    "polyline",
+    "polygon",
+    "path",
+    "text",
+    "tspan",
+    "defs",
+    "marker",
+    "lineargradient",
+    "radialgradient",
+    "stop",
+    "clippath",
+    "title",
+    "desc",
+}
+
+
+def _svg_local_name(value: str) -> str:
+    return str(value or "").rsplit("}", 1)[-1].lower()
+
+
+def _svg_viewbox(root: ET.Element) -> tuple[float, float, float, float]:
+    raw = str(root.attrib.get("viewBox") or root.attrib.get("viewbox") or "").strip()
+    parts = re.split(r"[\s,]+", raw)
+    if len(parts) != 4:
+        raise RuntimeError("Diagram SVG must include a four-number viewBox.")
+    try:
+        x, y, width, height = (float(part) for part in parts)
+    except Exception as exc:
+        raise RuntimeError("Diagram SVG viewBox contains invalid numbers.") from exc
+    if width <= 0 or height <= 0 or width > 5000 or height > 5000:
+        raise RuntimeError("Diagram SVG viewBox dimensions are invalid.")
+    return x, y, width, height
+
+
+def _svg_translate(transform: str | None) -> tuple[float, float]:
+    text = str(transform or "").strip()
+    if not text:
+        return 0.0, 0.0
+    # Primary layout is prompted to use explicit positions. We support simple translate()
+    # because models commonly group a card and its text that way.
+    match = re.fullmatch(
+        r"translate\(\s*(-?\d+(?:\.\d+)?)\s*(?:[, ]\s*(-?\d+(?:\.\d+)?))?\s*\)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return 0.0, 0.0
+    return float(match.group(1)), float(match.group(2) or 0.0)
+
+
+def _major_svg_rectangles(
+    element: ET.Element,
+    *,
+    parent_dx: float = 0.0,
+    parent_dy: float = 0.0,
+) -> list[tuple[float, float, float, float]]:
+    dx, dy = _svg_translate(element.attrib.get("transform"))
+    dx += parent_dx
+    dy += parent_dy
+    boxes: list[tuple[float, float, float, float]] = []
+    if _svg_local_name(element.tag) == "rect":
+        try:
+            x = float(element.attrib.get("x", 0)) + dx
+            y = float(element.attrib.get("y", 0)) + dy
+            width = float(element.attrib.get("width", 0))
+            height = float(element.attrib.get("height", 0))
+        except Exception:
+            width = height = 0.0
+            x = y = 0.0
+        # Ignore borders, pills, accent strips, and backgrounds. This catches the wide teaching
+        # cards/nodes whose overlap made the first interactive diagram prototype unreadable.
+        if width >= 150 and height >= 60:
+            boxes.append((x, y, width, height))
+    for child in list(element):
+        boxes.extend(
+            _major_svg_rectangles(child, parent_dx=dx, parent_dy=dy)
+        )
+    return boxes
+
+
+def _validate_svg_layout(root: ET.Element) -> None:
+    view_x, view_y, view_w, view_h = _svg_viewbox(root)
+    boxes = _major_svg_rectangles(root)
+    filtered: list[tuple[float, float, float, float]] = []
+    for box in boxes:
+        x, y, width, height = box
+        # Skip a likely canvas/background rectangle.
+        if width >= view_w * 0.85 and height >= view_h * 0.75:
+            continue
+        if (
+            x < view_x - 8
+            or y < view_y - 8
+            or x + width > view_x + view_w + 8
+            or y + height > view_y + view_h + 8
+        ):
+            raise RuntimeError("A major diagram box extends outside the SVG viewBox.")
+        filtered.append(box)
+
+    for index, first in enumerate(filtered):
+        ax, ay, aw, ah = first
+        for second in filtered[index + 1 :]:
+            bx, by, bw, bh = second
+            overlap_w = min(ax + aw, bx + bw) - max(ax, bx)
+            overlap_h = min(ay + ah, by + bh) - max(ay, by)
+            if overlap_w <= 4 or overlap_h <= 4:
+                continue
+            raise RuntimeError(
+                "Major diagram boxes overlap. Re-space the nodes/cards so they are visually separate."
+            )
+
+
+def _extract_safe_svg_document(raw: str) -> str:
+    text = _strip_llm_code_fence(raw)
+    low = text.lower()
+    start = low.find("<svg")
+    end = low.rfind("</svg>")
+    if start < 0 or end < start:
+        raise RuntimeError("Model did not return a complete standalone SVG diagram.")
+    svg = text[start : end + len("</svg>")].strip()
+    if len(svg) > 180_000:
+        raise RuntimeError("Diagram SVG is unexpectedly large.")
+
+    try:
+        root = ET.fromstring(svg)
+    except Exception as exc:
+        raise RuntimeError("Diagram SVG is not valid XML.") from exc
+    if _svg_local_name(root.tag) != "svg":
+        raise RuntimeError("Diagram output root must be <svg>.")
+
+    for element in root.iter():
+        tag = _svg_local_name(element.tag)
+        if tag in _SVG_BLOCKED_TAGS or tag not in _SVG_ALLOWED_TAGS:
+            raise RuntimeError(f"Diagram SVG contains unsupported element <{tag}>.")
+        for raw_name, raw_value in element.attrib.items():
+            name = _svg_local_name(raw_name)
+            value = str(raw_value or "").strip()
+            lowered = value.lower()
+            if name.startswith("on"):
+                raise RuntimeError("Diagram SVG may not contain event handlers.")
+            if name in {"href", "xlink:href"}:
+                raise RuntimeError("Diagram SVG may not contain links or external references.")
+            if any(
+                marker in lowered
+                for marker in (
+                    "javascript:",
+                    "data:text/html",
+                    "file:",
+                    "http://",
+                    "https://",
+                    "@import",
+                )
+            ):
+                raise RuntimeError("Diagram SVG contains an external or executable reference.")
+            if name == "style" and ("url(" in lowered or "expression(" in lowered):
+                raise RuntimeError("Diagram SVG contains an unsafe style reference.")
+
+    _validate_svg_layout(root)
+    # Keep the model's original SVG source so formatting/text remain intact after validation.
+    return svg
+
+
+def _diagram_download_payload(
+    *,
+    uid: str,
+    chat_id: str | None,
+    title: str | None,
+    svg_text: str,
+    job_id: str | None = None,
+) -> dict:
+    jid = safe_job_id(job_id)
+    title_part = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(title or "diagram")).strip("._")
+    title_part = re.sub(r"_+", "_", title_part)[:72] or "diagram"
+    filename = _safe_filename_with_extension(
+        f"upcurved_diagram_{title_part}",
+        "upcurved_diagram.svg",
+        ".svg",
+    )
+    data = svg_text.encode("utf-8")
+    content_type = "image/svg+xml"
+    gcs_bucket = _get_bucket_name()
+
+    if gcs_bucket:
+        chat_path = chat_id or "uncategorized"
+        gcs_path = f"{uid}/chats/{chat_path}/exports/{jid}_{filename}"
+        _upload_bytes(gcs_bucket, gcs_path, data, content_type)
+        artifact_id = _save_artifact(
+            uid,
+            chat_id,
+            "diagram",
+            gcs_path,
+            len(data),
+            content_type,
+            derived=False,
+        )
+        return {
+            "download_url": _sign_url(gcs_bucket, gcs_path),
+            "download_filename": filename,
+            "download_artifact_id": artifact_id,
+            "download_gcs_path": gcs_path,
+        }
+
+    output_dir = pathlib.Path(STORAGE) / "jobs" / jid
+    output_dir.mkdir(parents=True, exist_ok=True)
+    local_path = output_dir / filename
+    local_path.write_text(svg_text, encoding="utf-8")
+    return {
+        "download_url": to_static_url(local_path),
+        "download_filename": filename,
+        "download_artifact_id": None,
+        "download_gcs_path": None,
+    }
+
+
+def _diagram_svg_with_single_repair(
+    *,
+    raw_svg: str,
+    provider: str,
+    model: str | None,
+    api_key: str,
+) -> tuple[str, bool]:
+    try:
+        return _extract_safe_svg_document(raw_svg), False
+    except Exception as first_error:
+        repaired = call_llm(
+            provider=provider,  # type: ignore[arg-type]
+            api_key=api_key,
+            model=model,
+            system=DIAGRAM_REPAIR_SYSTEM,
+            user=build_diagram_repair_user_prompt(
+                original_svg=raw_svg,
+                problem=str(first_error),
+            ),
+            temperature=0.05,
+            max_tokens=9000,
+            max_output_tokens=9000,
+        )
+        return _extract_safe_svg_document(repaired), True
+
 @app.post("/widget")
 def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
     started = time.monotonic()
@@ -2636,9 +2904,9 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             )
 
 
-@app.post("/flowchart")
-def flowchart(body: WidgetIn, uid: str = Depends(require_firebase_user)):
-    """Generate a flowchart through the proven widget renderer/repair pipeline."""
+@app.post("/diagram")
+def diagram(body: WidgetIn, uid: str = Depends(require_firebase_user)):
+    """Generate one static, portable SVG educational diagram."""
     started = time.monotonic()
     job_id = _generation_job_id(body.jobId)
     with track_llm_calls() as llm_counter:
@@ -2649,25 +2917,39 @@ def flowchart(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 body.model,
             )
             provider_keys = _provider_keys_with_env(body.keys)
-            logger.info("/flowchart called provider=%s model=%s", provider, model)
+            api_key = _get_provider_key(provider, provider_keys)
+            if not api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing API key for '{provider}'",
+                )
+            logger.info("/diagram called provider=%s model=%s", provider, model)
             image_payload = _generation_image_payload(body.images)
             effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
                 body.prompt,
                 image_payload,
             )
-            flowchart_prompt = build_flowchart_widget_prompt(effective_prompt)
-            result = _generate_widget(
-                prompt=_with_audience_guidance(flowchart_prompt, body.audience),
+            multimodal = call_multimodal_llm(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                system=DIAGRAM_SYSTEM,
+                user=build_diagram_user_prompt(
+                    _with_audience_guidance(effective_prompt, body.audience)
+                ),
                 learner_prompt=body.prompt,
                 images=image_payload,
-                default_image_prompt_used=default_image_prompt_used,
-                provider=provider,
-                model=model,
                 provider_keys=provider_keys,
+                default_image_prompt_used=default_image_prompt_used,
+                temperature=0.16,
+                max_tokens=10000,
+                max_output_tokens=10000,
             )
-            if result.get("status") == "needs_clarification":
-                result["generation_diagnostics"] = _append_artifact_generation_audit(
-                    generation_type="flowchart",
+            raw_svg = str(multimodal.text or "")
+            metadata = multimodal.metadata.to_dict()
+            if is_needs_clarification(raw_svg):
+                generation_diagnostics = _append_artifact_generation_audit(
+                    generation_type="diagram",
                     job_id=job_id,
                     operation="generate",
                     outcome="needs_clarification",
@@ -2675,48 +2957,65 @@ def flowchart(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                     model=model,
                     llm_calls=llm_counter.count,
                     started_monotonic=started,
-                    generation_diagnostics=result.get("generation_diagnostics"),
+                    generation_diagnostics=metadata,
                     image_count=len(image_payload),
                     default_image_prompt_used=default_image_prompt_used,
                 )
-                return result
+                return {
+                    "ok": False,
+                    "status": "needs_clarification",
+                    "error": "needs_clarification",
+                    "message": "The model determined the prompt's learning intention was unclear. Please try again.",
+                    "svg_code": None,
+                    "generation_diagnostics": generation_diagnostics,
+                }
 
-            widget_html = result["widget_html"]
-            download_meta = _html_download_payload(
+            svg_code, repaired = _diagram_svg_with_single_repair(
+                raw_svg=raw_svg,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+            )
+            diagnostics_seed = {
+                **metadata,
+                "quality_status": "recovered" if repaired else "standard",
+                "recovery_stages": ["diagram_svg_repair"] if repaired else [],
+            }
+            download_meta = _diagram_download_payload(
                 uid=uid,
                 chat_id=body.chatId,
-                kind="flowchart",
-                title=body.prompt,
-                html_text=widget_html,
+                title=body.prompt or "diagram",
+                svg_text=svg_code,
                 job_id=job_id,
             )
             generation_diagnostics = _append_artifact_generation_audit(
-                generation_type="flowchart",
+                generation_type="diagram",
                 job_id=job_id,
                 operation="generate",
-                outcome="clean_success",
+                outcome="recovered" if repaired else "clean_success",
                 provider=provider,
                 model=model,
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
-                generation_diagnostics=result.get("generation_diagnostics"),
+                generation_diagnostics=diagnostics_seed,
                 image_count=len(image_payload),
                 default_image_prompt_used=default_image_prompt_used,
             )
             logger.info(
-                "/flowchart completed: ok, html_len=%d",
-                len(widget_html),
+                "/diagram completed: ok, svg_len=%d repaired=%s",
+                len(svg_code),
+                repaired,
             )
             return {
                 "ok": True,
                 "status": "ok",
-                "widget_html": widget_html,
+                "svg_code": svg_code,
                 "generation_diagnostics": generation_diagnostics,
                 **download_meta,
             }
         except Exception as exc:
             _append_artifact_generation_audit(
-                generation_type="flowchart",
+                generation_type="diagram",
                 job_id=job_id,
                 operation="generate",
                 outcome="failed",
@@ -2724,17 +3023,122 @@ def flowchart(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 model=locals().get("model"),
                 llm_calls=llm_counter.count,
                 started_monotonic=started,
-                failure_stage="flowchart_generation",
+                failure_stage="diagram_generation",
                 error_summary=exc,
+                generation_diagnostics=(
+                    locals().get("metadata")
+                    if isinstance(locals().get("metadata"), dict)
+                    else None
+                ),
                 image_count=len(locals().get("image_payload") or []),
                 default_image_prompt_used=bool(
                     locals().get("default_image_prompt_used", False)
                 ),
             )
-            logger.exception("/flowchart failed: %s", exc)
+            logger.exception("/diagram failed: %s", exc)
             return diagnostic_error_response(
-                feature="flowchart",
-                step="flowchart generation",
+                feature="diagram",
+                step="diagram generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
+
+
+@app.post("/edit/diagram")
+def edit_diagram_endpoint(
+    body: EditWidgetIn,
+    uid: str = Depends(require_firebase_user),
+):
+    """Edit an existing static SVG diagram and keep it static/portable."""
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            api_key = _get_provider_key(provider, provider_keys)
+            if not api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing API key for '{provider}'",
+                )
+            original_svg = _extract_safe_svg_document(body.original_html)
+            if not body.edit_instructions or not body.edit_instructions.strip():
+                raise HTTPException(status_code=400, detail="edit_instructions is required")
+
+            raw = call_llm(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                system=DIAGRAM_EDIT_SYSTEM,
+                user=build_diagram_edit_user_prompt(
+                    original_svg=original_svg,
+                    edit_instructions=_with_audience_guidance(
+                        body.edit_instructions,
+                        body.audience,
+                    ),
+                ),
+                temperature=0.1,
+                max_tokens=10000,
+                max_output_tokens=10000,
+            )
+            svg_code, repaired = _diagram_svg_with_single_repair(
+                raw_svg=raw,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+            )
+            download_meta = _diagram_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                title=body.original_title or "Edited diagram",
+                svg_text=svg_code,
+                job_id=job_id,
+            )
+            diagnostics_seed = {
+                "quality_status": "recovered" if repaired else "standard",
+                "recovery_stages": ["diagram_svg_repair"] if repaired else [],
+            }
+            generation_diagnostics = _append_artifact_generation_audit(
+                generation_type="diagram",
+                job_id=job_id,
+                operation="edit",
+                outcome="recovered" if repaired else "clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                generation_diagnostics=diagnostics_seed,
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "svg_code": svg_code,
+                "generation_diagnostics": generation_diagnostics,
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="diagram",
+                job_id=job_id,
+                operation="edit",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="diagram_edit",
+                error_summary=exc,
+            )
+            logger.exception("/edit/diagram failed: %s", exc)
+            return diagnostic_error_response(
+                feature="diagram",
+                step="diagram editing",
                 error=exc,
                 provider=locals().get("provider"),
                 model=locals().get("model"),

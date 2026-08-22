@@ -1,6 +1,6 @@
 // frontend/src/types/index.ts
 
-export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'flowchart' | 'quiz';
+export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'diagram' | 'quiz';
 
 export type AudienceLevel =
   | 'auto'
