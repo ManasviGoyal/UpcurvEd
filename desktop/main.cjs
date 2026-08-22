@@ -471,6 +471,7 @@ function startBackend() {
           ? `${BACKEND_ROOT_DIR}${path.delimiter}${process.env.PYTHONPATH}`
           : BACKEND_ROOT_DIR,
       APP_MODE: process.env.APP_MODE || "desktop-local",
+      UPCURVED_APP_VERSION: process.env.UPCURVED_APP_VERSION || app.getVersion(),
       UPCURVED_STORAGE_DIR: process.env.UPCURVED_STORAGE_DIR || storageDir,
       UPCURVED_DESKTOP_STATE_DIR: process.env.UPCURVED_DESKTOP_STATE_DIR || desktopStateDir,
       PLAYWRIGHT_BROWSERS_PATH:
