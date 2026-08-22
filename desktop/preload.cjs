@@ -19,4 +19,8 @@ contextBridge.exposeInMainWorld("desktop", {
       ipcRenderer.invoke("secure-store:set-api-keys", { account, payload }),
     clearApiKeys: (account) => ipcRenderer.invoke("secure-store:clear-api-keys", account),
   },
+  appManagement: {
+    uninstallAndDeleteLocalData: () =>
+      ipcRenderer.invoke("app:uninstall-and-delete-local-data"),
+  },
 });

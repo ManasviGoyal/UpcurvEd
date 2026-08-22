@@ -35,10 +35,8 @@ import {
   Bot,
   X,
   MessageSquare,
-  Video as VideoIcon,
   HelpCircle,
   Square,
-  Mic,
   Copy,
   Check,
   Share2,
@@ -52,6 +50,7 @@ import {
 import type {
   User,
   Chat,
+  ArtifactKind,
   AudienceLevel,
   ColorTheme,
   Theme,
@@ -169,6 +168,25 @@ const clarificationMessageFrom = (value: any): string | null => {
   if (String(value?.status || "").trim() !== "needs_clarification") return null;
   const message = String(value?.message || "").trim();
   return message || NEEDS_CLARIFICATION_MESSAGE;
+};
+
+type GenerationSelection =
+  | "video"
+  | "story"
+  | "podcast_single"
+  | "podcast_debate"
+  | "quiz"
+  | "widget"
+  | "flowchart";
+
+const GENERATION_SELECTION_LABELS: Record<GenerationSelection, string> = {
+  video: "Video",
+  story: "Story",
+  podcast_single: "Podcast (Single)",
+  podcast_debate: "Podcast (Debate)",
+  quiz: "Quiz",
+  widget: "Widget",
+  flowchart: "Flowchart",
 };
 
 type MultimodalGenerationDiagnostics = GenerationDiagnostics & {
@@ -502,10 +520,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     type: "",
     data: null,
   });
-  // Edit mode state - for editing existing videos
+  // Edit mode state - for editing existing artifacts
   const [isEditMode, setIsEditMode] = useState(false);
   const [isQuizMode, setIsQuizMode] = useState(false);
-  type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'quiz';
+  const [generationType, setGenerationType] = useState<GenerationSelection>("video");
   const [quotedMessage, setQuotedMessage] = useState<{ messageId: string; content: string; media?: import('@/types').MediaAttachment; quizData?: QuizData; artifactKind?: ArtifactKind } | null>(null);
   // backend integration state
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -519,8 +537,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Podcast generation visual progress (mirrors video progress UX)
   const [podcastProgress, setPodcastProgress] = useState(0);
   const podcastProgressTimer = useRef<number | null>(null);
-  const [podcastMode, setPodcastMode] = useState<"standard" | "debate">("standard");
-  const [videoMode, setVideoMode] = useState<"standard" | "story">("standard");
   const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("auto");
   const [storyConfigOpen, setStoryConfigOpen] = useState(false);
   const [storyHostChoice, setStoryHostChoice] = useState<"auto" | "scientist" | "friendly_robot" | "animal_guide" | "explorer" | "artist" | "athlete">("auto");
@@ -548,8 +564,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     </div>
   );
 
-  // Track typing state per chat (whether assistant is currently generating)
-  const isTyping = (busy || podcastLoading || quizLoading || widgetLoading) && activeChatId !== null;
+  // Track generation state across the mutually exclusive artifact types.
+  const anyGenerationLoading = busy || podcastLoading || quizLoading || widgetLoading;
+  const isTyping = anyGenerationLoading && activeChatId !== null;
 
   // Copy message to clipboard state
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -598,6 +615,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       case 'podcast': return 'podcast';
       case 'story': return 'story';
       case 'widget': return 'widget';
+      case 'flowchart': return 'flowchart';
       case 'quiz': return 'quiz';
       default: return 'artifact';
     }
@@ -654,7 +672,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Cannot edit this video", description: "This video was generated before edit mode was available. Generate a new video to enable editing.", duration: 4000 });
       return;
     }
-    if ((kind === 'story' || kind === 'widget') && !msg.media?.widgetCode) {
+    if ((kind === 'story' || kind === 'widget' || kind === 'flowchart') && !msg.media?.widgetCode) {
       toast({ title: "Cannot edit this artifact", description: "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
       return;
     }
@@ -849,7 +867,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return base.endsWith(".html") ? base : `${base}.html`;
   };
 
-  type GenerationAction = "video" | "story" | "podcast" | "widget" | "quiz" | "edit";
+  type GenerationAction = "video" | "story" | "podcast" | "widget" | "flowchart" | "quiz" | "edit";
 
   const ensureLlmKey = (action: GenerationAction): boolean => {
     const normalized = normalizeApiKeys(apiKeys);
@@ -861,6 +879,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         story: "generate a story",
         podcast: "generate a podcast",
         widget: "generate a widget",
+        flowchart: "generate a flowchart",
         quiz: "generate a quiz",
         edit: "edit this artifact",
       };
@@ -2461,17 +2480,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const handleSubmit = () => {
     const prompt = query.trim();
     if (!prompt && uploadedFiles.length === 0) return;
-
-    // Show toast and keep prompt in input - user must select generation type
-    toast({
-      title: "Select a Generation Type",
-      description: "Choose Video, Podcast, Quiz, or Widget for this prompt or image.",
-      duration: 4000
-    });
-    // Don't clear query or add message - keep prompt in typing area
+    if (isEditMode) {
+      void handleEditVideo();
+      return;
+    }
+    void handleSelectedGeneration();
   };
 
-  const generatePodcastFromPrompt = async () => {
+  const generatePodcastFromPrompt = async (
+    requestedMode: "standard" | "debate" = "standard",
+  ) => {
     lastGenerateKindRef.current = 'podcast';
     if (podcastLoading && podcastAbortRef.current) {
       podcastAbortRef.current.abort();
@@ -2511,7 +2529,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     );
     setQuery("");
     setUploadedFiles([]);
-    void generatePodcast(prompt, finalChatId, requestAudience, images);
+    void generatePodcast(prompt, finalChatId, requestAudience, images, requestedMode);
   };
 
   async function generatePodcast(
@@ -2519,6 +2537,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     chatIdOverride?: string | number | null,
     requestAudience: AudienceLevel | undefined = undefined,
     images: GenerationImagePayload[] = [],
+    requestedMode: "standard" | "debate" = "standard",
   ) {
     setPodcastLoading(true);
     setApiError(null);
@@ -2556,7 +2575,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         keys: llmConfig.keys,
         provider: llmConfig.provider,
         model: llmConfig.model,
-        mode: podcastMode,
+        mode: requestedMode,
         audience: requestAudience,
         images,
         sessionId,
@@ -2591,7 +2610,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactKind: 'podcast' as any,
           url: audioUrl, // Use signed URL for persistence
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `${podcastMode === "debate" ? "Debate Podcast" : "Podcast"}: ${sourceLabel.slice(0, 50)}...`,
+          title: `${requestedMode === "debate" ? "Debate Podcast" : "Podcast"}: ${sourceLabel.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           scriptGcsPath: data.script_gcs_path, // GCS path for persistent script fallback
@@ -2602,7 +2621,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         // Use the same chat ID we started with to ensure message goes to correct chat
         await processAndAddMessage(
-          podcastMode === "debate" ? "✅ Debate podcast generated." : "✅ Podcast generated.",
+          requestedMode === "debate" ? "✅ Debate podcast generated." : "✅ Podcast generated.",
           false,
           mediaAttachment,
           chatIdForGeneration
@@ -2645,7 +2664,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const generateVideoFromPrompt = async (
     promptOverride?: string,
-    storyOptions?: { host_character?: string; theme?: string }
+    storyOptions?: { host_character?: string; theme?: string },
+    requestedMode: "standard" | "story" = "standard",
   ) => {
     lastGenerateKindRef.current = 'video';
     if (busy && videoAbortRef.current) {
@@ -2691,7 +2711,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     );
     setQuery("");
     setUploadedFiles([]);
-    void generateVideo(prompt, finalChatId, storyOptions, requestAudience, images);
+    void generateVideo(
+      prompt,
+      finalChatId,
+      storyOptions,
+      requestAudience,
+      images,
+      requestedMode,
+    );
   };
 
   const getLastUserPrompt = () => {
@@ -2837,7 +2864,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }
 
-  async function generateWidgetFromPrompt() {
+  async function generateWidgetFromPrompt(
+    artifactKind: "widget" | "flowchart" = "widget",
+  ) {
     if (widgetLoading && widgetAbortRef.current) {
       widgetAbortRef.current.abort();
       return;
@@ -2845,11 +2874,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     const prompt = query.trim();
     const sourceFiles = [...uploadedFiles];
+    const isFlowchart = artifactKind === "flowchart";
+    const artifactName = isFlowchart ? "Flowchart" : "Widget";
     if (!prompt && sourceFiles.length === 0) {
       toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
-    if (!ensureLlmKey("widget")) return;
+    if (!ensureLlmKey(isFlowchart ? "flowchart" : "widget")) return;
 
     let images: GenerationImagePayload[];
     try {
@@ -2900,8 +2931,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         sessionId: ensureChatSessionId(),
         jobId: makeJobId(),
       };
-      console.debug("POST /widget", { ...body, images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })) });
-      const res = await apiFetch("/widget", {
+      const endpoint = isFlowchart ? "/flowchart" : "/widget";
+      console.debug(`POST ${endpoint}`, {
+        ...body,
+        images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })),
+      });
+      const res = await apiFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2917,47 +2952,64 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       if (res.ok && data?.status === "ok" && data?.widget_html) {
         const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
-        const widgetDownloadUrl = toPlayableMediaUrl(data.download_url);
-        const widgetDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Widget: ${sourceLabel.slice(0, 50)}`, "upcurved_widget.html");
+        const downloadUrl = toPlayableMediaUrl(data.download_url);
+        const fallbackFilename = isFlowchart ? "upcurved_flowchart.html" : "upcurved_widget.html";
+        const downloadFilename = data.download_filename || htmlFilenameFromTitle(
+          `${artifactName}: ${sourceLabel.slice(0, 50)}`,
+          fallbackFilename,
+        );
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'widget',
-          artifactKind: 'widget' as any,
-          url: widgetDownloadUrl,
+          artifactKind,
+          url: downloadUrl,
           widgetCode: data.widget_html,
-          title: `Widget: ${sourceLabel.slice(0, 50)}`,
-          downloadFilename: widgetDownloadFilename,
+          title: `${artifactName}: ${sourceLabel.slice(0, 50)}`,
+          downloadFilename,
           generationDiagnostics: normalizeGenerationDiagnostics(
             data.generation_diagnostics,
           ),
         };
         await processAndAddMessage(
-          "✅ Interactive widget generated.",
+          isFlowchart ? "✅ Flowchart generated." : "✅ Interactive widget generated.",
           false,
           mediaAttachment,
           String(finalChatId),
         );
         setVideoUrl(null);
-        setCurrentMediaMeta({ type: 'widget', artifactKind: 'widget' });
+        setCurrentMediaMeta({ type: 'widget', artifactKind });
         setSrtText(null);
         setVttUrl(null);
         setSubtitleLang(undefined);
         setWidgetHtml(data.widget_html);
-        setHtmlDownloadUrl(widgetDownloadUrl || null);
-        setHtmlDownloadFilename(widgetDownloadFilename || null);
+        setHtmlDownloadUrl(downloadUrl || null);
+        setHtmlDownloadFilename(downloadFilename || null);
       } else {
         const errorBody = responseErrorBody(res, data, raw);
-        const friendly = formatGenerationError("Widget generation", errorBody, "Widget response did not include widget_html.");
+        const friendly = formatGenerationError(
+          `${artifactName} generation`,
+          errorBody,
+          `${artifactName} response did not include widget_html.`,
+        );
         await processAndAddMessage(friendly, false, undefined, persistedId);
       }
     } catch (err: any) {
       if (err?.name === "AbortError") {
-        await processAndAddMessage("⏹️ Canceled widget generation.", false, undefined, persistedId);
+        await processAndAddMessage(
+          `⏹️ Canceled ${artifactName.toLowerCase()} generation.`,
+          false,
+          undefined,
+          persistedId,
+        );
         aborted = true;
       } else {
         const body = thrownErrorBody(err);
-        const friendly = formatGenerationError("Widget generation", body, err?.message || "Unknown error");
+        const friendly = formatGenerationError(
+          `${artifactName} generation`,
+          body,
+          err?.message || "Unknown error",
+        );
         await processAndAddMessage(friendly, false, undefined, persistedId);
-        toast({ title: "Widget failed", description: err?.message || "Unknown error", duration: 4000 });
+        toast({ title: `${artifactName} failed`, description: err?.message || "Unknown error", duration: 4000 });
       }
     } finally {
       setWidgetLoading(false);
@@ -3026,38 +3078,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   };
 
-  const handleResetLocalData = async () => {
-    if (!desktopLocal) return;
-    const ok = window.confirm(
-      "Reset all local desktop data? This removes local chats, media history, settings, and saved keys on this device."
-    );
-    if (!ok) return;
-
-    try {
-      try {
-        await apiDeleteAccount();
-      } catch {}
-      try {
-        await clearApiKeysForUser(user.email);
-      } catch {}
-      try {
-        Object.keys(localStorage).forEach((key) => {
-          if (key.startsWith("app.")) localStorage.removeItem(key);
-        });
-      } catch {}
-      try {
-        sessionStorage.removeItem("app.forceBlank");
-      } catch {}
-      setSettingsOpen(false);
-      window.location.assign("/home");
-    } catch (e: any) {
-      toast({
-        title: "Reset failed",
-        description: e?.message || "Could not reset local data.",
-        variant: "destructive",
-      });
-    }
-  };
 
   const confirmLogout = async () => {
     if (desktopLocal) {
@@ -3683,6 +3703,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     storyOptions?: { host_character?: string; theme?: string },
     requestAudience: AudienceLevel | undefined = undefined,
     images: GenerationImagePayload[] = [],
+    requestedMode: "standard" | "story" = "standard",
   ) {
     // if already busy, treat as cancel
     if (busy && videoAbortRef.current) {
@@ -3739,10 +3760,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         keys: llmConfig.keys,
         provider: llmConfig.provider, // "" -> undefined
         model: llmConfig.model,
-        mode: videoMode,
+        mode: requestedMode,
         audience: requestAudience,
         images,
-        storyOptions: videoMode === "story" ? (storyOptions || {}) : undefined,
+        storyOptions: requestedMode === "story" ? (storyOptions || {}) : undefined,
         jobId,
         sessionId,
       };
@@ -3767,7 +3788,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
 
       if (res.ok && data?.status === "ok") {
-        if (videoMode === "story" && data?.widget_html) {
+        if (requestedMode === "story" && data?.widget_html) {
           const storyDownloadUrl = toPlayableMediaUrl(data.download_url);
           const storyDownloadFilename = data.download_filename || htmlFilenameFromTitle(`Story Scenes: ${sourceLabel.slice(0, 50)}`, "upcurved_story.html");
           const mediaAttachment: import('@/types').MediaAttachment = {
@@ -3826,7 +3847,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactKind: 'video' as any,
           url: videoUrl,
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `${videoMode === "story" ? "Story Video" : "Video"}: ${sourceLabel.slice(0, 50)}...`,
+          title: `${requestedMode === "story" ? "Story Video" : "Video"}: ${sourceLabel.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           sceneCode: data.scene_code,  // Store scene code for video editing
@@ -3837,7 +3858,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         // Use the same chat ID we started with to ensure message goes to correct chat
         await processAndAddMessage(
-          videoMode === "story" ? "✅ Story mode video generated." : "✅ Video generated.",
+          requestedMode === "story" ? "✅ Story mode video generated." : "✅ Video generated.",
           false,
           mediaAttachment,
           chatIdForGeneration
@@ -3905,17 +3926,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
   }
 
-  const handleVideoGenerateClick = async () => {
+  const handleVideoGenerateClick = async (
+    requestedMode: "standard" | "story",
+  ) => {
     // Preserve existing stop behavior when already generating.
     if (busy) {
-      await generateVideoFromPrompt();
+      await generateVideoFromPrompt(undefined, undefined, requestedMode);
       return;
     }
-    if (videoMode !== "story") {
-      await generateVideoFromPrompt();
+    if (requestedMode !== "story") {
+      await generateVideoFromPrompt(undefined, undefined, "standard");
       return;
     }
-    // Story mode: collect optional host/theme first.
+    // Story selection: collect optional host/theme first.
     setStoryConfigOpen(true);
   };
 
@@ -3944,8 +3967,36 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       };
       opts.theme = themeMap[storyThemeChoice] || undefined;
     }
-    await generateVideoFromPrompt(undefined, opts);
+    await generateVideoFromPrompt(undefined, opts, "story");
   };
+
+  async function handleSelectedGeneration() {
+    switch (generationType) {
+      case "video":
+        await handleVideoGenerateClick("standard");
+        return;
+      case "story":
+        await handleVideoGenerateClick("story");
+        return;
+      case "podcast_single":
+        await generatePodcastFromPrompt("standard");
+        return;
+      case "podcast_debate":
+        await generatePodcastFromPrompt("debate");
+        return;
+      case "quiz":
+        await generateQuiz();
+        return;
+      case "widget":
+        await generateWidgetFromPrompt("widget");
+        return;
+      case "flowchart":
+        await generateWidgetFromPrompt("flowchart");
+        return;
+      default:
+        return;
+    }
+  }
 
   // Handle quiz generation directly from media (video or podcast)
   async function handleQuizMediaDirect(msg: any) {
@@ -4231,7 +4282,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(userEditMessage, true, undefined, chatIdForGeneration);
       setQuery("");
 
-      if (kind === 'widget' || kind === 'story') {
+      if (kind === 'widget' || kind === 'story' || kind === 'flowchart') {
         const originalHtml = quotedMessage.media?.widgetCode || '';
         if (!originalHtml.trim()) {
           toast({ title: "Cannot edit", description: "The original HTML source is missing.", duration: 4000 });
@@ -4263,9 +4314,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         if (res.ok && data?.status === 'ok' && data?.widget_html) {
           const downloadUrl = toPlayableMediaUrl(data.download_url);
-          const fallbackName = kind === 'story' ? 'upcurved_story.html' : 'upcurved_widget.html';
+          const fallbackName =
+            kind === 'story'
+              ? 'upcurved_story.html'
+              : kind === 'flowchart'
+              ? 'upcurved_flowchart.html'
+              : 'upcurved_widget.html';
           const downloadFilename = data.download_filename || htmlFilenameFromTitle(`Edited ${artifactLabel(kind)}: ${sourceTitle}`, fallbackName);
-          const titlePrefix = kind === 'story' ? 'Edited Story' : 'Edited Widget';
+          const titlePrefix =
+            kind === 'story'
+              ? 'Edited Story'
+              : kind === 'flowchart'
+              ? 'Edited Flowchart'
+              : 'Edited Widget';
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
             artifactKind: kind as any,
@@ -4274,7 +4335,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             title: `${titlePrefix}: ${sourceTitle}`,
             downloadFilename,
           };
-          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : 'Widget'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
+          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : kind === 'flowchart' ? 'Flowchart' : 'Widget'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
           setVideoUrl(null);
           setCurrentMediaMeta({ type: 'widget', artifactKind: kind });
           setWidgetHtml(data.widget_html);
@@ -5721,7 +5782,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 onPaste={handleImagePaste}
                 onKeyDown={handleKeyDown}
                 rows={1}
-                className={`min-h-[48px] resize-none pr-24 md:pr-36 py-3 ${isEditMode ? "" : "pl-12"}`}
+                className={`min-h-[48px] resize-none pr-14 py-3 ${isEditMode ? "" : "pl-12"}`}
                 disabled={false}
               />
               {!isEditMode && (
@@ -5740,7 +5801,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               )}
               <div className="absolute top-1/2 right-3 -translate-y-1/2 flex gap-1">
                 {isEditMode ? (
-                  /* Edit mode: only show edit video button */
                   <Button
                     size="icon"
                     variant="default"
@@ -5752,80 +5812,58 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     {busy ? <Square className="w-5 h-5" /> : <Pencil className="w-5 h-5" />}
                   </Button>
                 ) : (
-                  /* Normal mode: mutually exclusive generation buttons */
-                  <>
-                    <Button
-                      size="icon"
-                      variant="default"
-                      className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
-                      onClick={generatePodcastFromPrompt}
-                      title={podcastLoading ? "Stop podcast" : (busy || quizLoading || widgetLoading ? "Wait for current generation" : "Generate podcast")}
-                      disabled={(!podcastLoading && (busy || quizLoading || widgetLoading))}
-                    >
-                      {podcastLoading ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="default"
-                      className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
-                      onClick={() => void handleVideoGenerateClick()}
-                      title={busy ? "Stop video" : (podcastLoading || quizLoading || widgetLoading ? "Wait for current generation" : "Generate video")}
-                      disabled={(!busy && (podcastLoading || quizLoading || widgetLoading))}
-                    >
-                      {busy ? <Square className="w-5 h-5" /> : <VideoIcon className="w-5 h-5" />}
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="default"
-                      className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
-                      onClick={generateQuiz}
-                      title={quizLoading ? "Stop quiz" : (busy || podcastLoading || widgetLoading ? "Wait for current generation" : "Generate quiz")}
-                      disabled={(!quizLoading && (busy || podcastLoading || widgetLoading))}
-                    >
-                      {quizLoading ? <Square className="w-5 h-5" /> : <Brain className="w-5 h-5" />}
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="default"
-                      className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
-                      onClick={generateWidgetFromPrompt}
-                      title={widgetLoading ? "Stop widget" : (busy || podcastLoading || quizLoading ? "Wait for current generation" : "Generate interactive widget")}
-                      disabled={(!widgetLoading && (busy || podcastLoading || quizLoading))}
-                    >
-                      {widgetLoading ? <Square className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
-                    </Button>
-                  </>
+                  <Button
+                    size="icon"
+                    variant="default"
+                    className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
+                    onClick={() => void handleSelectedGeneration()}
+                    title={
+                      anyGenerationLoading
+                        ? `Stop ${GENERATION_SELECTION_LABELS[generationType]}`
+                        : `Generate ${GENERATION_SELECTION_LABELS[generationType]}`
+                    }
+                    disabled={
+                      !anyGenerationLoading &&
+                      !query.trim() &&
+                      uploadedFiles.length === 0
+                    }
+                  >
+                    {anyGenerationLoading ? (
+                      <Square className="w-5 h-5" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                  </Button>
                 )}
               </div>
             </div>
             <div className="mt-2 flex justify-end">
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button
-                  variant={videoMode === "story" ? "secondary" : "outline"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() =>
-                    setVideoMode((prev) => (prev === "story" ? "standard" : "story"))
-                  }
-                  title="Toggle story mode for video generation only"
-                >
-                  Story Mode: {videoMode === "story" ? "On" : "Off"}
-                </Button>
-                <Button
-                  variant={podcastMode === "debate" ? "secondary" : "outline"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() =>
-                    setPodcastMode((prev) => (prev === "debate" ? "standard" : "debate"))
-                  }
-                  title="Toggle debate mode for podcast generation only"
-                >
-                  Debate Mode: {podcastMode === "debate" ? "On" : "Off"}
-                </Button>
+                {!isEditMode && (
+                  <select
+                    aria-label="Generation type"
+                    title="Choose what UpcurvEd should generate"
+                    value={generationType}
+                    disabled={anyGenerationLoading}
+                    onChange={(event) =>
+                      setGenerationType(event.target.value as GenerationSelection)
+                    }
+                    className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="video">Generate: Video</option>
+                    <option value="story">Generate: Story</option>
+                    <option value="podcast_single">Generate: Podcast (Single)</option>
+                    <option value="podcast_debate">Generate: Podcast (Debate)</option>
+                    <option value="quiz">Generate: Quiz</option>
+                    <option value="widget">Generate: Widget</option>
+                    <option value="flowchart">Generate: Flowchart</option>
+                  </select>
+                )}
                 <select
                   aria-label="Target learner level"
                   title="Choose the learner level for the next generation"
                   value={audienceLevel}
+                  disabled={anyGenerationLoading}
                   onChange={(event) =>
                     setAudienceLevel(event.target.value as AudienceLevel)
                   }
@@ -5855,7 +5893,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               <WidgetFrame
                 widgetCode={widgetHtml}
                 className="w-full h-full rounded-xl border-0"
-                title="Interactive Widget"
+                title={
+                  currentMediaMeta?.artifactKind === "flowchart"
+                    ? "Flowchart"
+                    : currentMediaMeta?.artifactKind === "story"
+                    ? "Story"
+                    : "Interactive Widget"
+                }
               />
             ) : !videoUrl ? (
               <div className="text-center p-4">
@@ -5873,7 +5917,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      {busy ? "Rendering video…" : widgetLoading ? "Generating widget…" : "Generating podcast…"}
+                      {busy ? "Rendering video…" : widgetLoading ? (generationType === "flowchart" ? "Generating flowchart…" : "Generating widget…") : "Generating podcast…"}
                     </p>
                   </div>
                 ) : apiError ? (
@@ -6205,14 +6249,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             asDialog
             onUpdateName={handleUpdateDisplayName}
             desktopLocal={desktopLocal}
-            onResetLocalData={desktopLocal ? handleResetLocalData : undefined}
           />
         </div>
       )}
       <AlertDialog open={storyConfigOpen} onOpenChange={setStoryConfigOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Story Mode Options</AlertDialogTitle>
+            <AlertDialogTitle>Story Options</AlertDialogTitle>
             <AlertDialogDescription>
               Pick an optional main character and theme. Leave as Auto to let the model decide.
               Fixed story templates: Scientist, Friendly Robot, Animal Guide, Explorer, Artist, Athlete.
@@ -6255,7 +6298,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void confirmStoryConfigAndGenerate()}>
-              Generate Story Video
+              Generate Story
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

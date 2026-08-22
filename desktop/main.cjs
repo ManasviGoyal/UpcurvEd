@@ -46,6 +46,7 @@ let backendProcess = null;
 let frontendDevProcess = null;
 let staticServer = null;
 let isShuttingDown = false;
+let uninstallScheduled = false;
 const KEYCHAIN_SERVICE = "UpcurvEd";
 const SECURE_PROVIDER_KEY_FIELDS = ["claude", "gemini", "openai", "openrouter"];
 let keytarErrorLogged = false;
@@ -122,6 +123,211 @@ ipcMain.handle("secure-store:set-api-keys", async (_event, body) => {
 
 ipcMain.handle("secure-store:clear-api-keys", async (_event, account) => {
   return clearSecureApiKeys(account);
+});
+
+async function clearAllSecureApiKeys() {
+  if (!keytar) return;
+  try {
+    const credentials = await keytar.findCredentials(KEYCHAIN_SERVICE);
+    for (const credential of credentials || []) {
+      if (!credential?.account) continue;
+      try {
+        await keytar.deletePassword(KEYCHAIN_SERVICE, credential.account);
+      } catch (err) {
+        console.warn(
+          `[desktop] could not delete keychain entry ${credential.account}: ${
+            err?.message || err
+          }`
+        );
+      }
+    }
+  } catch (err) {
+    // If keytar became unavailable, local data cleanup should still continue.
+    disableKeytarFallback("credential enumeration unavailable", err);
+  }
+}
+
+function isUpcurvedOwnedPath(targetPath) {
+  if (!targetPath) return false;
+  const base = path.basename(path.resolve(targetPath)).toLowerCase();
+  return base.includes("upcurved");
+}
+
+function findMacAppBundlePath() {
+  if (process.platform !== "darwin") return "";
+  let current = path.resolve(app.getPath("exe"));
+  while (true) {
+    if (current.toLowerCase().endsWith(".app")) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return "";
+    current = parent;
+  }
+}
+
+function getMacBundleIdentifier() {
+  const appBundle = findMacAppBundlePath();
+  if (appBundle) {
+    try {
+      const result = spawnSync(
+        "/usr/libexec/PlistBuddy",
+        ["-c", "Print :CFBundleIdentifier", path.join(appBundle, "Contents", "Info.plist")],
+        { encoding: "utf8" }
+      );
+      const bundleId = String(result.stdout || "").trim();
+      if (result.status === 0 && bundleId) return bundleId;
+    } catch (_) {
+      // Fall through to build metadata.
+    }
+  }
+  return String(rootPackage?.build?.appId || "").trim();
+}
+
+function macPackagedCleanupTargets() {
+  const targets = new Set();
+  const userData = app.getPath("userData");
+  if (isUpcurvedOwnedPath(userData)) {
+    targets.add(userData);
+  } else {
+    // Safety fallback: never remove a generic Electron userData directory.
+    targets.add(path.join(userData, "storage"));
+    targets.add(path.join(userData, "state"));
+  }
+
+  try {
+    const logs = app.getPath("logs");
+    if (isUpcurvedOwnedPath(logs)) targets.add(logs);
+  } catch (_) {
+    // no-op
+  }
+
+  try {
+    const cacheCandidate = path.join(app.getPath("cache"), app.getName());
+    if (isUpcurvedOwnedPath(cacheCandidate)) targets.add(cacheCandidate);
+  } catch (_) {
+    // no-op
+  }
+
+  const appId = getMacBundleIdentifier();
+  if (appId) {
+    const home = app.getPath("home");
+    targets.add(path.join(home, "Library", "Preferences", `${appId}.plist`));
+    targets.add(path.join(home, "Library", "Saved Application State", `${appId}.savedState`));
+    targets.add(path.join(home, "Library", "Caches", appId));
+  }
+
+  return [...targets].filter(Boolean);
+}
+
+function scheduleMacCleanupAfterExit({ removeApp }) {
+  const userData = app.getPath("userData");
+  const targets = IS_PACKAGED
+    ? macPackagedCleanupTargets()
+    : [
+        path.join(userData, "storage"),
+        path.join(userData, "state"),
+      ];
+  const appBundle = removeApp ? findMacAppBundlePath() : "";
+
+  if (removeApp && (!appBundle || !appBundle.toLowerCase().endsWith(".app"))) {
+    throw new Error("Could not identify the UpcurvEd application bundle safely.");
+  }
+
+  const cleanupScript = [
+    'pid="$1"',
+    "shift",
+    'app_bundle="$1"',
+    "shift",
+    'while /bin/kill -0 "$pid" 2>/dev/null; do /bin/sleep 0.2; done',
+    'for target in "$@"; do',
+    '  [ -n "$target" ] || continue',
+    '  if [ -e "$target" ]; then',
+    '    /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true',
+    '    /bin/rm -rf "$target"',
+    "  fi",
+    "done",
+    'if [ -n "$app_bundle" ] && [ -e "$app_bundle" ]; then',
+    '  /usr/bin/xattr -dr com.apple.quarantine "$app_bundle" 2>/dev/null || true',
+    '  /bin/rm -rf "$app_bundle"',
+    "fi",
+  ].join("\n");
+
+  const helper = spawn(
+    "/bin/sh",
+    [
+      "-c",
+      cleanupScript,
+      "upcurved-uninstall",
+      String(process.pid),
+      appBundle,
+      ...targets,
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+    }
+  );
+  helper.unref();
+
+  console.log(
+    `[desktop] scheduled ${removeApp ? "uninstall" : "dev cleanup"}; targets=${targets.length}`
+  );
+}
+
+ipcMain.handle("app:uninstall-and-delete-local-data", async () => {
+  if (uninstallScheduled) {
+    return { ok: true, alreadyScheduled: true };
+  }
+  if (process.platform !== "darwin") {
+    return {
+      ok: false,
+      reason: "unsupported_platform",
+      message: "Full in-app uninstall is currently available on macOS.",
+    };
+  }
+
+  const result = await dialog.showMessageBox({
+    type: "warning",
+    title: "Uninstall UpcurvEd?",
+    message: IS_PACKAGED
+      ? "Uninstall UpcurvEd and permanently delete its local data?"
+      : "Clear UpcurvEd development data and quit?",
+    detail: IS_PACKAGED
+      ? "This removes local chats, generated working files, diagnostics, settings, caches, and saved API credentials. Files you intentionally exported or downloaded are not deleted."
+      : "Development safety mode will clear UpcurvEd storage/state and browser app settings, but it will not delete your repository or Electron.",
+    buttons: [
+      "Cancel",
+      IS_PACKAGED ? "Uninstall & Delete Local Data" : "Clear Dev Data & Quit",
+    ],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+
+  if (result.response !== 1) {
+    return { ok: false, canceled: true };
+  }
+
+  try {
+    await clearAllSecureApiKeys();
+    scheduleMacCleanupAfterExit({ removeApp: IS_PACKAGED });
+    uninstallScheduled = true;
+
+    // Let the renderer receive the successful IPC response and clear its app.* storage keys,
+    // then stop UpcurvEd-owned child processes before the detached cleanup removes data.
+    setTimeout(async () => {
+      await shutdown();
+      app.quit();
+    }, 300);
+
+    return {
+      ok: true,
+      mode: IS_PACKAGED ? "uninstall" : "dev_cleanup",
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[desktop] uninstall scheduling failed:", message);
+    return { ok: false, reason: "cleanup_failed", message };
+  }
 });
 
 function sleep(ms) {

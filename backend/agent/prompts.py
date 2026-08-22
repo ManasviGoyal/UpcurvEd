@@ -825,6 +825,39 @@ def build_widget_fallback_spec_user_prompt(*, topic: str, reason: str | None = N
     """).strip()
 
 
+# -------- FLOWCHART PROMPTS --------
+
+def build_flowchart_widget_prompt(topic: str) -> str:
+    """Turn a learner request into a strict flowchart-oriented widget topic."""
+    return dedent(f"""\
+        Create an educational FLOWCHART about this learner request:
+        {topic}
+
+        The finished artifact must visibly read as a flowchart, not a dashboard, slide deck,
+        generic card activity, or ordinary simulator.
+
+        Flowchart requirements:
+        - Use a clear start node and a logical top-to-bottom or left-to-right path.
+        - Use labeled nodes connected by directional arrows. Show branches only when the concept
+          genuinely has decisions, alternatives, causes, conditions, or multiple outcomes.
+        - Keep node text concise and readable. Put explanation in one short supporting note rather
+          than paragraphs inside nodes.
+        - Prefer SVG for nodes, connectors, arrows, and path highlighting so the diagram remains
+          sharp and responsive.
+        - Make the flowchart useful for learning: the learner should be able to click a node,
+          branch, or Next/Trace control to highlight a path and reveal a brief explanation.
+        - If the topic is a process, show sequence and cause/effect. If it is a decision, show the
+          decision criteria and outcomes. If it is a concept hierarchy, show how ideas connect.
+        - Do not invent branches merely to make the chart look complex.
+        - Use one compact interaction and immediate feedback. No decorative metrics or extra tabs.
+        - Start with the complete flowchart visible enough to orient the learner; interaction may
+          progressively emphasize the relevant route.
+        - Keep everything self-contained and compatible with the normal UpcurvEd widget runtime.
+
+        Return the flowchart as the requested interactive HTML widget.
+    """).strip()
+
+
 # -------- QUIZ PROMPTS --------
 
 QUIZ_GENERATE_SYSTEM = _with_artifact_safety("""\

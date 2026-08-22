@@ -37,6 +37,7 @@ from backend.agent.minigraph import echo_manim_code
 from backend.agent.prompts import (
     STORY_EDIT_FULL_HTML_SYSTEM,
     STORY_EDIT_PATCH_SYSTEM,
+    build_flowchart_widget_prompt,
     build_story_edit_full_html_user_prompt,
     build_story_edit_patch_user_prompt,
 )
@@ -2629,6 +2630,111 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             return diagnostic_error_response(
                 feature="widget",
                 step="widget generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
+
+
+@app.post("/flowchart")
+def flowchart(body: WidgetIn, uid: str = Depends(require_firebase_user)):
+    """Generate a flowchart through the proven widget renderer/repair pipeline."""
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            logger.info("/flowchart called provider=%s model=%s", provider, model)
+            image_payload = _generation_image_payload(body.images)
+            effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+                body.prompt,
+                image_payload,
+            )
+            flowchart_prompt = build_flowchart_widget_prompt(effective_prompt)
+            result = _generate_widget(
+                prompt=_with_audience_guidance(flowchart_prompt, body.audience),
+                learner_prompt=body.prompt,
+                images=image_payload,
+                default_image_prompt_used=default_image_prompt_used,
+                provider=provider,
+                model=model,
+                provider_keys=provider_keys,
+            )
+            if result.get("status") == "needs_clarification":
+                result["generation_diagnostics"] = _append_artifact_generation_audit(
+                    generation_type="flowchart",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="needs_clarification",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                    generation_diagnostics=result.get("generation_diagnostics"),
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
+                )
+                return result
+
+            widget_html = result["widget_html"]
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="flowchart",
+                title=body.prompt,
+                html_text=widget_html,
+                job_id=job_id,
+            )
+            generation_diagnostics = _append_artifact_generation_audit(
+                generation_type="flowchart",
+                job_id=job_id,
+                operation="generate",
+                outcome="clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                generation_diagnostics=result.get("generation_diagnostics"),
+                image_count=len(image_payload),
+                default_image_prompt_used=default_image_prompt_used,
+            )
+            logger.info(
+                "/flowchart completed: ok, html_len=%d",
+                len(widget_html),
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "widget_html": widget_html,
+                "generation_diagnostics": generation_diagnostics,
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="flowchart",
+                job_id=job_id,
+                operation="generate",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="flowchart_generation",
+                error_summary=exc,
+                image_count=len(locals().get("image_payload") or []),
+                default_image_prompt_used=bool(
+                    locals().get("default_image_prompt_used", False)
+                ),
+            )
+            logger.exception("/flowchart failed: %s", exc)
+            return diagnostic_error_response(
+                feature="flowchart",
+                step="flowchart generation",
                 error=exc,
                 provider=locals().get("provider"),
                 model=locals().get("model"),

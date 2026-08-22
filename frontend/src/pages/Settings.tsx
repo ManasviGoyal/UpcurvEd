@@ -32,6 +32,7 @@ interface SettingsPageProps {
   asDialog?: boolean;
   onUpdateName?: (name: string) => void;
   desktopLocal?: boolean;
+  /** Legacy prop retained for caller compatibility; desktop uninstall is now handled internally. */
   onResetLocalData?: () => void;
 }
 
@@ -43,7 +44,6 @@ export const SettingsPage = ({
   asDialog,
   onUpdateName,
   desktopLocal = false,
-  onResetLocalData,
 }: SettingsPageProps) => {
   const [displayName, setDisplayName] = useState<string>(user.name || "");
   const [localKeys, setLocalKeys] = useState<ApiKeys>(() => normalizeApiKeys(apiKeys));
@@ -53,6 +53,8 @@ export const SettingsPage = ({
   const [busy, setBusy] = useState<boolean>(false);
   const [exportBusy, setExportBusy] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
+  const [uninstallBusy, setUninstallBusy] = useState<boolean>(false);
+  const [uninstallStatus, setUninstallStatus] = useState<string>("");
   const [customModelSelected, setCustomModelSelected] = useState<boolean>(false);
 
   useEffect(() => {
@@ -158,6 +160,52 @@ export const SettingsPage = ({
       );
     } finally {
       setExportBusy(false);
+    }
+  };
+
+  const handleUninstallAndDeleteLocalData = async () => {
+    if (!desktopLocal || uninstallBusy) return;
+    setUninstallBusy(true);
+    setUninstallStatus("");
+
+    try {
+      const uninstall = window.desktop?.appManagement?.uninstallAndDeleteLocalData;
+      if (!uninstall) {
+        setUninstallStatus("Uninstall is unavailable in this build.");
+        return;
+      }
+
+      const result = await uninstall();
+      if (result?.canceled) return;
+      if (!result?.ok) {
+        setUninstallStatus(
+          result?.message || "Could not start the UpcurvEd uninstall."
+        );
+        return;
+      }
+
+      // The main process has already scheduled secure-key/data cleanup. Clear renderer-owned
+      // app keys immediately while this window is still alive. User-exported files are untouched.
+      try {
+        Object.keys(localStorage).forEach((key) => {
+          if (key.startsWith("app.")) localStorage.removeItem(key);
+        });
+        Object.keys(sessionStorage).forEach((key) => {
+          if (key.startsWith("app.")) sessionStorage.removeItem(key);
+        });
+      } catch {}
+
+      setUninstallStatus(
+        result.mode === "dev_cleanup"
+          ? "Development data cleared. UpcurvEd will close."
+          : "Uninstall started. UpcurvEd will close."
+      );
+    } catch (error: any) {
+      setUninstallStatus(
+        error?.message || "Could not start the UpcurvEd uninstall."
+      );
+    } finally {
+      setUninstallBusy(false);
     }
   };
 
@@ -342,29 +390,42 @@ export const SettingsPage = ({
 
         <div className="mt-6 flex flex-col gap-4">
           <div className="flex gap-4">
-            <Button onClick={handleSave} className="flex-1" disabled={busy}>
+            <Button onClick={handleSave} className="flex-1" disabled={busy || uninstallBusy}>
               Save
             </Button>
             <Button
               onClick={() => setView("chat")}
               variant="outline"
               className="flex-1"
-              disabled={busy}
+              disabled={busy || uninstallBusy}
             >
               Cancel
             </Button>
           </div>
 
-          {desktopLocal && onResetLocalData && (
-            <div className="pt-2 border-t">
+          {desktopLocal && (
+            <div className="pt-2 border-t space-y-2">
+              <div>
+                <p className="text-sm font-medium">Uninstall UpcurvEd</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Permanently delete UpcurvEd&apos;s local chats, working files, diagnostics,
+                  settings, caches, and saved API credentials. Files you intentionally exported
+                  or downloaded are left alone.
+                </p>
+              </div>
               <Button
-                onClick={onResetLocalData}
+                onClick={() => void handleUninstallAndDeleteLocalData()}
                 variant="destructive"
                 className="w-full"
-                disabled={busy}
+                disabled={busy || uninstallBusy}
               >
-                Reset local data
+                {uninstallBusy
+                  ? "Preparing uninstall..."
+                  : "Uninstall UpcurvEd & Delete Local Data"}
               </Button>
+              {uninstallStatus && (
+                <p className="text-xs text-muted-foreground">{uninstallStatus}</p>
+              )}
             </div>
           )}
 
@@ -380,7 +441,7 @@ export const SettingsPage = ({
                 onClick={handleExportDiagnostics}
                 variant="outline"
                 className="w-full"
-                disabled={busy || exportBusy}
+                disabled={busy || exportBusy || uninstallBusy}
               >
                 {exportBusy ? "Preparing export..." : "Export generation diagnostics"}
               </Button>

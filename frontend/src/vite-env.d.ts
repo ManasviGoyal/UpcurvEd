@@ -12,6 +12,16 @@ interface DesktopBridge {
     setApiKeys: (account: string, payload: any) => Promise<{ ok: boolean; reason?: string }>;
     clearApiKeys: (account: string) => Promise<{ ok: boolean; reason?: string }>;
   };
+  appManagement?: {
+    uninstallAndDeleteLocalData: () => Promise<{
+      ok: boolean;
+      canceled?: boolean;
+      alreadyScheduled?: boolean;
+      mode?: "uninstall" | "dev_cleanup";
+      reason?: string;
+      message?: string;
+    }>;
+  };
 }
 
 interface Window {
