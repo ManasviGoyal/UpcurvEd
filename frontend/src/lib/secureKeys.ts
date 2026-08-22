@@ -99,23 +99,30 @@ export async function persistApiKeysForUser(
   email: string,
   keys: ApiKeys
 ): Promise<void> {
-  writeLocalSettings(email, normalizeKeys(keys));
+  const normalized = normalizeKeys(keys);
 
+  // Web/non-desktop mode, or a desktop build without a secure-store bridge:
+  // keep the explicit local-storage fallback.
   if (!isDesktopLocalMode() || !hasDesktopSecureStore()) {
+    writeLocalSettings(email, normalized);
     setSecureStorageEnabledForUser(email, false);
     return;
   }
 
-  if (!isSecureStorageEnabledForUser(email)) {
-    setSecureStorageEnabledForUser(email, false);
+  // If this user has opted into secure storage, preserve that choice.
+  // Chat.tsx calls this function whenever API-key state changes, so it must
+  // update Keychain rather than clearing the secure entry.
+  if (isSecureStorageEnabledForUser(email)) {
+    const result = await persistApiKeysSecurelyForUser(email, normalized);
+    if (result.ok) return;
+
+    // persistApiKeysSecurelyForUser already performs the documented local
+    // fallback and disables the secure flag if Keychain is unavailable.
     return;
   }
 
-  try {
-    await window.desktop!.secureStore!.clearApiKeys(email);
-  } catch {}
-
-  setSecureStorageEnabledForUser(email, false);
+  // User has not opted into secure storage.
+  writeLocalSettings(email, normalized);
 }
 
 export async function persistApiKeysSecurelyForUser(
