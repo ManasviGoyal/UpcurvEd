@@ -859,6 +859,7 @@ DIAGRAM_SYSTEM = _with_artifact_safety("""\
       1200 x 800 unless another aspect ratio materially fits the content better.
     - Include a short <title> and useful <desc> for accessibility.
     - Keep important content comfortably inside the viewBox with visible outer margins.
+    - Never place captions or footnotes against the canvas edge.
     - Major content boxes/cards MUST NOT overlap one another. Leave at least about 36 px between
       neighboring major boxes and at least 24 px between text and unrelated shapes.
     - Never place multiple wide cards at x-positions that cause them to cover each other.
