@@ -78,7 +78,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { buildDownloadFilename } from "@/lib/downloadName";
 import { isDesktopLocalMode } from "@/lib/runtime";
-import { clearApiKeysForUser, persistApiKeysForUser } from "@/lib/secureKeys";
+import { clearApiKeysForUser, loadApiKeysForUser, persistApiKeysForUser } from "@/lib/secureKeys";
 import {
   apiKeysChanged,
   apiKeysFingerprint,
@@ -145,82 +145,6 @@ const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, heigh
   );
 };
 
-
-interface DiagramFrameProps {
-  svgCode: string;
-  title?: string;
-  className?: string;
-}
-
-const DiagramFrame: FC<DiagramFrameProps> = ({ svgCode, title, className }) => {
-  const diagramUrl = useMemo(() => {
-    const blob = new Blob([svgCode], { type: "image/svg+xml" });
-    return URL.createObjectURL(blob);
-  }, [svgCode]);
-
-  useEffect(() => {
-    return () => URL.revokeObjectURL(diagramUrl);
-  }, [diagramUrl]);
-
-  return (
-    <div className={className || "flex h-full w-full items-center justify-center overflow-auto bg-white p-3"}>
-      <img
-        src={diagramUrl}
-        alt={title || "Educational diagram"}
-        className="max-h-full max-w-full object-contain"
-        draggable={false}
-      />
-    </div>
-  );
-};
-
-const svgToPngBlob = async (svgCode: string): Promise<Blob> => {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgCode, "image/svg+xml");
-  const svg = doc.documentElement;
-  if (!svg || svg.nodeName.toLowerCase() !== "svg" || doc.querySelector("parsererror")) {
-    throw new Error("The diagram SVG could not be read.");
-  }
-
-  const viewBox = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-  let width = viewBox.length === 4 && Number.isFinite(viewBox[2]) ? viewBox[2] : Number(svg.getAttribute("width"));
-  let height = viewBox.length === 4 && Number.isFinite(viewBox[3]) ? viewBox[3] : Number(svg.getAttribute("height"));
-  if (!Number.isFinite(width) || width <= 0) width = 1200;
-  if (!Number.isFinite(height) || height <= 0) height = 800;
-
-  // Export at document-friendly resolution while bounding memory use.
-  const scale = Math.min(2, 2400 / width, 1800 / height);
-  const outputWidth = Math.max(1, Math.round(width * Math.max(1, scale)));
-  const outputHeight = Math.max(1, Math.round(height * Math.max(1, scale)));
-  const sourceBlob = new Blob([svgCode], { type: "image/svg+xml" });
-  const sourceUrl = URL.createObjectURL(sourceBlob);
-
-  try {
-    const image = new Image();
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("The diagram could not be rendered as PNG."));
-      image.src = sourceUrl;
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = outputWidth;
-    canvas.height = outputHeight;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("PNG export is unavailable in this browser.");
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, outputWidth, outputHeight);
-    context.drawImage(image, 0, 0, outputWidth, outputHeight);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error("PNG export failed."))),
-        "image/png",
-      );
-    });
-  } finally {
-    URL.revokeObjectURL(sourceUrl);
-  }
-};
-
 const ImageAttachmentPreview: FC<{ file: File }> = ({ file }) => {
   const previewUrl = useMemo(() => URL.createObjectURL(file), [file]);
 
@@ -253,7 +177,7 @@ type GenerationSelection =
   | "podcast_debate"
   | "quiz"
   | "widget"
-  | "diagram";
+  | "flowchart";
 
 const GENERATION_SELECTION_LABELS: Record<GenerationSelection, string> = {
   video: "Video",
@@ -262,7 +186,7 @@ const GENERATION_SELECTION_LABELS: Record<GenerationSelection, string> = {
   podcast_debate: "Podcast (Debate)",
   quiz: "Quiz",
   widget: "Widget",
-  diagram: "Diagram",
+  flowchart: "Flowchart",
 };
 
 type MultimodalGenerationDiagnostics = GenerationDiagnostics & {
@@ -691,7 +615,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       case 'podcast': return 'podcast';
       case 'story': return 'story';
       case 'widget': return 'widget';
-      case 'diagram': return 'diagram';
+      case 'flowchart': return 'flowchart';
       case 'quiz': return 'quiz';
       default: return 'artifact';
     }
@@ -713,22 +637,6 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim() || fallback;
-    }
-  };
-
-  const plainTextFromSvg = (svg?: string, fallback = ''): string => {
-    const raw = String(svg || '').trim();
-    if (!raw) return fallback;
-    try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(raw, 'image/svg+xml');
-      if (doc.querySelector('parsererror')) return fallback;
-      const pieces = Array.from(doc.querySelectorAll('title, desc, text, tspan'))
-        .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim())
-        .filter(Boolean);
-      return pieces.join(' ').replace(/\s+/g, ' ').trim() || fallback;
-    } catch {
-      return fallback;
     }
   };
 
@@ -764,8 +672,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Cannot edit this video", description: "This video was generated before edit mode was available. Generate a new video to enable editing.", duration: 4000 });
       return;
     }
-    if ((kind === 'story' || kind === 'widget' || kind === 'diagram') && !msg.media?.widgetCode) {
-      toast({ title: "Cannot edit this artifact", description: kind === 'diagram' ? "The original SVG is missing. Regenerate it to enable editing." : "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
+    if ((kind === 'story' || kind === 'widget' || kind === 'flowchart') && !msg.media?.widgetCode) {
+      toast({ title: "Cannot edit this artifact", description: "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
       return;
     }
     if (kind === 'quiz' && !quizData && !msg?.quizData) {
@@ -959,17 +867,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return base.endsWith(".html") ? base : `${base}.html`;
   };
 
-  const svgFilenameFromTitle = (title?: string | null, fallback = "upcurved_diagram.svg") => {
-    const raw = String(title || fallback).replace(/\.svg$/i, "");
-    const base = raw
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 80) || "upcurved_diagram";
-    return `${base}.svg`;
-  };
-
-  type GenerationAction = "video" | "story" | "podcast" | "widget" | "diagram" | "quiz" | "edit";
+  type GenerationAction = "video" | "story" | "podcast" | "widget" | "flowchart" | "quiz" | "edit";
 
   const ensureLlmKey = (action: GenerationAction): boolean => {
     const normalized = normalizeApiKeys(apiKeys);
@@ -981,7 +879,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         story: "generate a story",
         podcast: "generate a podcast",
         widget: "generate a widget",
-        diagram: "generate a diagram",
+        flowchart: "generate a flowchart",
         quiz: "generate a quiz",
         edit: "edit this artifact",
       };
@@ -1144,12 +1042,41 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     () => apiKeysFingerprint(normalizedApiKeys),
     [normalizedApiKeys]
   );
+  const [apiKeysHydratedFor, setApiKeysHydratedFor] = useState<string>("");
 
-  // Persist every registered provider key, including OpenAI and OpenRouter.
+  // On a fresh renderer load (including Cmd+R), hydrate API keys from their
+  // configured storage before allowing the normal persistence effect to run.
+  // Without this gate, the initial empty React state can overwrite securely
+  // stored Keychain values before they have had a chance to load.
   useEffect(() => {
-    if (!user?.email) return;
-    void persistApiKeysForUser(user.email, normalizedApiKeys);
-  }, [user?.email, apiKeysPersistenceKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    const email = String(user?.email || "").trim();
+    if (!email) {
+      setApiKeysHydratedFor("");
+      return;
+    }
+
+    let cancelled = false;
+    setApiKeysHydratedFor("");
+
+    void (async () => {
+      const loaded = normalizeApiKeys(await loadApiKeysForUser(email));
+      if (cancelled) return;
+      setApiKeys(loaded);
+      setApiKeysHydratedFor(email);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.email]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist every registered provider key, including OpenAI and OpenRouter,
+  // but only after startup hydration has completed for this user.
+  useEffect(() => {
+    const email = String(user?.email || "").trim();
+    if (!email || apiKeysHydratedFor !== email) return;
+    void persistApiKeysForUser(email, normalizedApiKeys);
+  }, [user?.email, apiKeysHydratedFor, apiKeysPersistenceKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reusable caption utilities
   const srtToVtt = (srt: string) => {
@@ -1270,19 +1197,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (media.type === "widget" && media.widgetCode) {
       stopPlayback();
       const widgetDownloadUrl = toPlayableMediaUrl(media.url);
-      const artifactKind = normalizeArtifactKind(media, message);
-      const widgetDownloadFilename = media.downloadFilename || (
-        artifactKind === "diagram"
-          ? svgFilenameFromTitle(media.title, "upcurved_diagram.svg")
-          : htmlFilenameFromTitle(media.title, "upcurved_widget.html")
-      );
+      const widgetDownloadFilename = media.downloadFilename || htmlFilenameFromTitle(media.title, "upcurved_widget.html");
       setVideoUrl(null);
       setCurrentMediaMeta({
         artifactId: media.artifactId,
         gcsPath: media.gcsPath,
         type: "widget",
-        artifactKind,
-        title: media.title,
+        artifactKind: normalizeArtifactKind(media, message),
       });
       setVttUrl(null);
       setSrtText(null);
@@ -2973,7 +2894,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }
 
   async function generateWidgetFromPrompt(
-    artifactKind: "widget" | "diagram" = "widget",
+    artifactKind: "widget" | "flowchart" = "widget",
   ) {
     if (widgetLoading && widgetAbortRef.current) {
       widgetAbortRef.current.abort();
@@ -2982,13 +2903,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     const prompt = query.trim();
     const sourceFiles = [...uploadedFiles];
-    const isDiagram = artifactKind === "diagram";
-    const artifactName = isDiagram ? "Diagram" : "Widget";
+    const isFlowchart = artifactKind === "flowchart";
+    const artifactName = isFlowchart ? "Flowchart" : "Widget";
     if (!prompt && sourceFiles.length === 0) {
       toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
-    if (!ensureLlmKey(isDiagram ? "diagram" : "widget")) return;
+    if (!ensureLlmKey(isFlowchart ? "flowchart" : "widget")) return;
 
     let images: GenerationImagePayload[];
     try {
@@ -3039,7 +2960,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         sessionId: ensureChatSessionId(),
         jobId: makeJobId(),
       };
-      const endpoint = isDiagram ? "/diagram" : "/widget";
+      const endpoint = isFlowchart ? "/flowchart" : "/widget";
       console.debug(`POST ${endpoint}`, {
         ...body,
         images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })),
@@ -3058,22 +2979,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         return;
       }
 
-      const artifactSource = isDiagram ? data?.svg_code : data?.widget_html;
-      if (res.ok && data?.status === "ok" && artifactSource) {
+      if (res.ok && data?.status === "ok" && data?.widget_html) {
         const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
         const downloadUrl = toPlayableMediaUrl(data.download_url);
-        const downloadFilename = data.download_filename || (
-          isDiagram
-            ? svgFilenameFromTitle(`upcurved_diagram_${sourceLabel.slice(0, 50)}`)
-            : htmlFilenameFromTitle(`${artifactName}: ${sourceLabel.slice(0, 50)}`, "upcurved_widget.html")
+        const fallbackFilename = isFlowchart ? "upcurved_flowchart.html" : "upcurved_widget.html";
+        const downloadFilename = data.download_filename || htmlFilenameFromTitle(
+          `${artifactName}: ${sourceLabel.slice(0, 50)}`,
+          fallbackFilename,
         );
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'widget',
           artifactKind,
           url: downloadUrl,
-          // widgetCode is the persisted text-artifact source slot. For Diagram it contains
-          // validated standalone SVG instead of HTML.
-          widgetCode: artifactSource,
+          widgetCode: data.widget_html,
           title: `${artifactName}: ${sourceLabel.slice(0, 50)}`,
           downloadFilename,
           generationDiagnostics: normalizeGenerationDiagnostics(
@@ -3081,17 +2999,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ),
         };
         await processAndAddMessage(
-          isDiagram ? "✅ Diagram generated." : "✅ Interactive widget generated.",
+          isFlowchart ? "✅ Flowchart generated." : "✅ Interactive widget generated.",
           false,
           mediaAttachment,
           String(finalChatId),
         );
         setVideoUrl(null);
-        setCurrentMediaMeta({ type: 'widget', artifactKind, title: mediaAttachment.title });
+        setCurrentMediaMeta({ type: 'widget', artifactKind });
         setSrtText(null);
         setVttUrl(null);
         setSubtitleLang(undefined);
-        setWidgetHtml(artifactSource);
+        setWidgetHtml(data.widget_html);
         setHtmlDownloadUrl(downloadUrl || null);
         setHtmlDownloadFilename(downloadFilename || null);
       } else {
@@ -3099,7 +3017,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const friendly = formatGenerationError(
           `${artifactName} generation`,
           errorBody,
-          `${artifactName} response did not include ${isDiagram ? "svg_code" : "widget_html"}.`,
+          `${artifactName} response did not include widget_html.`,
         );
         await processAndAddMessage(friendly, false, undefined, persistedId);
       }
@@ -4101,8 +4019,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       case "widget":
         await generateWidgetFromPrompt("widget");
         return;
-      case "diagram":
-        await generateWidgetFromPrompt("diagram");
+      case "flowchart":
+        await generateWidgetFromPrompt("flowchart");
         return;
       default:
         return;
@@ -4271,15 +4189,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   async function handleQuizHtmlArtifactDirect(msg: any) {
     const media = msg.media;
     const kind = normalizeArtifactKind(media, msg);
-    if (!media?.widgetCode || (kind !== 'story' && kind !== 'widget' && kind !== 'diagram')) {
-      toast({ title: "Cannot generate quiz", description: "This artifact does not have readable content.", duration: 4000 });
+    if (!media?.widgetCode || (kind !== 'story' && kind !== 'widget')) {
+      toast({ title: "Cannot generate quiz", description: "This artifact does not have readable HTML content.", duration: 4000 });
       return;
     }
 
-    const transcript = (kind === 'diagram'
-      ? plainTextFromSvg(media.widgetCode, msg.content)
-      : plainTextFromHtml(media.widgetCode, msg.content)
-    ).slice(0, 14000);
+    const transcript = plainTextFromHtml(media.widgetCode, msg.content).slice(0, 14000);
     if (!transcript || transcript.length < 30) {
       toast({ title: "Cannot generate quiz", description: "There was not enough readable text in this artifact.", duration: 4000 });
       return;
@@ -4297,7 +4212,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     let persistedId: string | undefined;
 
     try {
-      const mediaTitle = media.title || (kind === 'story' ? 'story' : kind === 'diagram' ? 'diagram' : 'widget');
+      const mediaTitle = media.title || (kind === 'story' ? 'story' : 'widget');
       const userPrompt = `❓ Quiz from ${mediaTitle}`;
 
       persistedId = await ensurePersistedActiveChat(userPrompt);
@@ -4396,27 +4311,22 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(userEditMessage, true, undefined, chatIdForGeneration);
       setQuery("");
 
-      if (kind === 'widget' || kind === 'story' || kind === 'diagram') {
-        const originalSource = quotedMessage.media?.widgetCode || '';
-        if (!originalSource.trim()) {
-          toast({
-            title: "Cannot edit",
-            description: kind === 'diagram' ? "The original SVG source is missing." : "The original HTML source is missing.",
-            duration: 4000,
-          });
+      if (kind === 'widget' || kind === 'story' || kind === 'flowchart') {
+        const originalHtml = quotedMessage.media?.widgetCode || '';
+        if (!originalHtml.trim()) {
+          toast({ title: "Cannot edit", description: "The original HTML source is missing.", duration: 4000 });
           return;
         }
 
         setWidgetLoading(true);
         const controller = new AbortController();
         widgetAbortRef.current = controller;
-        const endpoint = kind === 'story' ? '/edit/story' : kind === 'diagram' ? '/edit/diagram' : '/edit/widget';
+        const endpoint = kind === 'story' ? '/edit/story' : '/edit/widget';
         const res = await apiFetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            // The shared edit request model calls this field original_html; Diagram sends SVG here.
-            original_html: originalSource,
+            original_html: originalHtml,
             edit_instructions: editInstructions,
             original_title: sourceTitle,
             keys: llmConfig.keys,
@@ -4430,37 +4340,34 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           signal: controller.signal,
         });
         const { data, raw } = await parseResponse(res);
-        const revisedSource = kind === 'diagram' ? data?.svg_code : data?.widget_html;
 
-        if (res.ok && data?.status === 'ok' && revisedSource) {
+        if (res.ok && data?.status === 'ok' && data?.widget_html) {
           const downloadUrl = toPlayableMediaUrl(data.download_url);
-          const downloadFilename = data.download_filename || (
-            kind === 'diagram'
-              ? svgFilenameFromTitle(`upcurved_edited_diagram_${sourceTitle}`)
-              : htmlFilenameFromTitle(
-                  `Edited ${artifactLabel(kind)}: ${sourceTitle}`,
-                  kind === 'story' ? 'upcurved_story.html' : 'upcurved_widget.html',
-                )
-          );
+          const fallbackName =
+            kind === 'story'
+              ? 'upcurved_story.html'
+              : kind === 'flowchart'
+              ? 'upcurved_flowchart.html'
+              : 'upcurved_widget.html';
+          const downloadFilename = data.download_filename || htmlFilenameFromTitle(`Edited ${artifactLabel(kind)}: ${sourceTitle}`, fallbackName);
           const titlePrefix =
             kind === 'story'
               ? 'Edited Story'
-              : kind === 'diagram'
-              ? 'Edited Diagram'
+              : kind === 'flowchart'
+              ? 'Edited Flowchart'
               : 'Edited Widget';
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
             artifactKind: kind as any,
             url: downloadUrl,
-            widgetCode: revisedSource,
+            widgetCode: data.widget_html,
             title: `${titlePrefix}: ${sourceTitle}`,
             downloadFilename,
-            generationDiagnostics: normalizeGenerationDiagnostics(data.generation_diagnostics),
           };
-          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : kind === 'diagram' ? 'Diagram' : 'Widget'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
+          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : kind === 'flowchart' ? 'Flowchart' : 'Widget'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
           setVideoUrl(null);
-          setCurrentMediaMeta({ type: 'widget', artifactKind: kind, title: mediaAttachment.title });
-          setWidgetHtml(revisedSource);
+          setCurrentMediaMeta({ type: 'widget', artifactKind: kind });
+          setWidgetHtml(data.widget_html);
           setHtmlDownloadUrl(downloadUrl || null);
           setHtmlDownloadFilename(downloadFilename || null);
         } else {
@@ -5150,16 +5057,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       .trim()
       .replace(/[^\w.\-]+/g, "_")
       .replace(/_+/g, "_");
-    if (/\.[a-z0-9]{2,6}$/i.test(cleaned)) return cleaned;
-    const fallbackExtension = String(fallback).match(/(\.[a-z0-9]{2,6})$/i)?.[1] || ".html";
-    return `${cleaned}${fallbackExtension}`;
+
+    return cleaned.endsWith(".html") ? cleaned : `${cleaned}.html`;
   };
 
   const handleHtmlDownload = async (downloadUrl?: string, filename?: string) => {
     if (!downloadUrl) {
       toast({
         title: "Download unavailable",
-        description: "No downloadable artifact file was found for this item.",
+        description: "No downloadable HTML file was found for this item.",
         duration: 4000,
       });
       return;
@@ -5175,7 +5081,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(
-        blob.type ? blob : new Blob([blob], { type: currentMediaMeta?.artifactKind === "diagram" ? "image/svg+xml" : "text/html;charset=utf-8" })
+        blob.type ? blob : new Blob([blob], { type: "text/html;charset=utf-8" })
       );
 
       const link = document.createElement("a");
@@ -5187,37 +5093,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     } catch (error) {
-      console.error("Artifact download failed", error);
+      console.error("HTML download failed", error);
       toast({
         title: "Download failed",
-        description: "The file could not be downloaded.",
-        duration: 5000,
-      });
-    }
-  };
-
-  const handleDiagramPngDownload = async () => {
-    if (!widgetHtml || currentMediaMeta?.artifactKind !== "diagram") return;
-    try {
-      const blob = await svgToPngBlob(widgetHtml);
-      const objectUrl = URL.createObjectURL(blob);
-      const svgName = sanitizeDownloadFilename(
-        htmlDownloadFilename || "upcurved_diagram.svg",
-        "upcurved_diagram.svg",
-      );
-      const pngName = svgName.replace(/\.svg$/i, ".png");
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = pngName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    } catch (error: any) {
-      console.error("Diagram PNG export failed", error);
-      toast({
-        title: "PNG export failed",
-        description: error?.message || "The diagram could not be converted to PNG.",
+        description: "The HTML file could not be downloaded.",
         duration: 5000,
       });
     }
@@ -5566,7 +5445,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             <div
                               className={`mt-3 bg-card border rounded-lg p-3 cursor-pointer hover:bg-accent transition-colors ${busy ? 'opacity-50 pointer-events-none' : ''}`}
                               onClick={() => { if (!busy && !podcastLoading && !quizLoading && !widgetLoading) void openMediaFromMessage(msg); }}
-                              title={normalizeArtifactKind(msg.media, msg) === "diagram" ? "Open diagram" : "Open widget"}
+                              title="Open widget"
                             >
                               <div className="flex items-center gap-3">
                                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${getThemeGradient(colorTheme)}`}>
@@ -5574,7 +5453,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <p className="font-medium text-sm truncate">
-                                    {msg.media.title || (normalizeArtifactKind(msg.media, msg) === "diagram" ? "Diagram" : "Interactive Widget")}
+                                    {msg.media.title || "Interactive Widget"}
                                   </p>
                                   <p className="text-xs text-muted-foreground">
                                     Click to open in right panel
@@ -6006,7 +5885,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     <option value="podcast_debate">Generate: Podcast (Debate)</option>
                     <option value="quiz">Generate: Quiz</option>
                     <option value="widget">Generate: Widget</option>
-                    <option value="diagram">Generate: Diagram</option>
+                    <option value="flowchart">Generate: Flowchart</option>
                   </select>
                 )}
                 <select
@@ -6040,23 +5919,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             onContextMenu={(e) => e.preventDefault()}
           >
             {widgetHtml ? (
-              currentMediaMeta?.artifactKind === "diagram" ? (
-                <DiagramFrame
-                  svgCode={widgetHtml}
-                  className="flex h-full w-full items-center justify-center overflow-auto rounded-xl bg-white p-3"
-                  title={currentMediaMeta?.title || "Educational diagram"}
-                />
-              ) : (
-                <WidgetFrame
-                  widgetCode={widgetHtml}
-                  className="w-full h-full rounded-xl border-0"
-                  title={
-                    currentMediaMeta?.artifactKind === "story"
-                      ? "Story"
-                      : "Interactive Widget"
-                  }
-                />
-              )
+              <WidgetFrame
+                widgetCode={widgetHtml}
+                className="w-full h-full rounded-xl border-0"
+                title={
+                  currentMediaMeta?.artifactKind === "flowchart"
+                    ? "Flowchart"
+                    : currentMediaMeta?.artifactKind === "story"
+                    ? "Story"
+                    : "Interactive Widget"
+                }
+              />
             ) : !videoUrl ? (
               <div className="text-center p-4">
                 {busy || podcastLoading || widgetLoading ? (
@@ -6073,7 +5946,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      {busy ? "Rendering video…" : widgetLoading ? (generationType === "diagram" ? "Generating diagram…" : "Generating widget…") : "Generating podcast…"}
+                      {busy ? "Rendering video…" : widgetLoading ? (generationType === "flowchart" ? "Generating flowchart…" : "Generating widget…") : "Generating podcast…"}
                     </p>
                   </div>
                 ) : apiError ? (
@@ -6180,28 +6053,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           </Card>
 
           {widgetHtml && htmlDownloadUrl && (
-            <div className="flex flex-wrap justify-end gap-2">
+            <div className="flex justify-end">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => handleHtmlDownload(
-                  htmlDownloadUrl,
-                  htmlDownloadFilename || (currentMediaMeta?.artifactKind === "diagram" ? "upcurved_diagram.svg" : "upcurved_export.html"),
-                )}
+                onClick={() => handleHtmlDownload(htmlDownloadUrl, htmlDownloadFilename || "upcurved_export.html")}
               >
                 <Download className="w-4 h-4 mr-2" />
-                {currentMediaMeta?.artifactKind === "diagram" ? "Download SVG" : "Download HTML"}
+                Download HTML
               </Button>
-              {currentMediaMeta?.artifactKind === "diagram" && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleDiagramPngDownload()}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Download PNG
-                </Button>
-              )}
             </div>
           )}
 
