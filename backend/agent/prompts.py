@@ -945,45 +945,31 @@ DIAGRAM_SYSTEM = _with_artifact_safety("""\
     Return ONLY the complete <svg>...</svg> document. No markdown, HTML wrapper, JavaScript,
     commentary, or text outside the SVG.
 
-    Choose the visual structure that best fits the learner request instead of forcing every topic
-    into a literal flowchart. Suitable structures include:
-    - process / flow diagram
-    - comparison diagram
-    - hierarchy / tree
-    - concept map
-    - timeline
-    - cycle
-    - cause-and-effect diagram
-    - simple labeled educational schematic
+    Choose the visual structure that best fits the learner request rather than forcing every
+    topic into a flowchart. Good options include a process/flow, comparison, hierarchy/tree,
+    concept map, timeline, cycle, cause-and-effect diagram, or simple labeled schematic.
 
     Teaching design:
     - Communicate one clear learning idea visually.
     - Use concise labels and short supporting phrases rather than paragraphs.
-    - For comparisons, prefer distinct non-overlapping columns/cards and do not invent directional
-      arrows when sequence is not meaningful.
-    - For processes, use directional arrows and a clear start-to-finish reading order.
-    - For hierarchies and concept maps, make parent/child or conceptual relationships visually
-      unambiguous.
-    - Use color, grouping, position, and connectors to clarify meaning, not merely decorate.
-    - Keep the result useful as a standalone image that can be inserted into documents or slides.
+    - Match the structure to the meaning: arrows for real sequence/process, distinct groups for
+      comparisons, and clear parent/child or conceptual relationships for maps and hierarchies.
+    - Use color, grouping, position, and connectors to clarify meaning rather than decorate.
+    - Keep the result useful as a standalone image for documents or slides.
 
     SVG/layout requirements:
-    - Use a viewBox and make the artwork self-contained. Prefer a landscape canvas around
-      1200 x 800 unless another aspect ratio materially fits the content better.
+    - Use a viewBox and make the artwork self-contained. Prefer roughly 1200 x 800 landscape
+      unless another aspect ratio materially fits the content better.
     - Include a short <title> and useful <desc> for accessibility.
-    - Keep important content comfortably inside the viewBox with visible outer margins.
-    - Never place captions or footnotes against the canvas edge.
-    - Major content boxes/cards MUST NOT overlap one another. Leave at least about 36 px between
-      neighboring major boxes and at least 24 px between text and unrelated shapes.
-    - Never place multiple wide cards at x-positions that cause them to cover each other.
-    - Keep text inside its own node/card. Wrap long labels with multiple <tspan> rows instead of
-      letting text run into neighboring content.
+    - Keep all important content comfortably inside the canvas with visible outer margins.
+      Never place captions or footnotes against the canvas edge.
+    - Keep major content groups visually separate with comfortable spacing between neighboring
+      boxes/cards. Use explicit x/y positions for major groups when practical.
+    - Keep text inside its own group and wrap long labels with multiple <tspan> rows.
     - Use readable document-scale text: generally at least 20 px for body labels and 26 px for
       primary node titles on a 1200-wide canvas.
-    - Avoid large unused blank areas; size and place the main diagram to use the canvas well.
-    - Use simple system fonts such as Arial, Helvetica, or sans-serif.
-    - Prefer 3-6 major visual groups; use more only when the topic genuinely requires it.
-    - Use explicit x/y coordinates for major cards when possible so spacing is easy to verify.
+    - Avoid large unused blank areas. Prefer 3-6 major visual groups unless the topic genuinely
+      requires more. Use simple system fonts such as Arial, Helvetica, or sans-serif.
 
     Static/safety requirements:
     - No interaction, animation, hover states, buttons, forms, or dynamic explanation panels.
@@ -991,13 +977,11 @@ DIAGRAM_SYSTEM = _with_artifact_safety("""\
       event-handler attributes, external URLs, external fonts/assets, data URLs, CSS imports,
       network access, or embedded HTML.
     - Allowed drawing primitives are ordinary SVG shapes/text/groups/paths plus safe defs such as
-      markers, gradients, and clip paths.
-    - Do not depend on CSS or resources outside the SVG. Inline presentation attributes and safe
-      inline style values are allowed.
+      markers, gradients, and clip paths. Do not depend on resources outside the SVG.
 
-    Before returning, silently inspect the full SVG for clipped text, overlapping major boxes,
-    crossing labels, connectors through text, and excessive whitespace. Correct those issues
-    before output.
+    Before returning, silently inspect the full SVG for clipped text, overlapping major groups,
+    crossing labels, connectors through text, captions too close to edges, and excessive
+    whitespace. Correct obvious layout problems before output.
 """)
 
 

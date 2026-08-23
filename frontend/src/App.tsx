@@ -157,14 +157,13 @@ const AppContent = () => {
     window.location.assign("/home");
   };
 
-  // Persist local desktop profile so refresh keeps user context.
+  // Persist the local desktop profile only after a user has been hydrated.
+  // On renderer startup React begins with user === null; deleting app.localUser in that
+  // transient state races the desktop bootstrap below and resets a saved display name to
+  // "Local User" on Cmd+R. Explicit logout/reset flows already remove the key themselves.
   useEffect(() => {
-    if (!desktopLocal) return;
+    if (!desktopLocal || !user) return;
     try {
-      if (!user) {
-        localStorage.removeItem(LOCAL_USER_KEY);
-        return;
-      }
       localStorage.setItem(
         LOCAL_USER_KEY,
         JSON.stringify({

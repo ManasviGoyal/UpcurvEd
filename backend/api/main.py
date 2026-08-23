@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 import xml.etree.ElementTree as ET
@@ -146,6 +147,7 @@ _DESKTOP_STATE_DIR = pathlib.Path(
     os.environ.get("UPCURVED_DESKTOP_STATE_DIR", ".desktop-state")
 )
 _DESKTOP_STATE_FILE = _DESKTOP_STATE_DIR / "desktop_store.json"
+_DESKTOP_STATE_SAVE_LOCK = threading.RLock()
 
 
 def _now_ms() -> int:
@@ -422,20 +424,34 @@ def _load_desktop_store() -> None:
 def _save_desktop_store() -> None:
     if not DESKTOP_LOCAL_MODE:
         return
+
+    tmp: pathlib.Path | None = None
     try:
-        _DESKTOP_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _DESKTOP_STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(_DESKTOP_STORE, ensure_ascii=True),
-            encoding="utf-8",
-        )
-        tmp.replace(_DESKTOP_STATE_FILE)
+        # FastAPI can service several desktop chat requests concurrently. Serialize file
+        # replacement and give every write its own temporary path so one request cannot
+        # move another request's shared desktop_store.tmp out from under it.
+        with _DESKTOP_STATE_SAVE_LOCK:
+            _DESKTOP_STATE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = _DESKTOP_STATE_FILE.with_name(
+                f"desktop_store.{os.getpid()}.{threading.get_ident()}.{uuid4().hex}.tmp"
+            )
+            tmp.write_text(
+                json.dumps(_DESKTOP_STORE, ensure_ascii=True),
+                encoding="utf-8",
+            )
+            os.replace(tmp, _DESKTOP_STATE_FILE)
     except Exception as exc:
         logger.warning(
             "Failed to persist desktop state to %s: %s",
             _DESKTOP_STATE_FILE,
             exc,
         )
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 if DESKTOP_LOCAL_MODE:
@@ -2651,6 +2667,10 @@ def _major_svg_rectangles(
     return boxes
 
 
+class _DiagramLayoutError(RuntimeError):
+    """Non-safety SVG quality issue that should be repairable but not fatal."""
+
+
 def _validate_svg_layout(root: ET.Element) -> None:
     view_x, view_y, view_w, view_h = _svg_viewbox(root)
     boxes = _major_svg_rectangles(root)
@@ -2666,7 +2686,7 @@ def _validate_svg_layout(root: ET.Element) -> None:
             or x + width > view_x + view_w + 8
             or y + height > view_y + view_h + 8
         ):
-            raise RuntimeError("A major diagram box extends outside the SVG viewBox.")
+            raise _DiagramLayoutError("A major diagram box extends outside the SVG viewBox.")
         filtered.append(box)
 
     for index, first in enumerate(filtered):
@@ -2677,12 +2697,16 @@ def _validate_svg_layout(root: ET.Element) -> None:
             overlap_h = min(ay + ah, by + bh) - max(ay, by)
             if overlap_w <= 4 or overlap_h <= 4:
                 continue
-            raise RuntimeError(
+            raise _DiagramLayoutError(
                 "Major diagram boxes overlap. Re-space the nodes/cards so they are visually separate."
             )
 
 
-def _extract_safe_svg_document(raw: str) -> str:
+def _extract_safe_svg_document(
+    raw: str,
+    *,
+    allow_layout_warnings: bool = False,
+) -> str:
     text = _strip_llm_code_fence(raw)
     low = text.lower()
     start = low.find("<svg")
@@ -2727,7 +2751,12 @@ def _extract_safe_svg_document(raw: str) -> str:
             if name == "style" and ("url(" in lowered or "expression(" in lowered):
                 raise RuntimeError("Diagram SVG contains an unsafe style reference.")
 
-    _validate_svg_layout(root)
+    try:
+        _validate_svg_layout(root)
+    except _DiagramLayoutError:
+        if not allow_layout_warnings:
+            raise
+
     # Keep the model's original SVG source so formatting/text remain intact after validation.
     return svg
 
@@ -2890,9 +2919,15 @@ def _diagram_svg_with_single_repair(
     provider: str,
     model: str | None,
     api_key: str,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, bool]:
+    """Validate a diagram, repair once, and degrade gracefully on layout-only issues.
+
+    Security/format problems remain hard failures. Layout checks are quality heuristics: after
+    one focused repair attempt, a still-safe SVG is returned even if the heuristic still flags
+    spacing. The learner can then use Edit instead of losing the entire generation.
+    """
     try:
-        return _extract_safe_svg_document(raw_svg), False
+        return _extract_safe_svg_document(raw_svg), False, False
     except Exception as first_error:
         repaired = call_llm(
             provider=provider,  # type: ignore[arg-type]
@@ -2907,7 +2942,20 @@ def _diagram_svg_with_single_repair(
             max_tokens=9000,
             max_output_tokens=9000,
         )
-        return _extract_safe_svg_document(repaired), True
+        try:
+            return _extract_safe_svg_document(repaired), True, False
+        except _DiagramLayoutError as layout_error:
+            # The repaired artifact is parsed and safety-checked again below. Only the
+            # heuristic layout warning is relaxed; malformed/unsafe SVG still raises.
+            safe_repaired = _extract_safe_svg_document(
+                repaired,
+                allow_layout_warnings=True,
+            )
+            logger.warning(
+                "diagram repair still has a layout warning; returning safe SVG: %s",
+                layout_error,
+            )
+            return safe_repaired, True, True
 
 @app.post("/widget")
 def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
@@ -3208,16 +3256,20 @@ def diagram(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                     "generation_diagnostics": generation_diagnostics,
                 }
 
-            svg_code, repaired = _diagram_svg_with_single_repair(
+            svg_code, repaired, layout_warning = _diagram_svg_with_single_repair(
                 raw_svg=raw_svg,
                 provider=provider,
                 model=model,
                 api_key=api_key,
             )
+            recovery_stages = ["diagram_svg_repair"] if repaired else []
+            if layout_warning:
+                recovery_stages.append("diagram_layout_warning")
             diagnostics_seed = {
                 **metadata,
                 "quality_status": "recovered" if repaired else "standard",
-                "recovery_stages": ["diagram_svg_repair"] if repaired else [],
+                "recovery_stages": recovery_stages,
+                "diagram_layout_warning": layout_warning,
             }
             download_meta = _diagram_download_payload(
                 uid=uid,
@@ -3240,9 +3292,10 @@ def diagram(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 default_image_prompt_used=default_image_prompt_used,
             )
             logger.info(
-                "/diagram completed: ok, svg_len=%d repaired=%s",
+                "/diagram completed: ok, svg_len=%d repaired=%s layout_warning=%s",
                 len(svg_code),
                 repaired,
+                layout_warning,
             )
             return {
                 "ok": True,
@@ -3398,7 +3451,12 @@ def edit_diagram_endpoint(
                     status_code=400,
                     detail=f"Missing API key for '{provider}'",
                 )
-            original_svg = _extract_safe_svg_document(body.original_html)
+            # A previously delivered diagram may carry a non-fatal layout warning. It must
+            # remain editable; safety/format validation is still enforced.
+            original_svg = _extract_safe_svg_document(
+                body.original_html,
+                allow_layout_warnings=True,
+            )
             if not body.edit_instructions or not body.edit_instructions.strip():
                 raise HTTPException(status_code=400, detail="edit_instructions is required")
 
@@ -3418,7 +3476,7 @@ def edit_diagram_endpoint(
                 max_tokens=10000,
                 max_output_tokens=10000,
             )
-            svg_code, repaired = _diagram_svg_with_single_repair(
+            svg_code, repaired, layout_warning = _diagram_svg_with_single_repair(
                 raw_svg=raw,
                 provider=provider,
                 model=model,
@@ -3431,9 +3489,13 @@ def edit_diagram_endpoint(
                 svg_text=svg_code,
                 job_id=job_id,
             )
+            recovery_stages = ["diagram_svg_repair"] if repaired else []
+            if layout_warning:
+                recovery_stages.append("diagram_layout_warning")
             diagnostics_seed = {
                 "quality_status": "recovered" if repaired else "standard",
-                "recovery_stages": ["diagram_svg_repair"] if repaired else [],
+                "recovery_stages": recovery_stages,
+                "diagram_layout_warning": layout_warning,
             }
             generation_diagnostics = _append_artifact_generation_audit(
                 generation_type="diagram",
