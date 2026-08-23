@@ -7,6 +7,7 @@ import { getFirebaseAuth, getGoogleProvider } from "@/firebase";
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { z } from "zod";
 import { isDesktopLocalMode } from "@/lib/runtime";
+import { useLanguage } from "@/lib/i18n";
 
 interface LoginPageProps {
   setView: (view: string) => void;
@@ -24,6 +25,7 @@ const passwordSchema = z.string()
   .regex(/[^A-Za-z0-9]/, "Password must contain at least 1 special character");
 
 export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps) => {
+  const { t } = useLanguage();
   const desktopLocal = isDesktopLocalMode();
   const [isLogin, setIsLogin] = useState(true);
   const [error, setError] = useState('');
@@ -185,16 +187,20 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
     <div className="flex items-center justify-center min-h-screen bg-secondary">
       <Card className="w-full max-w-sm p-8">
         <h2 className="text-2xl font-bold text-center mb-6">
-          {desktopLocal ? "Continue Locally" : (isLogin ? 'Welcome Back' : 'Create Account')}
+          {desktopLocal
+            ? t("login.continueLocally")
+            : isLogin
+              ? t("login.welcomeBack")
+              : t("login.createAccount")}
         </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           {(!isLogin || desktopLocal) && (
             <div>
-              <label className="text-sm font-medium">Name</label>
+              <label className="text-sm font-medium">{t("login.name")}</label>
               <Input
                 name="name"
                 type="text"
-                placeholder="Your Name"
+                placeholder={t("settingsPage.yourName")}
                 value={formData.name}
                 onChange={handleInputChange}
                 required={desktopLocal || !isLogin}
@@ -202,7 +208,7 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
             </div>
           )}
           <div>
-            <label className="text-sm font-medium">Email</label>
+            <label className="text-sm font-medium">{t("login.email")}</label>
             <Input
               name="email"
               type="email"
@@ -214,7 +220,7 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
           </div>
           {!desktopLocal && (
             <div>
-              <label className="text-sm font-medium">Password</label>
+              <label className="text-sm font-medium">{t("login.password")}</label>
               <Input
                 name="password"
                 type="password"
@@ -227,7 +233,7 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
           )}
           {!desktopLocal && !isLogin && (
             <div>
-              <label className="text-sm font-medium">Confirm Password</label>
+              <label className="text-sm font-medium">{t("login.confirmPassword")}</label>
               <Input
                 name="confirmPassword"
                 type="password"
@@ -240,7 +246,7 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
           )}
           {error && <p className="text-sm text-red-500">{error}</p>}
           <Button type="submit" className="w-full">
-            {desktopLocal ? "Continue" : (isLogin ? 'Sign In' : 'Sign Up')}
+            {desktopLocal ? t("login.continue") : isLogin ? t("login.signIn") : t("login.signUp")}
           </Button>
           {!desktopLocal && (
             <>
@@ -254,19 +260,19 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
               </div>
               <Button type="button" variant="outline" onClick={handleGoogleSignIn} className="w-full flex items-center justify-center gap-2 py-2 font-medium">
                 <GoogleIcon />
-                <span>Sign in with Google</span>
+                <span>{t("login.google")}</span>
               </Button>
             </>
           )}
         </form>
         {!desktopLocal && (
           <p className="text-center text-sm text-muted-foreground mt-6">
-            {isLogin ? "Don't have an account?" : "Already have an account?"}
+            {isLogin ? t("login.noAccount") : t("login.haveAccount")}
             <button
               onClick={() => { setIsLogin(!isLogin); setError(''); }}
               className="font-semibold text-primary hover:underline ml-1"
             >
-              {isLogin ? 'Sign Up' : 'Sign In'}
+              {isLogin ? t("login.signUp") : t("login.signIn")}
             </button>
           </p>
         )}

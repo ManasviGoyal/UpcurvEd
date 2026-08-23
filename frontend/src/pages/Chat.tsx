@@ -16,6 +16,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Sidebar } from "@/components/Sidebar";
+import { useLanguage, type Translate } from "@/lib/i18n";
+import { useJobProgress } from "@/hooks/useJobProgress";
 import { SettingsPage } from "@/pages/Settings";
 import { MediaPlayer } from "@/components/MediaPlayer";
 import { useSearchParams, useNavigate } from "react-router-dom";
@@ -46,6 +48,8 @@ import {
   Brain,
   Zap,
   ExternalLink,
+  ChevronLeft,
+  Eye,
 } from "lucide-react";
 import type {
   User,
@@ -338,16 +342,25 @@ type GenerationSelection =
   | "podcast_debate"
   | "story";
 
-const GENERATION_SELECTION_LABELS: Record<GenerationSelection, string> = {
-  static_worksheet: "Static Worksheet",
-  widget: "Interactive Worksheet",
-  diagram: "Diagram",
-  video: "Video",
-  quiz: "Multiple Choice Quiz",
-  podcast_single: "Podcast (Single)",
-  podcast_debate: "Podcast (Debate)",
-  story: "Story",
-};
+const GENERATION_SELECTIONS: GenerationSelection[] = [
+  "static_worksheet",
+  "widget",
+  "diagram",
+  "video",
+  "quiz",
+  "podcast_single",
+  "podcast_debate",
+  "story",
+];
+
+const AUDIENCE_LEVELS = [
+  "auto",
+  "early_learning",
+  "elementary",
+  "middle_school",
+  "high_school",
+  "university",
+] as const;
 
 type MultimodalGenerationDiagnostics = GenerationDiagnostics & {
   input_modality?: "text" | "image";
@@ -478,10 +491,20 @@ const humanizeDiagnosticToken = (value: string): string =>
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const compactTokenCount = (tokens: number): string => {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M tokens`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 1 : 2)}K tokens`;
-  return `${tokens} ${tokens === 1 ? "token" : "tokens"}`;
+const compactTokenCount = (tokens: number, t: Translate): string => {
+  // Abbreviated counts keep the Latin K/M suffixes: they are units, not words, and
+  // every locale we ship renders them that way in technical contexts.
+  if (tokens >= 1_000_000) {
+    return t("diag.tokens.other", {
+      count: `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M`,
+    });
+  }
+  if (tokens >= 1_000) {
+    return t("diag.tokens.other", {
+      count: `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 1 : 2)}K`,
+    });
+  }
+  return tokens === 1 ? t("diag.tokens.one") : t("diag.tokens.other", { count: tokens });
 };
 
 const compactEstimatedCost = (cost: number): string => {
@@ -502,6 +525,7 @@ const compactModelLabel = (diagnostics: MultimodalGenerationDiagnostics): string
 const GenerationDiagnosticsPanel: FC<{
   diagnostics?: MultimodalGenerationDiagnostics;
 }> = ({ diagnostics }) => {
+  const { t } = useLanguage();
   if (!diagnostics) return null;
 
   const firstLine: string[] = [];
@@ -512,26 +536,37 @@ const GenerationDiagnosticsPanel: FC<{
   if (modelLabel) firstLine.push(modelLabel);
   if (typeof diagnostics.llm_calls === "number") {
     firstLine.push(
-      `${diagnostics.llm_calls} model ${diagnostics.llm_calls === 1 ? "call" : "calls"}`,
+      diagnostics.llm_calls === 1
+        ? t("diag.modelCalls.one")
+        : t("diag.modelCalls.other", { count: diagnostics.llm_calls }),
     );
   }
   if (typeof diagnostics.total_tokens === "number" && diagnostics.total_tokens > 0) {
-    firstLine.push(compactTokenCount(diagnostics.total_tokens));
+    firstLine.push(compactTokenCount(diagnostics.total_tokens, t));
   }
   if (typeof diagnostics.estimated_cost_usd === "number") {
     if (diagnostics.pricing_complete) {
-      firstLine.push(`est. ${compactEstimatedCost(diagnostics.estimated_cost_usd)}`);
+      firstLine.push(
+        t("diag.est", { cost: compactEstimatedCost(diagnostics.estimated_cost_usd) }),
+      );
     } else if ((diagnostics.unpriced_calls || 0) > 0) {
       firstLine.push(
         diagnostics.estimated_cost_usd > 0
-          ? `known est. ${compactEstimatedCost(diagnostics.estimated_cost_usd)} · ${diagnostics.unpriced_calls} unpriced`
-          : `${diagnostics.unpriced_calls} ${diagnostics.unpriced_calls === 1 ? "call" : "calls"} unpriced`,
+          ? t("diag.knownEst", {
+              cost: compactEstimatedCost(diagnostics.estimated_cost_usd),
+              count: diagnostics.unpriced_calls || 0,
+            })
+          : (diagnostics.unpriced_calls === 1
+              ? t("diag.unpriced.one")
+              : t("diag.unpriced.other", { count: diagnostics.unpriced_calls || 0 })),
       );
     }
   }
   if (diagnostics.image_count) {
     sourceLine.push(
-      `${diagnostics.image_count} ${diagnostics.image_count === 1 ? "image" : "images"}`,
+      diagnostics.image_count === 1
+        ? t("diag.images.one")
+        : t("diag.images.other", { count: diagnostics.image_count }),
     );
     if (diagnostics.vision_mode === "helper") {
       const helperLabel = [
@@ -540,57 +575,61 @@ const GenerationDiagnosticsPanel: FC<{
           : "",
         diagnostics.vision_model || "",
       ].filter(Boolean).join(" · ");
-      sourceLine.push(helperLabel ? `Vision helper: ${helperLabel}` : "Vision helper");
+      sourceLine.push(
+        helperLabel ? t("diag.visionHelperWith", { label: helperLabel }) : t("diag.visionHelper"),
+      );
     } else if (diagnostics.vision_mode === "native") {
-      sourceLine.push("Native vision");
+      sourceLine.push(t("diag.nativeVision"));
     }
   }
 
   if (typeof diagnostics.total_scenes === "number") {
     secondLine.push(
-      `${diagnostics.total_scenes} ${diagnostics.total_scenes === 1 ? "scene" : "scenes"}`,
+      diagnostics.total_scenes === 1
+        ? t("diag.scenes.one")
+        : t("diag.scenes.other", { count: diagnostics.total_scenes }),
     );
   }
   if (diagnostics.creative_scenes) {
-    secondLine.push(`${diagnostics.creative_scenes} creative`);
+    secondLine.push(t("diag.creative", { count: diagnostics.creative_scenes }));
   }
 
   const outcome: string[] = [];
   if (diagnostics.quality_status === "failed") {
     outcome.push(
       diagnostics.failure_stage
-        ? `Failed at ${humanizeDiagnosticToken(diagnostics.failure_stage)}`
-        : "Generation failed",
+        ? t("diag.failedAt", { stage: humanizeDiagnosticToken(diagnostics.failure_stage) })
+        : t("diag.generationFailed"),
     );
   } else if (diagnostics.component_fallbacks) {
     outcome.push(
-      `${diagnostics.component_fallbacks} ${
-        diagnostics.component_fallbacks === 1 ? "scene used" : "scenes used"
-      } fallback`,
+      diagnostics.component_fallbacks === 1
+        ? t("diag.fallback.one")
+        : t("diag.fallback.other", { count: diagnostics.component_fallbacks }),
     );
   } else if (diagnostics.simplified_scenes) {
     outcome.push(
-      `${diagnostics.simplified_scenes} ${
-        diagnostics.simplified_scenes === 1 ? "scene simplified" : "scenes simplified"
-      }`,
+      diagnostics.simplified_scenes === 1
+        ? t("diag.simplified.one")
+        : t("diag.simplified.other", { count: diagnostics.simplified_scenes }),
     );
   } else {
-    if (diagnostics.plan_repaired_by_model) outcome.push("Plan repaired");
+    if (diagnostics.plan_repaired_by_model) outcome.push(t("diag.planRepaired"));
     if (diagnostics.repaired_scenes) {
       outcome.push(
-        `${diagnostics.repaired_scenes} ${
-          diagnostics.repaired_scenes === 1 ? "scene repaired" : "scenes repaired"
-        }`,
+        diagnostics.repaired_scenes === 1
+          ? t("diag.repaired.one")
+          : t("diag.repaired.other", { count: diagnostics.repaired_scenes }),
       );
     }
-    if (outcome.length === 0) outcome.push("No repair or fallback");
+    if (outcome.length === 0) outcome.push(t("diag.noRepair"));
   }
   secondLine.push(outcome.join(" · "));
 
   return (
     <div
       className="mt-3 border-t border-border/70 pt-2 text-[11px] text-muted-foreground"
-      aria-label="Generation diagnostics"
+      aria-label={t("chat.diagnostics")}
     >
       {firstLine.length > 0 && <p>{firstLine.join(" · ")}</p>}
       {sourceLine.length > 0 && <p className="mt-0.5">{sourceLine.join(" · ")}</p>}
@@ -612,6 +651,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   apiKeys,
   setApiKeys,
 }: ChatInterfaceProps) => {
+  const { t } = useLanguage();
   const desktopLocal = isDesktopLocalMode();
   const { toast } = useToast();
   const currentUser = users.find((u) => u.email === user.email);
@@ -692,7 +732,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const [htmlDownloadFilename, setHtmlDownloadFilename] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [videoProgress, setVideoProgress] = useState(0); // 0-100 visual progress during render
+  const [videoProgress, setVideoProgress] = useState(0); // fallback ramp when the backend reports nothing
+  const [activeVideoJobId, setActiveVideoJobId] = useState<string | null>(null);
+  // Mobile only: the artifact pane is a full-screen overlay rather than a column.
+  const [mobileArtifactOpen, setMobileArtifactOpen] = useState(false);
+  // Real stages from the backend. `percent` stays null until it reports, and the
+  // synthetic ramp covers that gap and any generation type without instrumentation.
+  const jobProgress = useJobProgress(activeVideoJobId, busy);
   const videoProgressTimer = useRef<number | null>(null);
   // Podcast generation visual progress (mirrors video progress UX)
   const [podcastProgress, setPodcastProgress] = useState(0);
@@ -717,7 +763,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   // Minimal inline typing indicator
   const TypingDots = () => (
-    <div className="flex items-center gap-1 text-muted-foreground select-none py-2" aria-label="Assistant is typing">
+    <div className="flex items-center gap-1 text-muted-foreground select-none py-2" aria-label={t("chat.typing")}>
       <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
       <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
       <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -737,12 +783,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setCopiedMessageId(messageId);
       setTimeout(() => setCopiedMessageId(null), 2000);
       toast({
-        title: "Copied to clipboard",
+        title: t("toast.copied"),
         duration: 2000,
       });
     } catch (err) {
       toast({
-        title: "Failed to copy",
+        title: t("toast.copyFailed"),
         variant: "destructive",
         duration: 2000,
       });
@@ -768,17 +814,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return undefined;
   };
 
+  // Lower-case nouns meant to sit inside a sentence ("Edit this video"), which is
+  // why they are separate keys from the Title Case names in the generation picker.
   const artifactLabel = (kind?: ArtifactKind) => {
     switch (kind) {
-      case 'video': return 'video';
+      case 'video': return t('artifact.video');
       case 'audio':
-      case 'podcast': return 'podcast';
-      case 'story': return 'story';
-      case 'widget': return 'interactive worksheet';
-      case 'static_worksheet': return 'static worksheet';
-      case 'diagram': return 'diagram';
-      case 'quiz': return 'quiz';
-      default: return 'artifact';
+      case 'podcast': return t('artifact.podcast');
+      case 'story': return t('artifact.story');
+      case 'widget': return t('artifact.widget');
+      case 'static_worksheet': return t('artifact.static_worksheet');
+      case 'diagram': return t('artifact.diagram');
+      case 'quiz': return t('artifact.quiz');
+      default: return t('artifact.default');
     }
   };
 
@@ -842,19 +890,19 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   ) => {
     const kind = kindOverride || normalizeArtifactKind(msg?.media, msg) || (quizData ? 'quiz' : undefined);
     if (!kind) {
-      toast({ title: "Cannot edit", description: "This artifact does not have enough information to edit.", duration: 4000 });
+      toast({ title: t("toast.cannotEdit"), description: t("toast.notEnoughInfoToEdit"), duration: 4000 });
       return;
     }
     if (kind === 'video' && !msg.media?.sceneCode) {
-      toast({ title: "Cannot edit this video", description: "This video was generated before edit mode was available. Generate a new video to enable editing.", duration: 4000 });
+      toast({ title: t("toast.cannotEditVideo"), description: t("toast.videoTooOldToEdit"), duration: 4000 });
       return;
     }
     if ((kind === 'story' || kind === 'widget' || kind === 'static_worksheet' || kind === 'diagram') && !msg.media?.widgetCode) {
-      toast({ title: "Cannot edit this artifact", description: kind === 'diagram' ? "The original SVG is missing. Regenerate it to enable editing." : "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
+      toast({ title: t("toast.cannotEditArtifact"), description: kind === 'diagram' ? "The original SVG is missing. Regenerate it to enable editing." : "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
       return;
     }
     if (kind === 'quiz' && !quizData && !msg?.quizData) {
-      toast({ title: "Cannot edit this quiz", description: "The quiz data is missing. Regenerate the quiz to enable editing.", duration: 4000 });
+      toast({ title: t("toast.cannotEditQuiz"), description: t("toast.quizDataMissing"), duration: 4000 });
       return;
     }
 
@@ -1074,7 +1122,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         edit: "edit this artifact",
       };
       toast({
-        title: "Missing API key",
+        title: t("toast.missingApiKey"),
         description: `Add your ${providerDisplayName(provider)} API key in Settings to ${actionText[action]}.`,
         duration: 6000,
       });
@@ -2294,7 +2342,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       updateUserChats(updatedChats);
     } catch (err) {
       toast({
-        title: "Failed to update sharing",
+        title: t("toast.sharingUpdateFailed"),
         variant: "destructive",
         duration: 2000,
       });
@@ -2628,7 +2676,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (validation.rejected.length > 0) {
       const first = validation.rejected[0];
       toast({
-        title: "Image not attached",
+        title: t("toast.imageNotAttached"),
         description: `${first.file.name || "Image"}: ${first.reason}`,
         duration: 5000,
       });
@@ -2698,7 +2746,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return await prepareGenerationImages(files);
     } catch (error: any) {
       toast({
-        title: "Could not prepare image",
+        title: t("toast.couldNotPrepareImage"),
         description: error?.message || "Please try attaching the image again.",
         duration: 5000,
       });
@@ -2729,7 +2777,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const prompt = query.trim();
     const sourceFiles = [...uploadedFiles];
     if (!prompt && sourceFiles.length === 0) {
-      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
+      toast({ title: t("toast.needInput"), description: t("toast.addTextFirst"), duration: 4000 });
       return;
     }
     if (!ensureLlmKey("podcast")) return;
@@ -2746,7 +2794,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const persistedId = await ensurePersistedActiveChat(chatSeed);
     const finalChatId = persistedId || activeChatId;
     if (!finalChatId) {
-      toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+      toast({ title: t("toast.unableToStartChat"), description: t("toast.signInAgain"), duration: 4000 });
       return;
     }
     setActiveChatId(finalChatId);
@@ -2779,7 +2827,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     // Use the provided chat ID or fall back to activeChatId
     let currentChatId = chatIdOverride || activeChatId;
     if (currentChatId == null) {
-      setApiError("No active chat selected.");
+      setApiError(t("chat.msg.noActiveChat"));
       return;
     }
     // Ensure activeChatId is set
@@ -2850,7 +2898,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         // Use the same chat ID we started with to ensure message goes to correct chat
         await processAndAddMessage(
-          requestedMode === "debate" ? "✅ Debate podcast generated." : "✅ Podcast generated.",
+          requestedMode === "debate" ? `✅ ${t("chat.msg.generated", { kind: t("artifact.debatePodcast") })}` : `✅ ${t("chat.msg.generated", { kind: t("artifact.podcast") })}`,
           false,
           mediaAttachment,
           chatIdForGeneration
@@ -2870,7 +2918,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch (err: any) {
       if (err?.name === "AbortError") {
         setApiError(null);
-        await processAndAddMessage("⏹️ Canceled podcast generation.", false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`⏹️ ${t("chat.msg.canceled", { kind: t("artifact.podcast") })}`, false, undefined, chatIdForGeneration);
         aborted = true;
       } else {
         const body = thrownErrorBody(err);
@@ -2879,7 +2927,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           : (err?.message || "Request failed");
         const friendly = body
           ? formatGenerationError("Podcast generation", body, networkMsg)
-          : `❌ Network error.\n\nReason: ${networkMsg}`;
+          : `❌ ${t("chat.msg.networkError")}\n\n${t("chat.msg.reason", { reason: networkMsg })}`;
         setApiError(friendly);
         await processAndAddMessage(friendly, false, undefined, chatIdForGeneration);
       }
@@ -2911,7 +2959,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const prompt = (promptOverride ?? query).trim();
     const sourceFiles = [...uploadedFiles];
     if (!prompt && sourceFiles.length === 0) {
-      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
+      toast({ title: t("toast.needInput"), description: t("toast.addTextFirst"), duration: 4000 });
       return;
     }
     if (!ensureLlmKey("video")) return;
@@ -2928,7 +2976,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const persistedId = await ensurePersistedActiveChat(chatSeed);
     const finalChatId = persistedId || activeChatId;
     if (!finalChatId) {
-      toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+      toast({ title: t("toast.unableToStartChat"), description: t("toast.signInAgain"), duration: 4000 });
       return;
     }
     setActiveChatId(finalChatId);
@@ -2987,7 +3035,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const currentPrompt = (query || "").trim();
     const sourceFiles = [...uploadedFiles];
     if (!currentPrompt && sourceFiles.length === 0) {
-      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
+      toast({ title: t("toast.needInput"), description: t("toast.addTextFirst"), duration: 4000 });
       return;
     }
     if (!ensureLlmKey("quiz")) return;
@@ -3008,7 +3056,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistedId = await ensurePersistedActiveChat(chatSeed);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
-        toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+        toast({ title: t("toast.unableToStartChat"), description: t("toast.signInAgain"), duration: 4000 });
         return;
       }
       setActiveChatId(finalChatId);
@@ -3051,7 +3099,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const clarificationMessage = clarificationMessageFrom(data);
       if (clarificationMessage) {
         setApiError(null);
-        await processAndAddMessage(clarificationMessage, false, undefined, quizChatId || persistedId);
+        // activeChatId can be numeric for local drafts; the override is a string id.
+        await processAndAddMessage(clarificationMessage, false, undefined, String(quizChatId || persistedId));
         return;
       }
       if (quizChatId && res.ok && data?.status === "ok" && data?.quiz?.questions?.length) {
@@ -3082,7 +3131,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       }
     } catch (err: any) {
       if (err?.name === "AbortError") {
-        await processAndAddMessage("⏹️ Canceled quiz generation.", false, undefined, persistedId);
+        await processAndAddMessage(`⏹️ ${t("chat.msg.canceled", { kind: t("artifact.quiz") })}`, false, undefined, persistedId);
       } else {
         const body = thrownErrorBody(err);
         await processAndAddMessage(formatGenerationError("Quiz generation", body, err?.message), false, undefined, persistedId);
@@ -3107,7 +3156,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const isStaticWorksheet = artifactKind === "static_worksheet";
     const artifactName = isDiagram ? "Diagram" : isStaticWorksheet ? "Static Worksheet" : "Interactive Worksheet";
     if (!prompt && sourceFiles.length === 0) {
-      toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
+      toast({ title: t("toast.needInput"), description: t("toast.addTextFirst"), duration: 4000 });
       return;
     }
     if (!ensureLlmKey(isDiagram ? "diagram" : isStaticWorksheet ? "static_worksheet" : "widget")) return;
@@ -3134,7 +3183,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistedId = await ensurePersistedActiveChat(chatSeed);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
-        toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+        toast({ title: t("toast.unableToStartChat"), description: t("toast.signInAgain"), duration: 4000 });
         return;
       }
       setActiveChatId(finalChatId);
@@ -3207,7 +3256,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ),
         };
         await processAndAddMessage(
-          isDiagram ? "✅ Diagram generated." : isStaticWorksheet ? "✅ Static worksheet generated." : "✅ Interactive worksheet generated.",
+          isDiagram ? `✅ ${t("chat.msg.generated", { kind: t("artifact.diagram") })}` : isStaticWorksheet ? `✅ ${t("chat.msg.generated", { kind: t("artifact.static_worksheet") })}` : `✅ ${t("chat.msg.generated", { kind: t("artifact.widget") })}`,
           false,
           mediaAttachment,
           String(finalChatId),
@@ -3375,8 +3424,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setUsers(users.filter((u) => u.email !== user.email));
       setUser(null);
       toast({
-        title: "Local profile cleared",
-        description: "All local app data has been removed from this device.",
+        title: t("toast.localProfileCleared"),
+        description: t("toast.localDataRemoved"),
         duration: 3000,
       });
       setView("home");
@@ -3388,7 +3437,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const auth = getFirebaseAuth();
       const currentUser = auth.currentUser;
       if (!currentUser) {
-        toast({ title: "No user signed in", description: "Please sign in and try again.", variant: "destructive", duration: 4000 });
+        toast({ title: t("toast.noUserSignedIn"), description: t("toast.signInAgain"), variant: "destructive", duration: 4000 });
         return;
       }
       if (currentUser.providerData.some((p: any) => p.providerId === 'password')) {
@@ -3412,9 +3461,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
         <div className="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
-          <h2 className="text-lg font-semibold mb-2">Delete Account</h2>
+          <h2 className="text-lg font-semibold mb-2">{t("dialog.deleteAccount.title")}</h2>
           <p className="mb-4 text-sm text-foreground">
-            Are you sure you want to delete your account? This will permanently delete all your chats, settings, and associated media files. This action cannot be undone.
+            {t("dialog.deleteAccount.body")}
           </p>
           <div className="flex justify-end gap-2 mt-4">
             <button
@@ -3460,8 +3509,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     await apiDeleteAccount();
                   } catch (err: any) {
                     toast({
-                      title: "Failed to delete account",
-                      description: "Could not delete account data. Try again.",
+                      title: t("toast.deleteAccountFailed"),
+                      description: t("toast.deleteAccountFailed.body"),
                       variant: "destructive",
                       duration: 4000,
                     });
@@ -3500,8 +3549,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     });
                   } catch {}
                   toast({
-                    title: "Account deleted",
-                    description: "Your account and all associated data have been permanently deleted.",
+                    title: t("toast.accountDeleted"),
+                    description: t("toast.accountDeleted.body"),
                     duration: 3000,
                   });
                   window.location.replace("/");
@@ -3523,9 +3572,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
         <div className="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
-          <h2 className="text-lg font-semibold mb-2">Delete Account</h2>
+          <h2 className="text-lg font-semibold mb-2">{t("dialog.deleteAccount.title")}</h2>
           <p className="mb-4 text-sm text-foreground">
-            Please enter your password to confirm account deletion. This action cannot be undone.
+            {t("dialog.deleteAccount.password")}
           </p>
           <div className="mb-4">
             <label className="block text-sm font-medium mb-1" htmlFor="reauth-password">Password</label>
@@ -3579,8 +3628,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     await apiDeleteAccount();
                   } catch (err: any) {
                     toast({
-                      title: "Failed to delete account",
-                      description: "Could not delete account data. Try again.",
+                      title: t("toast.deleteAccountFailed"),
+                      description: t("toast.deleteAccountFailed.body"),
                       variant: "destructive",
                       duration: 4000,
                     });
@@ -3614,8 +3663,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     });
                   } catch {}
                   toast({
-                    title: "Account deleted",
-                    description: "Your account and all associated data have been permanently deleted.",
+                    title: t("toast.accountDeleted"),
+                    description: t("toast.accountDeleted.body"),
                     duration: 3000,
                   });
                   // window.location.replace("/"); // Removed to prevent double redirect
@@ -3624,7 +3673,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     ? "For security, please reauthenticate before deleting your account."
                     : "Could not delete account, try again.";
                   toast({
-                    title: "Failed to delete account",
+                    title: t("toast.deleteAccountFailed"),
                     description: errorMessage,
                     variant: "destructive",
                     duration: 4000,
@@ -3700,8 +3749,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         await apiDeleteAccount();
       } catch (err: any) {
         toast({
-          title: "Failed to delete account",
-          description: "Could not delete account data. Try again.",
+          title: t("toast.deleteAccountFailed"),
+          description: t("toast.deleteAccountFailed.body"),
           variant: "destructive",
           duration: 4000,
         });
@@ -3737,8 +3786,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         });
       } catch {}
       toast({
-        title: "Account deleted",
-        description: "Your account and all associated data have been permanently deleted.",
+        title: t("toast.accountDeleted"),
+        description: t("toast.accountDeleted.body"),
         duration: 3000,
       });
       window.location.replace("/");
@@ -3747,7 +3796,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         ? "For security, please reauthenticate before deleting your account."
         : "Could not delete account, try again.";
       toast({
-        title: "Failed to delete account",
+        title: t("toast.deleteAccountFailed"),
         description: errorMessage,
         variant: "destructive",
         duration: 4000,
@@ -3881,7 +3930,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   function formatGenerationError(label: string, errorBody?: any, fallbackReason?: string) {
     const d = errorBody?.diagnostics;
-    const lines = [`❌ ${label} failed.`, ""];
+    const lines = [`❌ ${t("chat.msg.failed", { kind: label })}`, ""];
 
     if (d?.step) lines.push(`Step: ${d.step}`);
 
@@ -3956,7 +4005,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     // Use the provided chat ID or fall back to activeChatId
     let currentChatId = chatIdOverride || activeChatId;
     if (currentChatId == null) {
-      setApiError("No active chat selected.");
+      setApiError(t("chat.msg.noActiveChat"));
       return;
     }
     // Ensure activeChatId is set
@@ -3991,6 +4040,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       // assign a client job id so backend can cancel the right process
       const jobId = makeJobId();
       currentVideoJobId.current = jobId;
+    setActiveVideoJobId(jobId);
       const sessionId = ensureChatSessionId();
       const body = {
         prompt,
@@ -4044,7 +4094,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           setHtmlDownloadUrl(storyDownloadUrl || null);
           setHtmlDownloadFilename(storyDownloadFilename || null);
           await processAndAddMessage(
-            "✅ Story mode scene slider generated.",
+            `✅ ${t("chat.msg.generated", { kind: t("artifact.storySlider") })}`,
             false,
             mediaAttachment,
             chatIdForGeneration
@@ -4058,7 +4108,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Show toast when initial try failed and first retry starts (tries === 1)
         if (data.tries === 1) {
           toast({
-            title: "This may take a while.",
+            title: t("toast.mayTakeAWhile"),
             duration: 5000
           });
         }
@@ -4095,7 +4145,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         // Use the same chat ID we started with to ensure message goes to correct chat
         await processAndAddMessage(
-          requestedMode === "story" ? "✅ Story mode video generated." : "✅ Video generated.",
+          requestedMode === "story" ? `✅ ${t("chat.msg.generated", { kind: t("artifact.storyVideo") })}` : `✅ ${t("chat.msg.generated", { kind: t("artifact.video") })}`,
           false,
           mediaAttachment,
           chatIdForGeneration
@@ -4131,7 +4181,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
         if (debugDetail) {
           toast({
-            title: "Render detail",
+            title: t("toast.renderDetail"),
             description: debugDetail.slice(0, 220),
             duration: 7000,
           });
@@ -4143,14 +4193,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       if (err?.name === "AbortError") {
         // canceled by user
         setApiError(null);
-        await processAndAddMessage("⏹️ Canceled video generation.", false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`⏹️ ${t("chat.msg.canceled", { kind: t("artifact.video") })}`, false, undefined, chatIdForGeneration);
         aborted = true;
       } else {
         const networkMsg = err?.message && /Failed to fetch|NetworkError|TypeError/i.test(err.message)
           ? "We couldn't reach the server. Check your connection and try again."
           : (err?.message || "Request failed");
         setApiError(networkMsg);
-        await processAndAddMessage("❌ Network error.", false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`❌ ${t("chat.msg.networkError")}`, false, undefined, chatIdForGeneration);
       }
     } finally {
       setBusy(false);
@@ -4242,7 +4292,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   async function handleQuizMediaDirect(msg: any) {
     if (!msg.media?.subtitleUrl) {
       const mediaType = msg.media?.type === 'audio' ? 'podcast' : 'video';
-      toast({ title: "No captions", description: `This ${mediaType} needs captions. Regenerate it to add captions.`, duration: 4000 });
+      toast({ title: t("toast.noCaptions"), description: `This ${mediaType} needs captions. Regenerate it to add captions.`, duration: 4000 });
       return;
     }
 
@@ -4266,7 +4316,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistedId = await ensurePersistedActiveChat(userPrompt);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
-        toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+        toast({ title: t("toast.unableToStartChat"), description: t("toast.signInAgain"), duration: 4000 });
         return;
       }
       setActiveChatId(finalChatId);
@@ -4385,7 +4435,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const body = thrownErrorBody(err);
         const friendly = formatGenerationError('Quiz generation', body, err?.message || 'Request failed');
         setApiError(friendly);
-        toast({ title: "Quiz generation failed", description: err.message, duration: 4000 });
+        toast({ title: t("toast.quizFailed"), description: err.message, duration: 4000 });
         await processAndAddMessage(friendly, false, undefined, persistedId);
       } else {
         await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
@@ -4401,7 +4451,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const media = msg.media;
     const kind = normalizeArtifactKind(media, msg);
     if (!media?.widgetCode || (kind !== 'story' && kind !== 'widget' && kind !== 'static_worksheet' && kind !== 'diagram')) {
-      toast({ title: "Cannot generate quiz", description: "This artifact does not have readable content.", duration: 4000 });
+      toast({ title: t("toast.cannotGenerateQuiz"), description: t("toast.noReadableContent"), duration: 4000 });
       return;
     }
 
@@ -4410,7 +4460,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       : plainTextFromHtml(media.widgetCode, msg.content)
     ).slice(0, 14000);
     if (!transcript || transcript.length < 30) {
-      toast({ title: "Cannot generate quiz", description: "There was not enough readable text in this artifact.", duration: 4000 });
+      toast({ title: t("toast.cannotGenerateQuiz"), description: t("toast.notEnoughText"), duration: 4000 });
       return;
     }
 
@@ -4432,7 +4482,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       persistedId = await ensurePersistedActiveChat(userPrompt);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
-        toast({ title: "Unable to start chat", description: "Please sign in and try again.", duration: 4000 });
+        toast({ title: t("toast.unableToStartChat"), description: t("toast.signInAgain"), duration: 4000 });
         return;
       }
       setActiveChatId(finalChatId);
@@ -4484,7 +4534,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const body = thrownErrorBody(err);
         const friendly = formatGenerationError('Quiz generation', body, err?.message || 'Request failed');
         setApiError(friendly);
-        toast({ title: "Quiz generation failed", description: err.message, duration: 4000 });
+        toast({ title: t("toast.quizFailed"), description: err.message, duration: 4000 });
         await processAndAddMessage(friendly, false, undefined, persistedId);
       } else {
         await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
@@ -4497,13 +4547,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   async function handleEditNonVideoArtifact(kind: ArtifactKind) {
     if (!isEditMode || !quotedMessage) {
-      toast({ title: "Nothing selected", description: "Please select an artifact to edit first.", duration: 4000 });
+      toast({ title: t("toast.nothingSelected"), description: t("toast.selectArtifactFirst"), duration: 4000 });
       return;
     }
 
     const editInstructions = query.trim();
     if (!editInstructions) {
-      toast({ title: "Enter edit instructions", description: "Please describe what changes you want to make.", duration: 4000 });
+      toast({ title: t("toast.enterEditInstructions"), description: t("toast.describeChanges"), duration: 4000 });
       return;
     }
 
@@ -4514,7 +4564,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     const chatIdForGeneration = typeof activeChatId === 'string' ? activeChatId : String(activeChatId);
     if (!chatIdForGeneration || chatIdForGeneration === "null") {
-      toast({ title: "No active chat", description: "Please open a chat and try again.", duration: 4000 });
+      toast({ title: t("toast.noActiveChat"), description: t("toast.openChatAndRetry"), duration: 4000 });
       return;
     }
 
@@ -4529,8 +4579,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const originalSource = quotedMessage.media?.widgetCode || '';
         if (!originalSource.trim()) {
           toast({
-            title: "Cannot edit",
-            description: kind === 'diagram' ? "The original SVG source is missing." : "The original HTML source is missing.",
+            title: t("toast.cannotEdit"),
+            description: kind === 'diagram' ? t("toast.svgSourceMissing") : t("toast.htmlSourceMissing"),
             duration: 4000,
           });
           return;
@@ -4602,7 +4652,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       } else if (kind === 'quiz') {
         const originalQuiz = quotedMessage.quizData;
         if (!originalQuiz?.questions?.length) {
-          toast({ title: "Cannot edit", description: "The original quiz JSON is missing.", duration: 4000 });
+          toast({ title: t("toast.cannotEdit"), description: t("toast.quizJsonMissing"), duration: 4000 });
           return;
         }
 
@@ -4656,7 +4706,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           await processAndAddMessage(formatGenerationError('Quiz editing', errorBody), false, undefined, chatIdForGeneration);
         }
       } else {
-        toast({ title: "Unsupported edit", description: "This artifact type cannot be edited yet.", duration: 4000 });
+        toast({ title: t("toast.unsupportedEdit"), description: t("toast.cannotEditTypeYet"), duration: 4000 });
       }
 
       setIsEditMode(false);
@@ -4664,7 +4714,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       setQuotedMessage(null);
     } catch (err: any) {
       if (err?.name === "AbortError") {
-        await processAndAddMessage(`⏹️ Canceled ${artifactLabel(kind)} editing.`, false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`⏹️ ${t("chat.msg.canceledEditing", { kind: artifactLabel(kind) })}`, false, undefined, chatIdForGeneration);
       } else {
         const msg = err?.message || "Request failed";
         const body = thrownErrorBody(err);
@@ -4691,13 +4741,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     if (!isEditMode || !quotedMessage?.media?.sceneCode) {
-      toast({ title: "No video to edit", description: "Please select a video to edit first.", duration: 4000 });
+      toast({ title: t("toast.noVideoToEdit"), description: t("toast.selectVideoFirst"), duration: 4000 });
       return;
     }
 
     const editInstructions = query.trim();
     if (!editInstructions) {
-      toast({ title: "Enter edit instructions", description: "Please describe what changes you want to make.", duration: 4000 });
+      toast({ title: t("toast.enterEditInstructions"), description: t("toast.describeChanges"), duration: 4000 });
       return;
     }
 
@@ -4732,13 +4782,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     try {
       // Add user message showing the edit request
-      await processAndAddMessage(`✏️ Edit: ${editInstructions}`, true, undefined, chatIdForGeneration);
+      await processAndAddMessage(`✏️ ${t("chat.msg.editPrefix", { instructions: editInstructions })}`, true, undefined, chatIdForGeneration);
       setQuery("");
 
       const llmConfig = buildLlmRequestConfig(apiKeys);
 
       const jobId = makeJobId();
       currentVideoJobId.current = jobId;
+    setActiveVideoJobId(jobId);
       const sessionId = ensureChatSessionId();
 
       const body = {
@@ -4786,7 +4837,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ),
         };
 
-        await processAndAddMessage("✅ Video edited successfully.", false, mediaAttachment, chatIdForGeneration);
+        await processAndAddMessage(`✅ ${t("chat.msg.edited", { kind: t("artifact.video") })}`, false, mediaAttachment, chatIdForGeneration);
 
         setVttUrl(null);
         setSrtText(null);
@@ -4799,20 +4850,20 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       } else {
         const msg = (data?.message) || "Video editing failed.";
         setApiError(msg);
-        await processAndAddMessage(`❌ Video editing failed: ${msg}`, false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`❌ ${t("chat.msg.editFailed", { kind: t("artifact.video"), reason: msg })}`, false, undefined, chatIdForGeneration);
       }
     } catch (err: any) {
       console.error("Video edit error:", err);
       if (err?.name === "AbortError") {
         setApiError(null);
-        await processAndAddMessage("⏹️ Canceled video editing.", false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`⏹️ ${t("chat.msg.canceledEditing", { kind: t("artifact.video") })}`, false, undefined, chatIdForGeneration);
         aborted = true;
       } else {
         const networkMsg = err?.message && /Failed to fetch|NetworkError|TypeError/i.test(err.message)
           ? "We couldn't reach the server. Check your connection and try again."
           : (err?.message || "Request failed");
         setApiError(networkMsg);
-        await processAndAddMessage(`❌ Error: ${networkMsg}`, false, undefined, chatIdForGeneration);
+        await processAndAddMessage(`❌ ${t("chat.msg.error", { reason: networkMsg })}`, false, undefined, chatIdForGeneration);
       }
     } finally {
       setBusy(false);
@@ -5312,8 +5363,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     if (!downloadUrl) {
       toast({
-        title: "Download unavailable",
-        description: "No downloadable artifact file was found for this item.",
+        title: t("toast.downloadUnavailable"),
+        description: t("toast.downloadUnavailable.body"),
         duration: 4000,
       });
       return;
@@ -5343,8 +5394,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch (error) {
       console.error("Artifact download failed", error);
       toast({
-        title: "Download failed",
-        description: "The file could not be downloaded.",
+        title: t("toast.downloadFailed"),
+        description: t("toast.downloadFailed.body"),
         duration: 5000,
       });
     }
@@ -5370,7 +5421,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch (error: any) {
       console.error("Diagram PNG export failed", error);
       toast({
-        title: "PNG export failed",
+        title: t("toast.pngExportFailed"),
         description: error?.message || "The diagram could not be converted to PNG.",
         duration: 5000,
       });
@@ -5554,6 +5605,41 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   // (Removed duplicate captions toggle effect to avoid thrash/reset)
 
+  // The backend's stage wins when it has one; the ramp is the fallback.
+  // Whether the artifact pane has anything worth opening on a phone: a finished
+  // artifact, or a generation in flight whose progress is worth watching.
+  const hasArtifactToShow = Boolean(
+    videoUrl || widgetHtml || busy || podcastLoading || widgetLoading || quizLoading
+  );
+
+  const videoPercent = jobProgress.percent ?? videoProgress;
+  const generationPercent = busy
+    ? videoPercent
+    : widgetLoading
+      ? widgetProgress
+      : podcastProgress;
+
+  // What the caption says while something is generating. During a video, this is
+  // the actual stage — including "scene 3 of 6" — rather than one static line.
+  const generationCaption = (() => {
+    if (busy) {
+      if (jobProgress.stage === "rendering" && jobProgress.total > 0) {
+        return t("chat.stage.rendering", {
+          done: Math.max(1, jobProgress.done),
+          total: jobProgress.total,
+        });
+      }
+      if (jobProgress.stage) return t(`chat.stage.${jobProgress.stage}`);
+      return t("chat.rendering.video");
+    }
+    if (widgetLoading) {
+      if (generationType === "diagram") return t("chat.rendering.diagram");
+      if (generationType === "static_worksheet") return t("chat.rendering.staticWorksheet");
+      return t("chat.rendering.widget");
+    }
+    return t("chat.rendering.podcast");
+  })();
+
   return (
     <div className="h-screen flex bg-background">
       <AlertDialog
@@ -5563,12 +5649,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {modal.type === "logout" ? "Confirm Logout" : "Delete Chat"}
+              {modal.type === "logout" ? t("dialog.logout.title") : t("dialog.deleteChat.title")}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {modal.type === "logout"
-                ? "Are you sure you want to log out?"
-                : "Are you sure you want to delete this chat?"}
+                ? t("dialog.logout.body")
+                : t("dialog.deleteChat.body")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -5664,7 +5750,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             <div className="space-y-6">
               {hasMoreByChat[String(activeChatId)] && (activeChat as Chat).messages.length > 0 && typeof activeChatId === 'string' && (
                 <div className="flex justify-center">
-                  <Button variant="secondary" size="sm" onClick={loadOlderMessages}>Load older messages</Button>
+                  <Button variant="secondary" size="sm" onClick={loadOlderMessages}>{t("chat.loadOlder")}</Button>
                 </div>
               )}
               {(activeChat as Chat).messages.length === 0 && typeof window !== 'undefined' && sessionStorage.getItem('app.forceBlank') === '1' ? (
@@ -5674,7 +5760,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       <MessageSquare className="w-8 h-8 text-white" />
                     </div>
                     <h2 className="text-2xl font-semibold">Hello, {user.name}</h2>
-                    <p className="text-muted-foreground">How can I help you today?</p>
+                    <p className="text-muted-foreground">{t("chat.greeting")}</p>
                     {/* Removed start-a-conversation banner per user request */}
                   </div>
                 </div>
@@ -5728,10 +5814,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <p className="font-medium text-sm truncate">
-                                    {msg.media.title || (normalizeArtifactKind(msg.media, msg) === "diagram" ? "Diagram" : normalizeArtifactKind(msg.media, msg) === "static_worksheet" ? "Static Worksheet" : "Interactive Worksheet")}
+                                    {msg.media.title ||
+                                      (normalizeArtifactKind(msg.media, msg) === "diagram"
+                                        ? t("chat.gen.diagram")
+                                        : normalizeArtifactKind(msg.media, msg) === "static_worksheet"
+                                          ? t("chat.gen.static_worksheet")
+                                          : t("chat.gen.widget"))}
                                   </p>
                                   <p className="text-xs text-muted-foreground">
-                                    Click to open in right panel
+                                    {t("chat.card.openHint")}
                                   </p>
                                 </div>
                                 <ExternalLink className="w-4 h-4 text-muted-foreground flex-shrink-0" />
@@ -5745,7 +5836,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               size="icon"
                               className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
                               onClick={() => void handleQuizMediaDirect(msg)}
-                              title="Generate quiz from podcast"
+                              title={t("chat.quizFrom", { kind: t("artifact.podcast") })}
                               disabled={busy || podcastLoading || quizLoading || widgetLoading}
                             >
                               <Brain className="w-4 h-4" />
@@ -5760,12 +5851,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 className="absolute top-2 right-16 opacity-0 group-hover:opacity-100 h-7 w-7"
                                 onClick={() => {
                                   if (!msg.media?.subtitleUrl) {
-                                    toast({ title: "No captions", description: "This video needs captions to generate a quiz.", duration: 4000 });
+                                    toast({ title: t("toast.noCaptions"), description: t("toast.noCaptions.body"), duration: 4000 });
                                     return;
                                   }
                                   void handleQuizMediaDirect(msg);
                                 }}
-                                title="Generate quiz from video"
+                                title={t("chat.quizFrom", { kind: t("artifact.video") })}
                                 disabled={busy || podcastLoading || quizLoading || widgetLoading}
                               >
                                 <Brain className="w-4 h-4" />
@@ -5775,7 +5866,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 size="icon"
                                 className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
                                 onClick={() => startEditArtifact(msg, index, 'video')}
-                                title="Edit this video"
+                                title={t("chat.editVideo")}
                                 disabled={busy || podcastLoading || quizLoading || widgetLoading}
                               >
                                 <Pencil className="w-4 h-4" />
@@ -5790,7 +5881,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 size="icon"
                                 className="absolute top-2 right-16 opacity-0 group-hover:opacity-100 h-7 w-7"
                                 onClick={() => void handleQuizHtmlArtifactDirect(msg)}
-                                title={`Generate quiz from ${artifactLabel(normalizeArtifactKind(msg.media, msg))}`}
+                                title={t("chat.quizFrom", { kind: artifactLabel(normalizeArtifactKind(msg.media, msg)) })}
                                 disabled={busy || podcastLoading || quizLoading || widgetLoading}
                               >
                                 <Brain className="w-4 h-4" />
@@ -5800,7 +5891,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 size="icon"
                                 className="absolute top-2 right-10 opacity-0 group-hover:opacity-100 h-7 w-7"
                                 onClick={() => startEditArtifact(msg, index, normalizeArtifactKind(msg.media, msg))}
-                                title={`Edit this ${artifactLabel(normalizeArtifactKind(msg.media, msg))}`}
+                                title={t("chat.editArtifact", { kind: artifactLabel(normalizeArtifactKind(msg.media, msg)) })}
                                 disabled={busy || podcastLoading || quizLoading || widgetLoading}
                               >
                                 <Pencil className="w-4 h-4" />
@@ -5814,7 +5905,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                               size="icon"
                               className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 h-7 w-7"
                               onClick={() => copyToClipboard(msg.content, (msg as any).messageId || `bot-${index}`)}
-                              title="Copy message"
+                              title={t("chat.copyMessage")}
                             >
                               {copiedMessageId === ((msg as any).messageId || `bot-${index}`) ? (
                                 <Check className="w-4 h-4" />
@@ -5836,7 +5927,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             size="icon"
                             className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 h-7 w-7 text-white hover:bg-white/20"
                             onClick={() => copyToClipboard(msg.content, (msg as any).messageId || `user-${index}`)}
-                            title="Copy message"
+                            title={t("chat.copyMessage")}
                           >
                             {copiedMessageId === ((msg as any).messageId || `user-${index}`) ? (
                               <Check className="w-4 h-4" />
@@ -5851,9 +5942,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       </div>
                     )}
 
-                    {/* If this message anchors a quiz, render the quiz card right after it */}
+                    {/* If this message anchors a quiz, render the quiz card right after it.
+                        The wrapper is a column: the diagnostics line belongs under the card,
+                        not beside it — as a row, the two max-w-lg children shared the width
+                        and squeezed the quiz. */}
                     {typeof activeChatId === 'string' && (msg as any).messageId && quizzesByChat[String(activeChatId)] && quizzesByChat[String(activeChatId)][String((msg as any).messageId)] && (
-                      <div className="flex justify-start w-full">
+                      <div className="flex w-full flex-col items-start gap-2">
                         {(() => { const quiz = quizzesByChat[String(activeChatId)][String((msg as any).messageId)]; const quizId = String((msg as any).messageId); return (
                           <div className={`rounded-xl p-5 w-full max-w-lg bg-gradient-to-br ${getThemeGradient(colorTheme)} text-white shadow-lg`}>
                             {quiz.score == null ? (
@@ -5866,7 +5960,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                       size="icon"
                                       className="h-7 w-7"
                                       onClick={() => startEditArtifact({ messageId: quizId, content: '', quizAnchor: true, quizData: quiz.data }, index, 'quiz', quiz.data)}
-                                      title="Edit this quiz"
+                                      title={t("chat.editQuiz")}
                                       disabled={busy || podcastLoading || quizLoading || widgetLoading}
                                     >
                                       <Pencil className="w-3 h-3" />
@@ -5944,14 +6038,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             ) : (
                               <div>
                                 <div className="flex items-start justify-between gap-3 mb-2">
-                                  <h3 className="font-semibold flex items-center gap-2"><span>🏆</span>Results</h3>
+                                  <h3 className="font-semibold flex items-center gap-2"><span>🏆</span>{t("chat.results")}</h3>
                                   <div className="flex items-center gap-1 shrink-0">
                                     <Button
                                       variant="secondary"
                                       size="icon"
                                       className="h-7 w-7"
                                       onClick={() => startEditArtifact({ messageId: quizId, content: '', quizAnchor: true, quizData: quiz.data }, index, 'quiz', quiz.data)}
-                                      title="Edit this quiz"
+                                      title={t("chat.editQuiz")}
                                       disabled={busy || podcastLoading || quizLoading || widgetLoading}
                                     >
                                       <Pencil className="w-3 h-3" />
@@ -5970,7 +6064,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 </div>
                                 <p className="text-sm mb-1">Score: {quiz.score}/{quiz.data.questions.length}</p>
                                 <p className="mb-4 font-medium">{quiz.score === quiz.data.questions.length ? 'Perfect score! Outstanding! 🎉' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.8) ? 'Great job, almost perfect! ✨' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.6) ? 'Nice work. keep practicing! 👍' : 'You can boost this score, give it another shot! 💪'}</p>
-                                <Button onClick={() => retakeQuiz(quizId)} variant="secondary" className="w-full font-semibold">Retake Quiz</Button>
+                                <Button onClick={() => retakeQuiz(quizId)} variant="secondary" className="w-full font-semibold">{t("chat.retakeQuiz")}</Button>
                               </div>
                             )}
                           </div>
@@ -6076,10 +6170,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 ref={textareaRef}
                 placeholder={
                   isEditMode
-                    ? `Describe what changes you want to make to this ${artifactLabel(quotedMessage?.artifactKind || normalizeArtifactKind(quotedMessage?.media, quotedMessage))}...`
+                    ? t("chat.placeholder.edit", {
+                        kind: artifactLabel(
+                          quotedMessage?.artifactKind ||
+                            normalizeArtifactKind(quotedMessage?.media, quotedMessage)
+                        ),
+                      })
                     : uploadedFiles.length > 0
-                    ? `${uploadedFiles.length} ${uploadedFiles.length === 1 ? "image" : "images"} attached. Add a prompt if you want, then choose a generation type.`
-                    : "Enter a prompt, attach an image, or paste a screenshot..."
+                    ? (uploadedFiles.length === 1
+                        ? t("chat.placeholder.images.one")
+                        : t("chat.placeholder.images.other", { count: uploadedFiles.length }))
+                    : t("chat.placeholder")
                 }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -6096,8 +6197,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   variant="ghost"
                   className="absolute left-1.5 top-1/2 h-8 w-8 -translate-y-1/2"
                   onClick={() => imageFileInputRef.current?.click()}
-                  title={uploadedFiles.length >= MAX_GENERATION_IMAGES ? `Maximum ${MAX_GENERATION_IMAGES} images attached` : "Attach image"}
-                  aria-label="Attach image"
+                  title={
+                    uploadedFiles.length >= MAX_GENERATION_IMAGES
+                      ? t("chat.maxImages", { count: MAX_GENERATION_IMAGES })
+                      : t("chat.attachImage")
+                  }
+                  aria-label={t("chat.attachImage")}
                   disabled={uploadedFiles.length >= MAX_GENERATION_IMAGES}
                 >
                   <Upload className="h-4 w-4" />
@@ -6123,8 +6228,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     onClick={() => void handleSelectedGeneration()}
                     title={
                       anyGenerationLoading
-                        ? `Stop ${GENERATION_SELECTION_LABELS[generationType]}`
-                        : `Generate ${GENERATION_SELECTION_LABELS[generationType]}`
+                        ? t("chat.gen.stop", { label: t(`chat.gen.${generationType}`) })
+                        : t("chat.gen.generate", { label: t(`chat.gen.${generationType}`) })
                     }
                     disabled={
                       !anyGenerationLoading &&
@@ -6145,8 +6250,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {!isEditMode && (
                   <select
-                    aria-label="Generation type"
-                    title="Choose what UpcurvEd should generate"
+                    aria-label={t("chat.gen.aria")}
+                    title={t("chat.gen.title")}
                     value={generationType}
                     disabled={anyGenerationLoading}
                     onChange={(event) =>
@@ -6154,19 +6259,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     }
                     className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                   >
-                    <option value="static_worksheet">Generate: Static Worksheet</option>
-                    <option value="widget">Generate: Interactive Worksheet</option>
-                    <option value="diagram">Generate: Diagram</option>
-                    <option value="video">Generate: Video</option>
-                    <option value="quiz">Generate: Multiple Choice Quiz</option>
-                    <option value="podcast_single">Generate: Podcast (Single)</option>
-                    <option value="podcast_debate">Generate: Podcast (Debate)</option>
-                    <option value="story">Generate: Story</option>
+                    {GENERATION_SELECTIONS.map((selection) => (
+                      <option key={selection} value={selection}>
+                        {t("chat.gen.option", { label: t(`chat.gen.${selection}`) })}
+                      </option>
+                    ))}
                   </select>
                 )}
                 <select
-                  aria-label="Target learner level"
-                  title="Choose the learner level for the next generation"
+                  aria-label={t("chat.level.aria")}
+                  title={t("chat.level.title")}
                   value={audienceLevel}
                   disabled={anyGenerationLoading}
                   onChange={(event) =>
@@ -6174,12 +6276,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   }
                   className="h-7 max-w-[11rem] rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                 >
-                  <option value="auto">Learner level: Auto</option>
-                  <option value="early_learning">Learner level: Early learning</option>
-                  <option value="elementary">Learner level: Elementary</option>
-                  <option value="middle_school">Learner level: Middle school</option>
-                  <option value="high_school">Learner level: High school</option>
-                  <option value="university">Learner level: University</option>
+                  {AUDIENCE_LEVELS.map((level) => (
+                    <option key={level} value={level}>
+                      {t("chat.level.option", { label: t(`chat.level.${level}`) })}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -6187,7 +6288,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         </div>
 
         <div
-          className="hidden md:flex w-1/2 flex-col p-6 space-y-4 h-screen overflow-y-auto"
+          className={`${
+            mobileArtifactOpen
+              ? "fixed inset-0 z-40 flex w-full bg-background pt-14"
+              : "hidden"
+          } md:static md:z-auto md:flex md:w-1/2 md:bg-transparent md:pt-0 flex-col p-6 space-y-4 h-screen overflow-y-auto`}
           ref={videoContainerRef}
         >
           <Card
@@ -6215,8 +6320,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   className="w-full h-full rounded-xl border-0"
                   title={
                     currentMediaMeta?.artifactKind === "story"
-                      ? "Story"
-                      : "Interactive Worksheet"
+                      ? t("chat.artifact.story")
+                      : t("chat.gen.widget")
                   }
                 />
               )
@@ -6229,14 +6334,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                         <path className="text-muted stroke-current" strokeWidth="3" fill="none" d="M18 2 a 16 16 0 1 1 0 32 a 16 16 0 1 1 0 -32" opacity="0.2"/>
                         <path className="text-primary stroke-current" strokeWidth="3" fill="none" strokeLinecap="round"
                           d="M18 2 a 16 16 0 1 1 0 32 a 16 16 0 1 1 0 -32"
-                          strokeDasharray={`${busy ? videoProgress : widgetLoading ? widgetProgress : podcastProgress}, 100`} />
+                          strokeDasharray={`${generationPercent}, 100`} />
                       </svg>
                       <div className="absolute inset-0 flex items-center justify-center text-sm font-medium">
-                        {widgetLoading ? `${widgetProgress}%` : busy ? `${videoProgress}%` : `${podcastProgress}%`}
+                        {`${generationPercent}%`}
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      {busy ? "Rendering video…" : widgetLoading ? (generationType === "diagram" ? "Generating diagram…" : generationType === "static_worksheet" ? "Generating static worksheet…" : "Generating interactive worksheet…") : "Generating podcast…"}
+                      {generationCaption}
                     </p>
                   </div>
                 ) : apiError ? (
@@ -6244,7 +6349,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     <svg viewBox="0 0 24 24" className="w-10 h-10 text-red-500" aria-hidden="true">
                       <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 14h-2v-2h2v2Zm0-4h-2V6h2v6Z"/>
                     </svg>
-                    <p className="text-sm text-red-600 font-medium">Generation failed.</p>
+                    <p className="text-sm text-red-600 font-medium">{t("chat.generationFailed")}</p>
                   </div>
                 ) : (
                   <Play className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
@@ -6267,7 +6372,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       <track
                         key={`${currentMediaMeta?.artifactId || videoUrl || ''}|${vttUrl}`}
                         kind="captions"
-                        label="Captions"
+                        label={t("player.captions")}
                         default
                         src={vttUrl}
                         srcLang={subtitleLang}
@@ -6312,7 +6417,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       <track
                         key={`${currentMediaMeta?.artifactId || videoUrl || ''}|${vttUrl}`}
                         kind="captions"
-                        label="Captions"
+                        label={t("player.captions")}
                         default={isCaptionsOn}
                         src={vttUrl}
                         srcLang={subtitleLang}
@@ -6449,7 +6554,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     setIsCaptionsOn(prev => !prev);
                   }}
                   className="h-7 w-7 px-0"
-                  title="Captions"
+                  title={t("player.captions")}
                   disabled={!videoUrl || !vttUrl}
                 >
                   <span className="font-bold text-xs">CC</span>
@@ -6459,7 +6564,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 p-0 leading-none"
-                    title="Slower"
+                    title={t("player.slower")}
                     disabled={!videoUrl}
                     onClick={() => {
                       const current = Math.max(0.25, Math.min(2, playbackSpeed[0] ?? 1));
@@ -6483,7 +6588,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 p-0 leading-none"
-                    title="Faster"
+                    title={t("player.faster")}
                     disabled={!videoUrl}
                     onClick={() => {
                       const current = Math.max(0.25, Math.min(2, playbackSpeed[0] ?? 1));
@@ -6506,7 +6611,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     variant="ghost"
                     size="icon"
                     className="h-9 w-9"
-                    title="Mute/unmute"
+                    title={t("player.muteToggle")}
                     disabled={!videoUrl}
                     onClick={() => {
                       const vid = videoRef.current;
@@ -6570,6 +6675,30 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             </div>
           )}
         </div>
+
+        {/* Mobile: dismiss the overlay. Fixed so it stays put while the pane scrolls. */}
+        {mobileArtifactOpen && (
+          <button
+            type="button"
+            onClick={() => setMobileArtifactOpen(false)}
+            className="fixed left-3 top-3 z-50 inline-flex items-center gap-2 rounded-full border border-border bg-background/95 px-3 py-1.5 text-sm font-medium shadow-sm backdrop-blur md:hidden"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            {t("chat.hideArtifact")}
+          </button>
+        )}
+
+        {/* Mobile: the way in. Only offered when there is something to look at. */}
+        {!mobileArtifactOpen && hasArtifactToShow && (
+          <button
+            type="button"
+            onClick={() => setMobileArtifactOpen(true)}
+            className={`fixed bottom-24 right-4 z-30 inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold text-white shadow-lg bg-gradient-to-r ${getThemeGradient(colorTheme)} md:hidden`}
+          >
+            <Eye className="h-4 w-4" aria-hidden="true" />
+            {t("chat.viewArtifact")}
+          </button>
+        )}
       </div>
       {settingsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm">
@@ -6587,43 +6716,42 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       <AlertDialog open={storyConfigOpen} onOpenChange={setStoryConfigOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Story Options</AlertDialogTitle>
+            <AlertDialogTitle>{t("story.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Pick an optional main character and theme. Leave as Auto to let the model decide.
-              Fixed story templates: Scientist, Friendly Robot, Animal Guide, Explorer, Artist, Athlete.
+              {t("story.description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-3">
             <div className="grid gap-1">
-              <label className="text-sm font-medium">Main Character</label>
+              <label className="text-sm font-medium">{t("story.mainCharacter")}</label>
               <select
                 className="border rounded px-3 py-2 bg-background"
                 value={storyHostChoice}
                 onChange={(e) => setStoryHostChoice(e.target.value as any)}
               >
-                <option value="auto">Auto</option>
-                <option value="scientist">Scientist</option>
-                <option value="friendly_robot">Friendly Robot</option>
-                <option value="animal_guide">Animal Guide</option>
-                <option value="explorer">Explorer</option>
-                <option value="artist">Artist</option>
-                <option value="athlete">Athlete</option>
+                <option value="auto">{t("chat.level.auto")}</option>
+                <option value="scientist">{t("story.character.scientist")}</option>
+                <option value="friendly_robot">{t("story.character.robot")}</option>
+                <option value="animal_guide">{t("story.character.animal")}</option>
+                <option value="explorer">{t("story.character.explorer")}</option>
+                <option value="artist">{t("story.character.artist")}</option>
+                <option value="athlete">{t("story.character.athlete")}</option>
               </select>
             </div>
             <div className="grid gap-1">
-              <label className="text-sm font-medium">Theme</label>
+              <label className="text-sm font-medium">{t("story.theme")}</label>
               <select
                 className="border rounded px-3 py-2 bg-background"
                 value={storyThemeChoice}
                 onChange={(e) => setStoryThemeChoice(e.target.value as any)}
               >
-                <option value="auto">Auto</option>
-                <option value="space">Space</option>
-                <option value="jungle">Jungle</option>
-                <option value="ocean">Ocean</option>
-                <option value="city_lab">City Lab</option>
-                <option value="sunset_farm">Sunset Farm</option>
-                <option value="meadow">Meadow</option>
+                <option value="auto">{t("chat.level.auto")}</option>
+                <option value="space">{t("story.theme.space")}</option>
+                <option value="jungle">{t("story.theme.jungle")}</option>
+                <option value="ocean">{t("story.theme.ocean")}</option>
+                <option value="city_lab">{t("story.theme.cityLab")}</option>
+                <option value="sunset_farm">{t("story.theme.sunsetFarm")}</option>
+                <option value="meadow">{t("story.theme.meadow")}</option>
               </select>
             </div>
           </div>
@@ -6639,16 +6767,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       <AlertDialog open={showSwitchWarning} onOpenChange={(open) => { if (!open) cancelChatSwitch(); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{pendingChatSwitch === NEW_CHAT_SENTINEL ? "Start a new chat?" : "Switch chats?"}</AlertDialogTitle>
+            <AlertDialogTitle>{pendingChatSwitch === NEW_CHAT_SENTINEL ? t("dialog.newChat.title") : t("dialog.switchChat.title")}</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingChatSwitch === NEW_CHAT_SENTINEL
-                ? "Starting a new chat will cancel the current generation. Continue?"
-                : "Switching chats will cancel the current generation. Continue?"}
+                ? t("dialog.newChat.body")
+                : t("dialog.switchChat.body")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={cancelChatSwitch}>Stay</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmChatSwitch}>Switch</AlertDialogAction>
+            <AlertDialogCancel onClick={cancelChatSwitch}>{t("dialog.stay")}</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmChatSwitch}>{t("dialog.switch")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

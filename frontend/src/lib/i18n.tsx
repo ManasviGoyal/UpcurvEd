@@ -16,7 +16,11 @@ import {
   type ReactNode,
 } from "react";
 
-import translations from "./translations.json";
+// One file per surface so no single table becomes unmanageable. They are merged
+// into one lookup at import time; a key must live in exactly one file.
+import appStrings from "./translations/app.json";
+import homeStrings from "./translations/home.json";
+import setupStrings from "./translations/setup.json";
 
 export type LanguageCode =
   | "en"
@@ -27,8 +31,7 @@ export type LanguageCode =
   | "hi"
   | "zh-Hans"
   | "id"
-  | "ja"
-  | "ko";
+  | "ja";
 
 export type Language = {
   code: LanguageCode;
@@ -49,7 +52,6 @@ export const LANGUAGES: Language[] = [
   { code: "zh-Hans", label: "简体中文", englishName: "Chinese (Simplified)" },
   { code: "id", label: "Bahasa Indonesia", englishName: "Indonesian" },
   { code: "ja", label: "日本語", englishName: "Japanese" },
-  { code: "ko", label: "한국어", englishName: "Korean" },
 ];
 
 export const DEFAULT_LANGUAGE: LanguageCode = "en";
@@ -58,9 +60,34 @@ export const DEFAULT_LANGUAGE: LanguageCode = "en";
 // who reads Hindi reads Hindi before and after signing in.
 const LANGUAGE_STORAGE_KEY = "app.language";
 
-// `strings` keeps the table one level down so the file can carry a `_comment` note
-// (JSON has no comments) without it looking like a translatable key.
-const TABLE: Record<string, Record<string, string>> = translations.strings;
+// `strings` keeps each table one level down so the files can carry a `_comment`
+// note (JSON has no comments) without it looking like a translatable key.
+const SOURCES: Record<string, Record<string, Record<string, string>>> = {
+  home: homeStrings.strings,
+  app: appStrings.strings,
+  setup: setupStrings.strings,
+};
+
+function buildTable(): Record<string, Record<string, string>> {
+  const merged: Record<string, Record<string, string>> = {};
+  const origin: Record<string, string> = {};
+
+  for (const [file, entries] of Object.entries(SOURCES)) {
+    for (const [key, values] of Object.entries(entries)) {
+      // A key defined twice would resolve by file order, which is invisible at the
+      // call site and a nightmare to debug — surface it while editing instead.
+      if (import.meta.env.DEV && origin[key]) {
+        console.error(`[i18n] duplicate key "${key}" in ${origin[key]}.json and ${file}.json`);
+      }
+      origin[key] = file;
+      merged[key] = values;
+    }
+  }
+
+  return merged;
+}
+
+const TABLE = buildTable();
 
 const isLanguageCode = (value: unknown): value is LanguageCode =>
   typeof value === "string" && LANGUAGES.some((language) => language.code === value);

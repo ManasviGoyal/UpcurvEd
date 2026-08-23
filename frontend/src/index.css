@@ -123,6 +123,20 @@
     line-height: 1.6 !important;
   }
 
+  /* Language names render in their own script, so the UI font alone is not enough:
+     a machine can easily lack a font for one script while having others, and the
+     row then renders as tofu boxes. Naming the per-script families gives the
+     browser somewhere to fall back before it gives up; the English name shown
+     beside each label is the backstop when none of these exist either. */
+  .language-label {
+    /* `inherit` cannot appear in a font-family list, so the UI font is named first
+       and the per-script families follow it as fallbacks. */
+    font-family: 'Inter', "Hiragino Sans", "Yu Gothic", "Noto Sans JP",
+      "Noto Sans CJK JP", "PingFang SC", "Microsoft YaHei", "Noto Sans SC",
+      "Noto Sans CJK SC", "Nirmala UI", "Kohinoor Devanagari",
+      "Noto Sans Devanagari", sans-serif;
+  }
+
   /* Custom scrollbar */
   ::-webkit-scrollbar {
     width: 8px;

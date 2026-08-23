@@ -94,12 +94,12 @@ export function LanguageMenu({
       >
         <Globe className={variant === "pill" ? "h-4 w-4" : "w-5 h-5"} aria-hidden="true" />
         {variant === "pill" ? (
-          <span>{active.label}</span>
+          <span className="language-label">{active.label}</span>
         ) : (
           !collapsed && (
             <span className="flex-1 truncate">
               {t("language.label")}
-              <span className="ml-2 text-xs text-muted-foreground">{active.label}</span>
+              <span className="language-label ml-2 text-xs text-muted-foreground">{active.label}</span>
             </span>
           )
         )}
@@ -127,7 +127,14 @@ export function LanguageMenu({
                   selected ? "font-semibold" : ""
                 }`}
               >
-                <span className="truncate">{entry.label}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="language-label block truncate">{entry.label}</span>
+                  {/* Identifies the row when the machine has no font for the script
+                      and the native label renders as tofu boxes. */}
+                  {entry.englishName !== entry.label && (
+                    <span className="block truncate text-xs opacity-60">{entry.englishName}</span>
+                  )}
+                </span>
                 {selected && <Check className="h-4 w-4 shrink-0 text-teal-500" aria-hidden="true" />}
               </button>
             );

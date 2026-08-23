@@ -1,5 +1,6 @@
 // frontend/src/components/MediaPlayer.tsx
 import { useState, useRef, useEffect } from 'react';
+import { useLanguage } from "@/lib/i18n";
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { buildDownloadFilename } from '@/lib/downloadName';
@@ -38,6 +39,7 @@ export const MediaPlayer = ({
   variant = 'full',
   gradientClass = ''
 }: MediaPlayerProps) => {
+  const { t } = useLanguage();
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -333,7 +335,7 @@ export const MediaPlayer = ({
           <div className="flex items-center gap-2 w-26">
             <Volume2 className="w-4 h-4 text-muted-foreground" />
             <Slider
-              aria-label="Volume"
+              aria-label={t("player.volume")}
               value={volume}
               onValueChange={handleVolumeChange}
               max={100}

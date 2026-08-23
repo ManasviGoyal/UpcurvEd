@@ -58,6 +58,7 @@ from backend.agent.prompts import (
     build_story_edit_patch_user_prompt,
 )
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
+from backend.runner import job_progress
 from backend.utils import app_logging  # noqa: F401
 from backend.utils.diagnostics import diagnostic_error_response, diagnostic_payload
 from backend.utils.failure_log import append_generation_audit, summarize_error
@@ -5140,3 +5141,20 @@ def jobs_cancel(jobId: str = Query(...)):
     except Exception as exc:
         logger.exception("/jobs/cancel failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        # The render is gone either way; stop reporting a stage for it.
+        job_progress.clear(jobId)
+
+
+@app.get("/jobs/progress")
+def jobs_progress(jobId: str = Query(...)):
+    """Live stage of an in-flight generation, for the progress bar.
+
+    Returns ``{"active": false}`` when the job has not reported yet, has finished,
+    or was never instrumented -- the caller falls back to its own estimate rather
+    than treating a missing entry as an error.
+    """
+    snapshot = job_progress.snapshot(jobId)
+    if snapshot is None:
+        return {"active": False, "job_id": jobId}
+    return {"active": True, **snapshot}

@@ -182,12 +182,15 @@ const ChartTooltipContent = React.forwardRef<
                     ) : (
                       !hideIndicator && (
                         <div
-                          className={cn("shrink-0 rounded-[2px] border-[--color-border] bg-[--color-bg]", {
-                            "h-2.5 w-2.5": indicator === "dot",
-                            "w-1": indicator === "line",
-                            "w-0 border-[1.5px] border-dashed bg-transparent": indicator === "dashed",
-                            "my-0.5": nestLabel && indicator === "dashed",
-                          })}
+                          // This project's `cn` joins strings; it does not take the
+                          // condition object that upstream shadcn's clsx-based one does.
+                          className={cn(
+                            "shrink-0 rounded-[2px] border-[--color-border] bg-[--color-bg]",
+                            indicator === "dot" && "h-2.5 w-2.5",
+                            indicator === "line" && "w-1",
+                            indicator === "dashed" && "w-0 border-[1.5px] border-dashed bg-transparent",
+                            nestLabel && indicator === "dashed" && "my-0.5"
+                          )}
                           style={
                             {
                               "--color-bg": indicatorColor,

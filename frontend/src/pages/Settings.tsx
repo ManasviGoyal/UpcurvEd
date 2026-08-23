@@ -12,6 +12,7 @@ import {
   normalizeApiKeys,
 } from "@/lib/providerConfig";
 import { apiFetch } from "@/lib/api";
+import { useLanguage } from "@/lib/i18n";
 import {
   clearSecurelyStoredApiKeysForUser,
   isSecureStorageEnabledForUser,
@@ -53,6 +54,7 @@ export const SettingsPage = ({
   const [busy, setBusy] = useState<boolean>(false);
   const [exportBusy, setExportBusy] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
+  const { t } = useLanguage();
   const [uninstallBusy, setUninstallBusy] = useState<boolean>(false);
   const [uninstallStatus, setUninstallStatus] = useState<string>("");
   const [customModelSelected, setCustomModelSelected] = useState<boolean>(false);
@@ -256,16 +258,16 @@ export const SettingsPage = ({
           p-5 sm:max-h-[calc(100dvh-3rem)] sm:p-8
         "
       >
-        <h2 className="text-2xl font-bold mb-6">Settings</h2>
+        <h2 className="text-2xl font-bold mb-6">{t("sidebar.settings")}</h2>
 
         <div className="space-y-4">
           <div>
-            <label className="text-sm font-medium">Your Name</label>
+            <label className="text-sm font-medium">{t("settingsPage.yourName")}</label>
             <Input
               type="text"
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Enter your display name"
+              placeholder={t("settingsPage.namePlaceholder")}
             />
           </div>
 
@@ -290,7 +292,7 @@ export const SettingsPage = ({
           })}
 
           <div className="grid grid-cols-1 gap-2">
-            <label className="text-sm font-medium">Provider</label>
+            <label className="text-sm font-medium">{t("settingsPage.provider")}</label>
             <select
               className="border rounded px-3 py-2 bg-background"
               value={selectedProvider}
@@ -307,7 +309,7 @@ export const SettingsPage = ({
 
           <div className="grid grid-cols-1 gap-2">
             <label className="text-sm font-medium" htmlFor={modelSelectId}>
-              Model
+              {t("settingsPage.model")}
             </label>
             <select
               id={modelSelectId}
@@ -325,7 +327,7 @@ export const SettingsPage = ({
                 }));
               }}
             >
-              {!selectedProvider && <option value="">Select provider first</option>}
+              {!selectedProvider && <option value="">{t("settingsPage.selectProviderFirst")}</option>}
               {/* A saved config can have a provider but no model. Without a matching
                   option the browser would show the first model while state stays "",
                   so the UI would claim a model that never gets saved. */}
@@ -352,7 +354,7 @@ export const SettingsPage = ({
                     model: event.target.value,
                   }))
                 }
-                placeholder="Exact model ID"
+                placeholder={t("settingsPage.modelPlaceholder")}
               />
             )}
 
@@ -365,13 +367,16 @@ export const SettingsPage = ({
             <div className="rounded border p-3">
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">Secure key storage</p>
+                  <p className="text-sm font-medium">{t("settingsPage.secureStorage")}</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Store API keys in your OS keychain when available. Saving may show a system
-                    prompt.
+                    {t("settingsPage.secureStorage.hint")}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Currently: {secureStorageEnabled ? "Secure OS storage" : "Local storage"}
+                    {t("settingsPage.currently", {
+                      mode: secureStorageEnabled
+                        ? t("settingsPage.secureOsStorage")
+                        : t("settingsPage.localStorage"),
+                    })}
                   </p>
                 </div>
                 <Switch
@@ -391,7 +396,7 @@ export const SettingsPage = ({
         <div className="mt-6 flex flex-col gap-4">
           <div className="flex gap-4">
             <Button onClick={handleSave} className="flex-1" disabled={busy || uninstallBusy}>
-              Save
+              {t("common.save")}
             </Button>
             <Button
               onClick={() => setView("chat")}
@@ -399,18 +404,16 @@ export const SettingsPage = ({
               className="flex-1"
               disabled={busy || uninstallBusy}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
           </div>
 
           {desktopLocal && (
             <div className="pt-2 border-t space-y-2">
               <div>
-                <p className="text-sm font-medium">Uninstall UpcurvEd</p>
+                <p className="text-sm font-medium">{t("settingsPage.uninstall.heading")}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Permanently delete UpcurvEd&apos;s local chats, working files, diagnostics,
-                  settings, caches, and saved API credentials. Files you intentionally exported
-                  or downloaded are left alone.
+                  {t("settingsPage.uninstall.hint")}
                 </p>
               </div>
               <Button
@@ -420,8 +423,8 @@ export const SettingsPage = ({
                 disabled={busy || uninstallBusy}
               >
                 {uninstallBusy
-                  ? "Preparing uninstall..."
-                  : "Uninstall UpcurvEd & Delete Local Data"}
+                  ? t("settingsPage.uninstall.preparing")
+                  : t("settingsPage.uninstall.button")}
               </Button>
               {uninstallStatus && (
                 <p className="text-xs text-muted-foreground">{uninstallStatus}</p>
@@ -432,9 +435,9 @@ export const SettingsPage = ({
           {desktopLocal && (
             <div className="pt-4 border-t space-y-3">
               <div>
-                <p className="text-sm font-medium">Export generation diagnostics</p>
+                <p className="text-sm font-medium">{t("settingsPage.export.heading")}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Download a privacy-safe summary of video generation performance.
+                  {t("settingsPage.export.hint")}
                 </p>
               </div>
               <Button
@@ -443,7 +446,7 @@ export const SettingsPage = ({
                 className="w-full"
                 disabled={busy || exportBusy || uninstallBusy}
               >
-                {exportBusy ? "Preparing export..." : "Export generation diagnostics"}
+                {exportBusy ? t("settingsPage.export.preparing") : t("settingsPage.export.heading")}
               </Button>
               {exportStatus && (
                 <p className="text-xs text-muted-foreground">{exportStatus}</p>

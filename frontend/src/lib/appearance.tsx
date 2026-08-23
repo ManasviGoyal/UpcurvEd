@@ -17,7 +17,6 @@ import {
 export type AppearanceMode = "auto" | "light" | "dark";
 
 const APPEARANCE_STORAGE_KEY = "app.appearance";
-const REDUCE_MOTION_STORAGE_KEY = "app.reduceMotion";
 
 // Dark from 6 PM to 6 AM — the original rule, kept as the default.
 const DARK_FROM_HOUR = 18;
@@ -38,21 +37,11 @@ function readMode(): AppearanceMode {
   return "auto";
 }
 
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-function readReduceMotion(): boolean {
-  try {
-    const stored = localStorage.getItem(REDUCE_MOTION_STORAGE_KEY);
-    if (stored === "1") return true;
-    if (stored === "0") return false;
-  } catch {
-    // Storage blocked; fall through to the OS preference.
-  }
-  // No explicit choice yet: respect the operating-system setting.
-  return prefersReducedMotion();
+  return window.matchMedia(REDUCED_MOTION_QUERY).matches;
 }
 
 type AppearanceContextValue = {
@@ -60,8 +49,12 @@ type AppearanceContextValue = {
   setMode: (next: AppearanceMode) => void;
   /** Resolved from `mode` — what the page should actually paint. */
   isDark: boolean;
+  /**
+   * Whether to hold back decorative animation. Not a setting anyone picks here —
+   * it mirrors the operating system's reduced-motion preference, which is where
+   * people who need it have already expressed the choice.
+   */
   reduceMotion: boolean;
-  setReduceMotion: (next: boolean) => void;
 };
 
 const AppearanceContext = createContext<AppearanceContextValue | null>(null);
@@ -69,7 +62,7 @@ const AppearanceContext = createContext<AppearanceContextValue | null>(null);
 export function AppearanceProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<AppearanceMode>(readMode);
   const [night, setNight] = useState<boolean>(isNightNow);
-  const [reduceMotion, setReduceMotionState] = useState<boolean>(readReduceMotion);
+  const [reduceMotion, setReduceMotion] = useState<boolean>(prefersReducedMotion);
 
   useEffect(() => {
     if (mode !== "auto") return;
@@ -88,13 +81,13 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const setReduceMotion = useCallback((next: boolean) => {
-    setReduceMotionState(next);
-    try {
-      localStorage.setItem(REDUCE_MOTION_STORAGE_KEY, next ? "1" : "0");
-    } catch {
-      // Storage blocked; the choice still applies for this session.
-    }
+  useEffect(() => {
+    // Someone can flip the OS setting while the page is open.
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const query = window.matchMedia(REDUCED_MOTION_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setReduceMotion(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
   }, []);
 
   const value = useMemo<AppearanceContextValue>(
@@ -103,9 +96,8 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
       setMode,
       isDark: mode === "auto" ? night : mode === "dark",
       reduceMotion,
-      setReduceMotion,
     }),
-    [mode, setMode, night, reduceMotion, setReduceMotion]
+    [mode, setMode, night, reduceMotion]
   );
 
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
@@ -121,7 +113,6 @@ export function useAppearance(): AppearanceContextValue {
     mode,
     setMode: () => {},
     isDark: mode === "auto" ? isNightNow() : mode === "dark",
-    reduceMotion: readReduceMotion(),
-    setReduceMotion: () => {},
+    reduceMotion: prefersReducedMotion(),
   };
 }

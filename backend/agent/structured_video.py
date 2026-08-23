@@ -70,6 +70,8 @@ from backend.utils.failure_log import (
 )
 from backend.utils.diagnostics import diagnostic_category, diagnostic_retryable, public_error_message
 
+from backend.runner import job_progress
+
 logger = logging.getLogger(__name__)
 
 _PLAN_START = "<<<PLAN_JSON>>>"
@@ -2978,6 +2980,7 @@ def _render_structured_plan(
     job_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
+    job_progress.set_stage(final_job_id, "preparing")
     custom_states = _prepare_custom_states(
         plan,
         provider_name=provider_name,
@@ -2987,6 +2990,8 @@ def _render_structured_plan(
         metrics=metrics,
     )
     scene_assets: dict[int, tuple[pathlib.Path, dict[str, Any], str]] = {}
+    scene_total = len(plan.get("scenes") or [])
+    job_progress.set_stage(final_job_id, "rendering", done=0, total=scene_total)
     for index, scene in enumerate(plan.get("scenes") or [], start=1):
         if scene.get("type") != "custom_manim_scene":
             scene_assets[index] = _render_standard_scene(
@@ -2996,6 +3001,7 @@ def _render_structured_plan(
                 logs_dir=logs_dir,
                 metrics=metrics,
             )
+            job_progress.advance(final_job_id, done=index)
             continue
         state = custom_states[index]
         if state.get("status") != "ready":
@@ -3013,6 +3019,9 @@ def _render_structured_plan(
             metrics=metrics,
         ) and not state.get("sanitizer_repaired"):
             metrics["rendered_initially"] += 1
+        # Counted whether or not the render succeeded: repair passes below reuse the
+        # same scene, so counting only successes would make the bar stall.
+        job_progress.advance(final_job_id, done=index)
 
     _raise_for_voice_failures(custom_states)
 
@@ -3085,6 +3094,7 @@ def _render_structured_plan(
         scene_results.append(metadata)
         scene_codes.append(code)
 
+    job_progress.set_stage(final_job_id, "assembling")
     final_mp4 = job_dir / "video.mp4"
     final_srt = job_dir / "video.srt"
     final_vtt = job_dir / "video.vtt"
@@ -3120,6 +3130,7 @@ def _render_structured_plan(
         failed=False,
         has_final_artifact=True,
     )
+    job_progress.clear(final_job_id)
 
     return {
         "ok": True,
@@ -3234,6 +3245,9 @@ def _failure_result(
     metrics: dict[str, Any],
     plan: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    # Whatever went wrong, the job is no longer in flight: stop reporting progress
+    # so a poller sees "finished" rather than a bar frozen at the last stage.
+    job_progress.clear(job_id)
     stage = exc.stage if isinstance(exc, StructuredVideoFailure) else "video_generation"
     affected = exc.affected_scenes if isinstance(exc, StructuredVideoFailure) else []
     detail = f"{type(exc).__name__}: {exc}"
@@ -3350,6 +3364,9 @@ def generate_structured_manim_video(
             provider_name,
             resolved_model,
         )
+        # First reported stage: the plan call is the longest single wait before
+        # anything countable exists.
+        job_progress.set_stage(final_job_id, "planning")
         multimodal = call_multimodal_llm(
             provider=provider_name,  # type: ignore[arg-type]
             api_key=api_key,
