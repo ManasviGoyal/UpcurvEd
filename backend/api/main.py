@@ -12,6 +12,7 @@ import tempfile
 import time
 import zipfile
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -41,11 +42,17 @@ from backend.agent.prompts import (
     DIAGRAM_EDIT_SYSTEM,
     DIAGRAM_REPAIR_SYSTEM,
     DIAGRAM_SYSTEM,
+    STATIC_WORKSHEET_EDIT_SYSTEM,
+    STATIC_WORKSHEET_REPAIR_SYSTEM,
+    STATIC_WORKSHEET_SYSTEM,
     STORY_EDIT_FULL_HTML_SYSTEM,
     STORY_EDIT_PATCH_SYSTEM,
     build_diagram_edit_user_prompt,
     build_diagram_repair_user_prompt,
     build_diagram_user_prompt,
+    build_static_worksheet_edit_user_prompt,
+    build_static_worksheet_repair_user_prompt,
+    build_static_worksheet_user_prompt,
     build_story_edit_full_html_user_prompt,
     build_story_edit_patch_user_prompt,
 )
@@ -759,6 +766,7 @@ class MessageMedia(BaseModel):
     widgetCode: str | None = None
     artifactKind: str | None = None
     downloadFilename: str | None = None
+    worksheetId: str | None = None
     generationDiagnostics: dict | None = None
 
 
@@ -2724,6 +2732,106 @@ def _extract_safe_svg_document(raw: str) -> str:
     return svg
 
 
+
+class _StaticWorksheetHtmlValidator(HTMLParser):
+    _FORBIDDEN_TAGS = {
+        "script", "iframe", "object", "embed", "audio", "video", "source",
+        "track", "link", "base", "meta", "button",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.response_controls = 0
+        self.unnamed_controls = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in self._FORBIDDEN_TAGS:
+            raise RuntimeError(f"Static worksheet may not contain <{tag}>.")
+        attr_map = {str(name).lower(): str(value or "") for name, value in attrs}
+        for name, value in attr_map.items():
+            lowered = value.lower().strip()
+            if name.startswith("on"):
+                raise RuntimeError("Static worksheet may not contain event handlers.")
+            if name in {"href", "src", "action", "formaction"} and value.strip():
+                raise RuntimeError("Static worksheet may not contain external links, sources, or form actions.")
+            if any(marker in lowered for marker in ("javascript:", "http://", "https://", "file:", "data:text/html")):
+                raise RuntimeError("Static worksheet contains an external or executable reference.")
+            if name == "style" and ("url(" in lowered or "expression(" in lowered):
+                raise RuntimeError("Static worksheet contains an unsafe style reference.")
+
+        if tag in {"input", "textarea", "select"}:
+            input_type = attr_map.get("type", "").lower()
+            if input_type not in {"button", "submit", "reset", "hidden"}:
+                self.response_controls += 1
+                if not attr_map.get("name", "").strip():
+                    self.unnamed_controls += 1
+            if input_type in {"button", "submit", "reset"}:
+                raise RuntimeError("Static worksheet may not contain generated action buttons.")
+
+
+def _extract_safe_static_worksheet_html(raw: str) -> str:
+    html_text = _strip_llm_code_fence(raw)
+    low = html_text.lower()
+    if (
+        "<!doctype html" not in low
+        or "<html" not in low
+        or "</html>" not in low
+        or "<body" not in low
+        or "</body>" not in low
+    ):
+        raise RuntimeError("Model did not return a complete static worksheet HTML document.")
+    if len(html_text.encode("utf-8")) > 500_000:
+        raise RuntimeError("Static worksheet HTML is too large.")
+    if "@import" in low or re.search(r"url\s*\(", low):
+        raise RuntimeError("Static worksheet may not load external CSS resources.")
+    if re.search(r"<form\b[^>]*\b(?:action|formaction)\s*=", html_text, flags=re.IGNORECASE):
+        raise RuntimeError("Static worksheet forms may not submit anywhere.")
+    if re.search(r"<svg\b[\s\S]*?<\s*(?:script|foreignobject|image|a|use|animate|animatetransform|animatemotion)\b", html_text, flags=re.IGNORECASE):
+        raise RuntimeError("Static worksheet inline SVG must remain static and self-contained.")
+
+    parser = _StaticWorksheetHtmlValidator()
+    try:
+        parser.feed(html_text)
+        parser.close()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Static worksheet HTML could not be parsed: {exc}") from exc
+
+    if parser.response_controls < 1:
+        raise RuntimeError("Static worksheet must include at least one learner response field.")
+    if parser.unnamed_controls:
+        raise RuntimeError("Every learner response field must have a stable name attribute.")
+    return html_text
+
+
+def _static_worksheet_html_with_single_repair(
+    *,
+    raw_html: str,
+    provider: str,
+    model: str | None,
+    api_key: str,
+) -> tuple[str, bool]:
+    try:
+        return _extract_safe_static_worksheet_html(raw_html), False
+    except Exception as first_error:
+        repaired = call_llm(
+            provider=provider,  # type: ignore[arg-type]
+            api_key=api_key,
+            model=model,
+            system=STATIC_WORKSHEET_REPAIR_SYSTEM,
+            user=build_static_worksheet_repair_user_prompt(
+                original_html=raw_html,
+                problem=str(first_error),
+            ),
+            temperature=0.05,
+            max_tokens=10000,
+            max_output_tokens=10000,
+        )
+        return _extract_safe_static_worksheet_html(repaired), True
+
+
 def _diagram_download_payload(
     *,
     uid: str,
@@ -2904,6 +3012,136 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             )
 
 
+
+@app.post("/static_worksheet")
+def static_worksheet(body: WidgetIn, uid: str = Depends(require_firebase_user)):
+    """Generate one static, fillable, print-friendly educational worksheet."""
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(
+                body.keys,
+                body.provider,
+                body.model,
+            )
+            provider_keys = _provider_keys_with_env(body.keys)
+            api_key = _get_provider_key(provider, provider_keys)
+            if not api_key:
+                raise HTTPException(status_code=400, detail=f"Missing API key for '{provider}'")
+            logger.info("/static_worksheet called provider=%s model=%s", provider, model)
+            image_payload = _generation_image_payload(body.images)
+            effective_prompt, default_image_prompt_used = resolve_effective_learner_prompt(
+                body.prompt,
+                image_payload,
+            )
+            multimodal = call_multimodal_llm(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                system=STATIC_WORKSHEET_SYSTEM,
+                user=build_static_worksheet_user_prompt(
+                    _with_audience_guidance(effective_prompt, body.audience)
+                ),
+                learner_prompt=body.prompt,
+                images=image_payload,
+                provider_keys=provider_keys,
+                default_image_prompt_used=default_image_prompt_used,
+                temperature=0.16,
+                max_tokens=12000,
+                max_output_tokens=12000,
+            )
+            raw_html = str(multimodal.text or "")
+            metadata = multimodal.metadata.to_dict()
+            if is_needs_clarification(raw_html):
+                generation_diagnostics = _append_artifact_generation_audit(
+                    generation_type="static_worksheet",
+                    job_id=job_id,
+                    operation="generate",
+                    outcome="needs_clarification",
+                    provider=provider,
+                    model=model,
+                    llm_calls=llm_counter.count,
+                    started_monotonic=started,
+                    generation_diagnostics=metadata,
+                    image_count=len(image_payload),
+                    default_image_prompt_used=default_image_prompt_used,
+                )
+                return {
+                    "ok": False,
+                    "status": "needs_clarification",
+                    "error": "needs_clarification",
+                    "message": "The model determined the prompt's learning intention was unclear. Please try again.",
+                    "worksheet_html": None,
+                    "generation_diagnostics": generation_diagnostics,
+                }
+
+            worksheet_html, repaired = _static_worksheet_html_with_single_repair(
+                raw_html=raw_html,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+            )
+            diagnostics_seed = {
+                **metadata,
+                "quality_status": "recovered" if repaired else "standard",
+                "recovery_stages": ["static_worksheet_html_repair"] if repaired else [],
+            }
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="static_worksheet",
+                title=body.prompt or "worksheet",
+                html_text=worksheet_html,
+                job_id=job_id,
+            )
+            generation_diagnostics = _append_artifact_generation_audit(
+                generation_type="static_worksheet",
+                job_id=job_id,
+                operation="generate",
+                outcome="recovered" if repaired else "clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                generation_diagnostics=diagnostics_seed,
+                image_count=len(image_payload),
+                default_image_prompt_used=default_image_prompt_used,
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "worksheet_html": worksheet_html,
+                "worksheet_id": job_id,
+                "generation_diagnostics": generation_diagnostics,
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="static_worksheet",
+                job_id=job_id,
+                operation="generate",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="static_worksheet_generation",
+                error_summary=exc,
+                generation_diagnostics=(locals().get("metadata") if isinstance(locals().get("metadata"), dict) else None),
+                image_count=len(locals().get("image_payload") or []),
+                default_image_prompt_used=bool(locals().get("default_image_prompt_used", False)),
+            )
+            logger.exception("/static_worksheet failed: %s", exc)
+            return diagnostic_error_response(
+                feature="static_worksheet",
+                step="static worksheet generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
+
+
 @app.post("/diagram")
 def diagram(body: WidgetIn, uid: str = Depends(require_firebase_user)):
     """Generate one static, portable SVG educational diagram."""
@@ -3039,6 +3277,99 @@ def diagram(body: WidgetIn, uid: str = Depends(require_firebase_user)):
             return diagnostic_error_response(
                 feature="diagram",
                 step="diagram generation",
+                error=exc,
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+            )
+
+
+
+@app.post("/edit/static_worksheet")
+def edit_static_worksheet_endpoint(
+    body: EditWidgetIn,
+    uid: str = Depends(require_firebase_user),
+):
+    """Edit a static worksheet while preserving its fillable/document nature."""
+    started = time.monotonic()
+    job_id = _generation_job_id(body.jobId)
+    with track_llm_calls() as llm_counter:
+        try:
+            provider, model = _resolve_provider_model(body.keys, body.provider, body.model)
+            provider_keys = _provider_keys_with_env(body.keys)
+            api_key = _get_provider_key(provider, provider_keys)
+            if not api_key:
+                raise HTTPException(status_code=400, detail=f"Missing API key for '{provider}'")
+            original_html = _extract_safe_static_worksheet_html(body.original_html)
+            if not body.edit_instructions or not body.edit_instructions.strip():
+                raise HTTPException(status_code=400, detail="edit_instructions is required")
+
+            raw = call_llm(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                system=STATIC_WORKSHEET_EDIT_SYSTEM,
+                user=build_static_worksheet_edit_user_prompt(
+                    original_html=original_html,
+                    edit_instructions=_with_audience_guidance(body.edit_instructions, body.audience),
+                ),
+                temperature=0.1,
+                max_tokens=12000,
+                max_output_tokens=12000,
+            )
+            worksheet_html, repaired = _static_worksheet_html_with_single_repair(
+                raw_html=raw,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+            )
+            download_meta = _html_download_payload(
+                uid=uid,
+                chat_id=body.chatId,
+                kind="static_worksheet",
+                title=body.original_title or "Edited static worksheet",
+                html_text=worksheet_html,
+                job_id=job_id,
+            )
+            diagnostics_seed = {
+                "quality_status": "recovered" if repaired else "standard",
+                "recovery_stages": ["static_worksheet_html_repair"] if repaired else [],
+            }
+            generation_diagnostics = _append_artifact_generation_audit(
+                generation_type="static_worksheet",
+                job_id=job_id,
+                operation="edit",
+                outcome="recovered" if repaired else "clean_success",
+                provider=provider,
+                model=model,
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                generation_diagnostics=diagnostics_seed,
+            )
+            return {
+                "ok": True,
+                "status": "ok",
+                "worksheet_html": worksheet_html,
+                "worksheet_id": job_id,
+                "generation_diagnostics": generation_diagnostics,
+                **download_meta,
+            }
+        except Exception as exc:
+            _append_artifact_generation_audit(
+                generation_type="static_worksheet",
+                job_id=job_id,
+                operation="edit",
+                outcome="failed",
+                provider=locals().get("provider"),
+                model=locals().get("model"),
+                llm_calls=llm_counter.count,
+                started_monotonic=started,
+                failure_stage="static_worksheet_edit",
+                error_summary=exc,
+            )
+            logger.exception("/edit/static_worksheet failed: %s", exc)
+            return diagnostic_error_response(
+                feature="static_worksheet",
+                step="static worksheet editing",
                 error=exc,
                 provider=locals().get("provider"),
                 model=locals().get("model"),

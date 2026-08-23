@@ -638,7 +638,7 @@ def build_structured_video_batch_creative_repair_prompt(
 # -------- WIDGET PROMPTS --------
 
 WIDGET_SYSTEM = _with_artifact_safety("""\
-    Create one self-contained interactive educational HTML widget.
+    Create one self-contained interactive educational HTML worksheet/activity.
     Return ONLY a complete HTML document. No markdown or explanation.
 
     Core rule: build the smallest working interaction that teaches one important idea.
@@ -646,7 +646,7 @@ WIDGET_SYSTEM = _with_artifact_safety("""\
 
     Teaching design:
     - Identify one clear learning objective and one obvious learner action.
-    - Make the widget visibly specific to the requested topic; never make a generic concept lab.
+    - Make the interactive worksheet visibly specific to the requested topic; never make a generic concept lab.
     - Give a short instruction, immediate meaningful feedback, and one brief "Try this" or
       "What to notice" prompt.
     - Silently choose the simplest fitting pattern: manipulate, test, classify, sequence,
@@ -687,7 +687,7 @@ def build_widget_user_prompt(topic: str) -> str:
         Topic: {topic}
         Audience: middle/high school learners.
 
-        Create a simple, teacher-ready widget with one learning objective, one main learner
+        Create a simple, teacher-ready interactive worksheet with one learning objective, one main learner
         action, immediate topic-specific feedback, and one short thing to try or notice.
         Choose the least complex interaction that makes the idea clearer than text alone.
 
@@ -696,10 +696,10 @@ def build_widget_user_prompt(topic: str) -> str:
 
 
 WIDGET_SIMPLE_FALLBACK_SYSTEM = _with_artifact_safety("""\
-    Create a very small, reliable educational HTML widget from scratch.
+    Create a very small, reliable interactive educational HTML worksheet from scratch.
     Return ONLY a complete standalone HTML document. No markdown or explanation.
 
-    This is a fallback after a more ambitious widget failed. Do not repair or imitate the
+    This is a fallback after a more ambitious interactive worksheet failed. Do not repair or imitate the
     failed implementation. Make a simpler version of the same teaching idea.
 
     Requirements:
@@ -727,7 +727,7 @@ def build_widget_simple_fallback_user_prompt(*, topic: str, reason: str | None =
 
 
 WIDGET_EDIT_SYSTEM = _with_artifact_safety("""\
-    Revise an existing self-contained educational HTML widget.
+    Revise an existing self-contained interactive educational HTML worksheet.
     Return ONLY the complete revised HTML document. No markdown or explanation.
 
     Preserve the topic, useful visual metaphor, main learner action, style, and working code
@@ -743,7 +743,7 @@ WIDGET_EDIT_SYSTEM = _with_artifact_safety("""\
 
 def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str, original_title: str | None) -> str:
     return dedent(f"""\
-        Existing widget: {original_title or 'Interactive widget'}
+        Existing interactive worksheet: {original_title or 'Interactive worksheet'}
         Edit request: {edit_instructions.strip()}
 
         Revise the existing source below. Preserve unaffected behavior and keep the result
@@ -757,14 +757,14 @@ def build_widget_edit_user_prompt(*, original_html: str, edit_instructions: str,
 
 
 WIDGET_REPAIR_SYSTEM = _with_artifact_safety("""\
-    Repair one self-contained educational HTML widget.
+    Repair one self-contained interactive educational HTML worksheet.
     Return ONLY the fixed complete HTML document. No markdown or explanation.
 
     Fix the reported defect with the smallest useful change. Preserve the topic, learning
-    objective, main interaction, and visual approach when possible. Do not expand the widget
+    objective, main interaction, and visual approach when possible. Do not expand the interactive worksheet
     into a dashboard or add controls, metrics, canvas, or animation merely to satisfy repair.
 
-    The repaired widget must use vanilla HTML/CSS/JS, addEventListener, visible feedback or
+    The repaired interactive worksheet must use vanilla HTML/CSS/JS, addEventListener, visible feedback or
     state change after the learner acts, no external assets/network/storage, safe initialization
     order, and complete closing tags.
 """)
@@ -772,7 +772,7 @@ WIDGET_REPAIR_SYSTEM = _with_artifact_safety("""\
 
 def build_widget_repair_user_prompt(*, original_title: str | None, edit_instructions: str, prior_html: str, reason: str) -> str:
     return dedent(f"""\
-        Widget/topic: {original_title or 'Interactive widget'}
+        Interactive worksheet/topic: {original_title or 'Interactive worksheet'}
         Intended change or context: {edit_instructions}
         Validation failure: {reason}
 
@@ -789,7 +789,7 @@ def build_widget_repair_user_prompt(*, original_title: str | None, edit_instruct
 
 # Final emergency fallback spec. The normal fallback is a fresh simple HTML call above.
 WIDGET_FALLBACK_SPEC_SYSTEM = _with_artifact_safety("""\
-    Create compact JSON for a last-resort topic-specific teaching widget.
+    Create compact JSON for a last-resort topic-specific interactive worksheet.
     Return ONLY valid JSON. No markdown, code fences, or comments.
 
     The backend renders the HTML. Use real topic variables and avoid generic concept-lab labels.
@@ -822,6 +822,119 @@ def build_widget_fallback_spec_user_prompt(*, topic: str, reason: str | None = N
         Topic: {topic}
         {reason_line}
         Create the small emergency JSON spec only.
+    """).strip()
+
+
+# -------- STATIC WORKSHEET PROMPTS --------
+
+STATIC_WORKSHEET_SYSTEM = _with_artifact_safety("""\
+    Create one teacher-ready STATIC educational worksheet as a complete standalone HTML document.
+    Return ONLY the complete HTML document. No markdown, commentary, or text outside the HTML.
+
+    Purpose:
+    - This is a document learners fill in, write on, select within, label, organize, calculate on,
+      or reflect in. It is not a simulation, game, dashboard, multiple-choice quiz, or generic app.
+    - Infer the most useful worksheet structure from the learner request: guided notes, practice,
+      short answer, labeling, matching, sorting, calculation/worked practice, reflection,
+      graphic organizer, vocabulary, reading response, or a sensible combination.
+    - If the user explicitly asks for a particular worksheet format, follow it.
+    - Keep enough detail to make the worksheet genuinely useful; do not simplify merely to reduce
+      text when the content remains readable and relevant.
+
+    Learner-response design:
+    - Include meaningful response spaces using native HTML form controls such as input, textarea,
+      select, checkbox, or radio controls. Use visible labels for every response area.
+    - Give each learner-response control a stable name attribute. Radio choices in one question
+      may intentionally share a name.
+    - Prefer textareas for multi-sentence responses and adequately sized inputs for short answers.
+    - Do not reveal an answer key unless the user explicitly requests one.
+    - Do not score, grade, auto-check, reveal correctness, or provide dynamic feedback. Those
+      behaviors belong to Multiple Choice Quiz or Interactive Worksheet.
+
+    Document and print design:
+    - Make the worksheet immediately readable on a white, print-friendly page with clear hierarchy.
+    - Use normal document flow. Avoid fixed-position content, huge blank regions, clipped sections,
+      tiny text, or decorative layouts that waste printable space.
+    - Use a clear title and concise instructions, followed by logically grouped learner tasks.
+    - Use tables, inline SVG diagrams, lines, boxes, columns, or labeled regions when they improve
+      the worksheet. Keep all labels legible and non-overlapping.
+    - Include @media print CSS so the learning content prints cleanly. Do not add your own Save,
+      Print, PDF, or progress toolbar; UpcurvEd adds trusted controls after validation.
+    - Prefer system fonts. Keep body text generally at 14px or larger on screen and print.
+
+    Technical requirements:
+    - Full HTML document beginning with <!DOCTYPE html> and ending with </html>.
+    - One inline <style> block is allowed. No JavaScript of any kind.
+    - No <script>, event-handler attributes, external scripts/styles/fonts/images, links, iframes,
+      object/embed, audio/video, fetch, storage, cookies, form submission, network access, or URLs.
+    - Forms, if used, must not have action or method attributes that submit anywhere.
+    - Inline SVG is allowed for static educational diagrams, but it must contain no scripts,
+      external references, links, images, animation, or foreignObject.
+    - Do not depend on resources outside the HTML file.
+
+    Before returning, silently inspect the complete worksheet for incomplete HTML, missing response
+    spaces, clipped or overlapping content, unusably small fields, unreadable print layout, and
+    accidental interactive/app behavior. Correct those issues before output.
+""")
+
+
+def build_static_worksheet_user_prompt(topic: str) -> str:
+    return dedent(f"""\
+        Learner/teacher request:
+        {topic}
+
+        Create the most useful static fillable worksheet for this request. Infer the appropriate
+        worksheet structure from the learning task. Return ONLY the complete standalone HTML.
+    """).strip()
+
+
+STATIC_WORKSHEET_REPAIR_SYSTEM = _with_artifact_safety("""\
+    Repair one static educational HTML worksheet. Return ONLY the complete corrected HTML document.
+    Preserve the topic, useful questions/tasks, response spaces, and visual organization while
+    fixing the listed validation problem with the smallest useful change.
+
+    It must remain a static fillable document: no JavaScript, scoring, dynamic feedback, external
+    assets, network access, storage, links, iframe/object/embed, audio/video, or form submission.
+    Keep visible labels with learner-response fields, maintain a clean print-friendly layout, and
+    close every HTML element correctly. Do not add Save/Print/PDF controls; UpcurvEd injects those.
+""")
+
+
+def build_static_worksheet_repair_user_prompt(*, original_html: str, problem: str) -> str:
+    return dedent(f"""\
+        Validation problem:
+        {problem}
+
+        Worksheet HTML to repair:
+        {original_html}
+
+        Return ONLY the corrected complete standalone HTML.
+    """).strip()
+
+
+STATIC_WORKSHEET_EDIT_SYSTEM = _with_artifact_safety("""\
+    Edit an existing static educational HTML worksheet. Return ONLY the complete revised HTML
+    document. No markdown or explanation.
+
+    Preserve useful worksheet content, response fields, print-friendly structure, and style unless
+    the edit request requires a change. Make the smallest useful revision while keeping the result
+    a static fillable document rather than a quiz, simulation, dashboard, or generic interactive app.
+
+    No JavaScript, scoring, dynamic feedback, external assets, network/storage, links,
+    iframe/object/embed, audio/video, or form submission. Every learner response space should remain
+    clearly labeled and usable. Do not add Save/Print/PDF controls; UpcurvEd adds trusted controls.
+""")
+
+
+def build_static_worksheet_edit_user_prompt(*, original_html: str, edit_instructions: str) -> str:
+    return dedent(f"""\
+        Edit request:
+        {edit_instructions.strip()}
+
+        Original static worksheet HTML:
+        {original_html}
+
+        Return ONLY the complete revised standalone HTML worksheet.
     """).strip()
 
 

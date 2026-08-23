@@ -89,6 +89,7 @@ import {
   selectedProvider,
 } from "@/lib/providerConfig";
 import { prepareWidgetHtmlForIframe } from "@/lib/widgetRuntime";
+import { prepareStaticWorksheetHtml, staticWorksheetStorageKey } from "@/lib/staticWorksheetRuntime";
 import {
   createMessageIdentity,
   mergeMessages,
@@ -139,10 +140,167 @@ const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, heigh
       sandbox="allow-scripts"
       className={className || "w-full border-0"}
       style={height ? { height } : undefined}
-      title={title || "Interactive Widget"}
+      title={title || "Interactive Worksheet"}
       loading="eager"
     />
   );
+};
+
+interface StaticWorksheetFrameProps {
+  worksheetHtml: string;
+  worksheetId: string;
+  userEmail: string;
+  title?: string;
+  className?: string;
+}
+
+const StaticWorksheetFrame: FC<StaticWorksheetFrameProps> = ({
+  worksheetHtml,
+  worksheetId,
+  userEmail,
+  title,
+  className,
+}) => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const preparedHtml = useMemo(
+    () => prepareStaticWorksheetHtml(worksheetHtml, worksheetId),
+    [worksheetHtml, worksheetId],
+  );
+  const worksheetUrl = useMemo(() => {
+    const blob = new Blob([preparedHtml], { type: "text/html;charset=utf-8" });
+    return URL.createObjectURL(blob);
+  }, [preparedHtml]);
+  const storageKey = useMemo(
+    () => staticWorksheetStorageKey(userEmail, worksheetId),
+    [userEmail, worksheetId],
+  );
+
+  useEffect(() => () => URL.revokeObjectURL(worksheetUrl), [worksheetUrl]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data || {};
+      if (data.worksheetId !== worksheetId) return;
+
+      if (data.type === "upcurved-static-worksheet-restore-request") {
+        let responses: any[] = [];
+        try {
+          const raw = localStorage.getItem(storageKey);
+          const parsed = raw ? JSON.parse(raw) : [];
+          responses = Array.isArray(parsed) ? parsed : [];
+        } catch {}
+        iframeRef.current?.contentWindow?.postMessage({
+          type: "upcurved-static-worksheet-restore",
+          worksheetId,
+          responses,
+        }, "*");
+        return;
+      }
+
+      if (data.type === "upcurved-static-worksheet-save") {
+        try {
+          if (Array.isArray(data.responses)) {
+            localStorage.setItem(storageKey, JSON.stringify(data.responses));
+          }
+        } catch {}
+        iframeRef.current?.contentWindow?.postMessage({
+          type: "upcurved-static-worksheet-saved",
+          worksheetId,
+          announce: data.announce !== false,
+        }, "*");
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [storageKey, worksheetId]);
+
+  return (
+    <iframe
+      ref={iframeRef}
+      src={worksheetUrl}
+      sandbox="allow-scripts allow-modals"
+      className={className || "w-full border-0"}
+      title={title || "Static Worksheet"}
+      loading="eager"
+    />
+  );
+};
+
+
+interface DiagramFrameProps {
+  svgCode: string;
+  title?: string;
+  className?: string;
+}
+
+const DiagramFrame: FC<DiagramFrameProps> = ({ svgCode, title, className }) => {
+  const diagramUrl = useMemo(() => {
+    const blob = new Blob([svgCode], { type: "image/svg+xml" });
+    return URL.createObjectURL(blob);
+  }, [svgCode]);
+
+  useEffect(() => {
+    return () => URL.revokeObjectURL(diagramUrl);
+  }, [diagramUrl]);
+
+  return (
+    <div className={className || "flex h-full w-full items-center justify-center overflow-auto bg-white p-3"}>
+      <img
+        src={diagramUrl}
+        alt={title || "Educational diagram"}
+        className="max-h-full max-w-full object-contain"
+        draggable={false}
+      />
+    </div>
+  );
+};
+
+const svgToPngBlob = async (svgCode: string): Promise<Blob> => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgCode, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (!svg || svg.nodeName.toLowerCase() !== "svg" || doc.querySelector("parsererror")) {
+    throw new Error("The diagram SVG could not be read.");
+  }
+
+  const viewBox = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+  let width = viewBox.length === 4 && Number.isFinite(viewBox[2]) ? viewBox[2] : Number(svg.getAttribute("width"));
+  let height = viewBox.length === 4 && Number.isFinite(viewBox[3]) ? viewBox[3] : Number(svg.getAttribute("height"));
+  if (!Number.isFinite(width) || width <= 0) width = 1200;
+  if (!Number.isFinite(height) || height <= 0) height = 800;
+
+  // Export at document-friendly resolution while bounding memory use.
+  const scale = Math.min(2, 2400 / width, 1800 / height);
+  const outputWidth = Math.max(1, Math.round(width * Math.max(1, scale)));
+  const outputHeight = Math.max(1, Math.round(height * Math.max(1, scale)));
+  const sourceBlob = new Blob([svgCode], { type: "image/svg+xml" });
+  const sourceUrl = URL.createObjectURL(sourceBlob);
+
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("The diagram could not be rendered as PNG."));
+      image.src = sourceUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("PNG export is unavailable in this browser.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, outputWidth, outputHeight);
+    context.drawImage(image, 0, 0, outputWidth, outputHeight);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("PNG export failed."))),
+        "image/png",
+      );
+    });
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
 };
 
 const ImageAttachmentPreview: FC<{ file: File }> = ({ file }) => {
@@ -171,22 +329,24 @@ const clarificationMessageFrom = (value: any): string | null => {
 };
 
 type GenerationSelection =
+  | "static_worksheet"
+  | "widget"
+  | "diagram"
   | "video"
-  | "story"
+  | "quiz"
   | "podcast_single"
   | "podcast_debate"
-  | "quiz"
-  | "widget"
-  | "flowchart";
+  | "story";
 
 const GENERATION_SELECTION_LABELS: Record<GenerationSelection, string> = {
+  static_worksheet: "Static Worksheet",
+  widget: "Interactive Worksheet",
+  diagram: "Diagram",
   video: "Video",
-  story: "Story",
+  quiz: "Multiple Choice Quiz",
   podcast_single: "Podcast (Single)",
   podcast_debate: "Podcast (Debate)",
-  quiz: "Quiz",
-  widget: "Widget",
-  flowchart: "Flowchart",
+  story: "Story",
 };
 
 type MultimodalGenerationDiagnostics = GenerationDiagnostics & {
@@ -523,7 +683,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Edit mode state - for editing existing artifacts
   const [isEditMode, setIsEditMode] = useState(false);
   const [isQuizMode, setIsQuizMode] = useState(false);
-  const [generationType, setGenerationType] = useState<GenerationSelection>("video");
+  const [generationType, setGenerationType] = useState<GenerationSelection>("static_worksheet");
   const [quotedMessage, setQuotedMessage] = useState<{ messageId: string; content: string; media?: import('@/types').MediaAttachment; quizData?: QuizData; artifactKind?: ArtifactKind } | null>(null);
   // backend integration state
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -614,8 +774,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       case 'audio':
       case 'podcast': return 'podcast';
       case 'story': return 'story';
-      case 'widget': return 'widget';
-      case 'flowchart': return 'flowchart';
+      case 'widget': return 'interactive worksheet';
+      case 'static_worksheet': return 'static worksheet';
+      case 'diagram': return 'diagram';
       case 'quiz': return 'quiz';
       default: return 'artifact';
     }
@@ -637,6 +798,22 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim() || fallback;
+    }
+  };
+
+  const plainTextFromSvg = (svg?: string, fallback = ''): string => {
+    const raw = String(svg || '').trim();
+    if (!raw) return fallback;
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(raw, 'image/svg+xml');
+      if (doc.querySelector('parsererror')) return fallback;
+      const pieces = Array.from(doc.querySelectorAll('title, desc, text, tspan'))
+        .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+      return pieces.join(' ').replace(/\s+/g, ' ').trim() || fallback;
+    } catch {
+      return fallback;
     }
   };
 
@@ -672,8 +849,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       toast({ title: "Cannot edit this video", description: "This video was generated before edit mode was available. Generate a new video to enable editing.", duration: 4000 });
       return;
     }
-    if ((kind === 'story' || kind === 'widget' || kind === 'flowchart') && !msg.media?.widgetCode) {
-      toast({ title: "Cannot edit this artifact", description: "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
+    if ((kind === 'story' || kind === 'widget' || kind === 'static_worksheet' || kind === 'diagram') && !msg.media?.widgetCode) {
+      toast({ title: "Cannot edit this artifact", description: kind === 'diagram' ? "The original SVG is missing. Regenerate it to enable editing." : "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
       return;
     }
     if (kind === 'quiz' && !quizData && !msg?.quizData) {
@@ -697,7 +874,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const [vttUrl, setVttUrl] = useState<string | null>(null); // object URL for converted WebVTT captions
   // `title` carries the prompt/episode name so downloads get a meaningful filename.
-  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget'; artifactKind?: ArtifactKind; title?: string } | null>(null);
+  const [currentMediaMeta, setCurrentMediaMeta] = useState<{ artifactId?: string; gcsPath?: string; type?: 'video'|'audio'|'widget'; artifactKind?: ArtifactKind; title?: string; worksheetId?: string } | null>(null);
   type PersistedMediaSelection = {
     chatId: string;
     messageId?: string;
@@ -710,6 +887,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     widgetCode?: string;
     title?: string;
     downloadFilename?: string;
+    worksheetId?: string;
     updatedAt: number;
   };
   const videoAbortRef = useRef<AbortController | null>(null);
@@ -760,6 +938,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           widgetCode: message.media.widgetCode as string | undefined,
           artifactKind: message.media.artifactKind as ArtifactKind | undefined,
           downloadFilename: message.media.downloadFilename as string | undefined,
+          worksheetId: message.media.worksheetId as string | undefined,
           scriptGcsPath: message.media.scriptGcsPath as string | undefined,
           generationDiagnostics: normalizeGenerationDiagnostics(
             message.media.generationDiagnostics,
@@ -867,7 +1046,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     return base.endsWith(".html") ? base : `${base}.html`;
   };
 
-  type GenerationAction = "video" | "story" | "podcast" | "widget" | "flowchart" | "quiz" | "edit";
+  const svgFilenameFromTitle = (title?: string | null, fallback = "upcurved_diagram.svg") => {
+    const raw = String(title || fallback).replace(/\.svg$/i, "");
+    const base = raw
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || "upcurved_diagram";
+    return `${base}.svg`;
+  };
+
+  type GenerationAction = "video" | "story" | "podcast" | "widget" | "static_worksheet" | "diagram" | "quiz" | "edit";
 
   const ensureLlmKey = (action: GenerationAction): boolean => {
     const normalized = normalizeApiKeys(apiKeys);
@@ -878,8 +1067,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         video: "generate a video",
         story: "generate a story",
         podcast: "generate a podcast",
-        widget: "generate a widget",
-        flowchart: "generate a flowchart",
+        widget: "generate an interactive worksheet",
+        static_worksheet: "generate a static worksheet",
+        diagram: "generate a diagram",
         quiz: "generate a quiz",
         edit: "edit this artifact",
       };
@@ -1042,12 +1232,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     () => apiKeysFingerprint(normalizedApiKeys),
     [normalizedApiKeys]
   );
+
   const [apiKeysHydratedFor, setApiKeysHydratedFor] = useState<string>("");
 
-  // On a fresh renderer load (including Cmd+R), hydrate API keys from their
-  // configured storage before allowing the normal persistence effect to run.
-  // Without this gate, the initial empty React state can overwrite securely
-  // stored Keychain values before they have had a chance to load.
+  // On a fresh renderer load (including Cmd+R), hydrate API keys from their configured
+  // storage before allowing the normal persistence effect to run.
   useEffect(() => {
     const email = String(user?.email || "").trim();
     if (!email) {
@@ -1057,21 +1246,16 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     let cancelled = false;
     setApiKeysHydratedFor("");
-
     void (async () => {
       const loaded = normalizeApiKeys(await loadApiKeysForUser(email));
       if (cancelled) return;
       setApiKeys(loaded);
       setApiKeysHydratedFor(email);
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [user?.email]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist every registered provider key, including OpenAI and OpenRouter,
-  // but only after startup hydration has completed for this user.
+  // Persist every registered provider key only after startup hydration completes.
   useEffect(() => {
     const email = String(user?.email || "").trim();
     if (!email || apiKeysHydratedFor !== email) return;
@@ -1197,13 +1381,25 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (media.type === "widget" && media.widgetCode) {
       stopPlayback();
       const widgetDownloadUrl = toPlayableMediaUrl(media.url);
-      const widgetDownloadFilename = media.downloadFilename || htmlFilenameFromTitle(media.title, "upcurved_widget.html");
+      const artifactKind = normalizeArtifactKind(media, message);
+      const widgetDownloadFilename = media.downloadFilename || (
+        artifactKind === "diagram"
+          ? svgFilenameFromTitle(media.title, "upcurved_diagram.svg")
+          : htmlFilenameFromTitle(
+              media.title,
+              artifactKind === "static_worksheet"
+                ? "upcurved_static_worksheet.html"
+                : "upcurved_interactive_worksheet.html",
+            )
+      );
       setVideoUrl(null);
       setCurrentMediaMeta({
         artifactId: media.artifactId,
         gcsPath: media.gcsPath,
         type: "widget",
-        artifactKind: normalizeArtifactKind(media, message),
+        artifactKind,
+        title: media.title,
+        worksheetId: media.worksheetId,
       });
       setVttUrl(null);
       setSrtText(null);
@@ -1223,6 +1419,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           gcsPath: media.gcsPath,
           title: media.title,
           downloadFilename: widgetDownloadFilename,
+          worksheetId: media.worksheetId,
           updatedAt: Date.now(),
         });
       }
@@ -1301,6 +1498,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         artifactId: currentMediaMeta?.artifactId,
         gcsPath: currentMediaMeta?.gcsPath,
         downloadFilename: htmlDownloadFilename || undefined,
+        title: currentMediaMeta?.title,
+        worksheetId: currentMediaMeta?.worksheetId,
         updatedAt: Date.now(),
       });
       return;
@@ -1320,7 +1519,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         updatedAt: Date.now(),
       });
     }
-  }, [activeChatId, widgetHtml, htmlDownloadUrl, htmlDownloadFilename, videoUrl, currentMediaMeta?.type, currentMediaMeta?.artifactId, currentMediaMeta?.gcsPath, vttUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeChatId, widgetHtml, htmlDownloadUrl, htmlDownloadFilename, videoUrl, currentMediaMeta?.type, currentMediaMeta?.artifactId, currentMediaMeta?.gcsPath, currentMediaMeta?.title, currentMediaMeta?.worksheetId, vttUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const formatTime = (secs: number) => {
     if (!isFinite(secs) || secs < 0) secs = 0;
@@ -1508,6 +1707,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             gcsPath: persisted.gcsPath,
             title: persisted.title,
             downloadFilename: persisted.downloadFilename,
+            worksheetId: persisted.worksheetId,
           },
         };
       }
@@ -2894,7 +3094,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   }
 
   async function generateWidgetFromPrompt(
-    artifactKind: "widget" | "flowchart" = "widget",
+    artifactKind: "widget" | "static_worksheet" | "diagram" = "widget",
   ) {
     if (widgetLoading && widgetAbortRef.current) {
       widgetAbortRef.current.abort();
@@ -2903,13 +3103,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
     const prompt = query.trim();
     const sourceFiles = [...uploadedFiles];
-    const isFlowchart = artifactKind === "flowchart";
-    const artifactName = isFlowchart ? "Flowchart" : "Widget";
+    const isDiagram = artifactKind === "diagram";
+    const isStaticWorksheet = artifactKind === "static_worksheet";
+    const artifactName = isDiagram ? "Diagram" : isStaticWorksheet ? "Static Worksheet" : "Interactive Worksheet";
     if (!prompt && sourceFiles.length === 0) {
       toast({ title: "Enter a prompt or attach an image", description: "Add text, paste an image, or attach an image first.", duration: 4000 });
       return;
     }
-    if (!ensureLlmKey(isFlowchart ? "flowchart" : "widget")) return;
+    if (!ensureLlmKey(isDiagram ? "diagram" : isStaticWorksheet ? "static_worksheet" : "widget")) return;
 
     let images: GenerationImagePayload[];
     try {
@@ -2960,7 +3161,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         sessionId: ensureChatSessionId(),
         jobId: makeJobId(),
       };
-      const endpoint = isFlowchart ? "/flowchart" : "/widget";
+      const endpoint = isDiagram ? "/diagram" : isStaticWorksheet ? "/static_worksheet" : "/widget";
       console.debug(`POST ${endpoint}`, {
         ...body,
         images: images.map((image) => ({ mimeType: image.mimeType, name: image.name })),
@@ -2979,19 +3180,26 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         return;
       }
 
-      if (res.ok && data?.status === "ok" && data?.widget_html) {
+      const artifactSource = isDiagram ? data?.svg_code : isStaticWorksheet ? data?.worksheet_html : data?.widget_html;
+      if (res.ok && data?.status === "ok" && artifactSource) {
         const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
         const downloadUrl = toPlayableMediaUrl(data.download_url);
-        const fallbackFilename = isFlowchart ? "upcurved_flowchart.html" : "upcurved_widget.html";
-        const downloadFilename = data.download_filename || htmlFilenameFromTitle(
-          `${artifactName}: ${sourceLabel.slice(0, 50)}`,
-          fallbackFilename,
+        const downloadFilename = data.download_filename || (
+          isDiagram
+            ? svgFilenameFromTitle(`upcurved_diagram_${sourceLabel.slice(0, 50)}`)
+            : htmlFilenameFromTitle(
+                `${artifactName}: ${sourceLabel.slice(0, 50)}`,
+                isStaticWorksheet ? "upcurved_static_worksheet.html" : "upcurved_interactive_worksheet.html",
+              )
         );
         const mediaAttachment: import('@/types').MediaAttachment = {
           type: 'widget',
           artifactKind,
           url: downloadUrl,
-          widgetCode: data.widget_html,
+          // widgetCode is the persisted text-artifact source slot. For Diagram it contains
+          // validated standalone SVG instead of HTML.
+          widgetCode: artifactSource,
+          worksheetId: isStaticWorksheet ? String(data.worksheet_id || body.jobId || "") : undefined,
           title: `${artifactName}: ${sourceLabel.slice(0, 50)}`,
           downloadFilename,
           generationDiagnostics: normalizeGenerationDiagnostics(
@@ -2999,17 +3207,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           ),
         };
         await processAndAddMessage(
-          isFlowchart ? "✅ Flowchart generated." : "✅ Interactive widget generated.",
+          isDiagram ? "✅ Diagram generated." : isStaticWorksheet ? "✅ Static worksheet generated." : "✅ Interactive worksheet generated.",
           false,
           mediaAttachment,
           String(finalChatId),
         );
         setVideoUrl(null);
-        setCurrentMediaMeta({ type: 'widget', artifactKind });
+        setCurrentMediaMeta({ type: 'widget', artifactKind, title: mediaAttachment.title, worksheetId: mediaAttachment.worksheetId });
         setSrtText(null);
         setVttUrl(null);
         setSubtitleLang(undefined);
-        setWidgetHtml(data.widget_html);
+        setWidgetHtml(artifactSource);
         setHtmlDownloadUrl(downloadUrl || null);
         setHtmlDownloadFilename(downloadFilename || null);
       } else {
@@ -3017,7 +3225,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const friendly = formatGenerationError(
           `${artifactName} generation`,
           errorBody,
-          `${artifactName} response did not include widget_html.`,
+          `${artifactName} response did not include ${isDiagram ? "svg_code" : isStaticWorksheet ? "worksheet_html" : "widget_html"}.`,
         );
         await processAndAddMessage(friendly, false, undefined, persistedId);
       }
@@ -4001,6 +4209,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   async function handleSelectedGeneration() {
     switch (generationType) {
+      case "static_worksheet":
+        await generateWidgetFromPrompt("static_worksheet");
+        return;
       case "video":
         await handleVideoGenerateClick("standard");
         return;
@@ -4019,8 +4230,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       case "widget":
         await generateWidgetFromPrompt("widget");
         return;
-      case "flowchart":
-        await generateWidgetFromPrompt("flowchart");
+      case "diagram":
+        await generateWidgetFromPrompt("diagram");
         return;
       default:
         return;
@@ -4189,12 +4400,15 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   async function handleQuizHtmlArtifactDirect(msg: any) {
     const media = msg.media;
     const kind = normalizeArtifactKind(media, msg);
-    if (!media?.widgetCode || (kind !== 'story' && kind !== 'widget')) {
-      toast({ title: "Cannot generate quiz", description: "This artifact does not have readable HTML content.", duration: 4000 });
+    if (!media?.widgetCode || (kind !== 'story' && kind !== 'widget' && kind !== 'static_worksheet' && kind !== 'diagram')) {
+      toast({ title: "Cannot generate quiz", description: "This artifact does not have readable content.", duration: 4000 });
       return;
     }
 
-    const transcript = plainTextFromHtml(media.widgetCode, msg.content).slice(0, 14000);
+    const transcript = (kind === 'diagram'
+      ? plainTextFromSvg(media.widgetCode, msg.content)
+      : plainTextFromHtml(media.widgetCode, msg.content)
+    ).slice(0, 14000);
     if (!transcript || transcript.length < 30) {
       toast({ title: "Cannot generate quiz", description: "There was not enough readable text in this artifact.", duration: 4000 });
       return;
@@ -4212,7 +4426,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     let persistedId: string | undefined;
 
     try {
-      const mediaTitle = media.title || (kind === 'story' ? 'story' : 'widget');
+      const mediaTitle = media.title || (kind === 'story' ? 'story' : kind === 'diagram' ? 'diagram' : kind === 'static_worksheet' ? 'static worksheet' : 'interactive worksheet');
       const userPrompt = `❓ Quiz from ${mediaTitle}`;
 
       persistedId = await ensurePersistedActiveChat(userPrompt);
@@ -4311,22 +4525,27 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       await processAndAddMessage(userEditMessage, true, undefined, chatIdForGeneration);
       setQuery("");
 
-      if (kind === 'widget' || kind === 'story' || kind === 'flowchart') {
-        const originalHtml = quotedMessage.media?.widgetCode || '';
-        if (!originalHtml.trim()) {
-          toast({ title: "Cannot edit", description: "The original HTML source is missing.", duration: 4000 });
+      if (kind === 'widget' || kind === 'static_worksheet' || kind === 'story' || kind === 'diagram') {
+        const originalSource = quotedMessage.media?.widgetCode || '';
+        if (!originalSource.trim()) {
+          toast({
+            title: "Cannot edit",
+            description: kind === 'diagram' ? "The original SVG source is missing." : "The original HTML source is missing.",
+            duration: 4000,
+          });
           return;
         }
 
         setWidgetLoading(true);
         const controller = new AbortController();
         widgetAbortRef.current = controller;
-        const endpoint = kind === 'story' ? '/edit/story' : '/edit/widget';
+        const endpoint = kind === 'story' ? '/edit/story' : kind === 'diagram' ? '/edit/diagram' : kind === 'static_worksheet' ? '/edit/static_worksheet' : '/edit/widget';
         const res = await apiFetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            original_html: originalHtml,
+            // The shared edit request model calls this field original_html; Diagram sends SVG here.
+            original_html: originalSource,
             edit_instructions: editInstructions,
             original_title: sourceTitle,
             keys: llmConfig.keys,
@@ -4340,34 +4559,40 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           signal: controller.signal,
         });
         const { data, raw } = await parseResponse(res);
+        const revisedSource = kind === 'diagram' ? data?.svg_code : kind === 'static_worksheet' ? data?.worksheet_html : data?.widget_html;
 
-        if (res.ok && data?.status === 'ok' && data?.widget_html) {
+        if (res.ok && data?.status === 'ok' && revisedSource) {
           const downloadUrl = toPlayableMediaUrl(data.download_url);
-          const fallbackName =
-            kind === 'story'
-              ? 'upcurved_story.html'
-              : kind === 'flowchart'
-              ? 'upcurved_flowchart.html'
-              : 'upcurved_widget.html';
-          const downloadFilename = data.download_filename || htmlFilenameFromTitle(`Edited ${artifactLabel(kind)}: ${sourceTitle}`, fallbackName);
+          const downloadFilename = data.download_filename || (
+            kind === 'diagram'
+              ? svgFilenameFromTitle(`upcurved_edited_diagram_${sourceTitle}`)
+              : htmlFilenameFromTitle(
+                  `Edited ${artifactLabel(kind)}: ${sourceTitle}`,
+                  kind === 'story' ? 'upcurved_story.html' : kind === 'static_worksheet' ? 'upcurved_static_worksheet.html' : 'upcurved_interactive_worksheet.html',
+                )
+          );
           const titlePrefix =
             kind === 'story'
               ? 'Edited Story'
-              : kind === 'flowchart'
-              ? 'Edited Flowchart'
-              : 'Edited Widget';
+              : kind === 'diagram'
+              ? 'Edited Diagram'
+              : kind === 'static_worksheet'
+              ? 'Edited Static Worksheet'
+              : 'Edited Interactive Worksheet';
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
             artifactKind: kind as any,
             url: downloadUrl,
-            widgetCode: data.widget_html,
+            widgetCode: revisedSource,
+            worksheetId: kind === 'static_worksheet' ? String(data.worksheet_id || "") : undefined,
             title: `${titlePrefix}: ${sourceTitle}`,
             downloadFilename,
+            generationDiagnostics: normalizeGenerationDiagnostics(data.generation_diagnostics),
           };
-          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : kind === 'flowchart' ? 'Flowchart' : 'Widget'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
+          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : kind === 'diagram' ? 'Diagram' : kind === 'static_worksheet' ? 'Static worksheet' : 'Interactive worksheet'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
           setVideoUrl(null);
-          setCurrentMediaMeta({ type: 'widget', artifactKind: kind });
-          setWidgetHtml(data.widget_html);
+          setCurrentMediaMeta({ type: 'widget', artifactKind: kind, title: mediaAttachment.title, worksheetId: mediaAttachment.worksheetId });
+          setWidgetHtml(revisedSource);
           setHtmlDownloadUrl(downloadUrl || null);
           setHtmlDownloadFilename(downloadFilename || null);
         } else {
@@ -5057,15 +5282,38 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       .trim()
       .replace(/[^\w.\-]+/g, "_")
       .replace(/_+/g, "_");
-
-    return cleaned.endsWith(".html") ? cleaned : `${cleaned}.html`;
+    if (/\.[a-z0-9]{2,6}$/i.test(cleaned)) return cleaned;
+    const fallbackExtension = String(fallback).match(/(\.[a-z0-9]{2,6})$/i)?.[1] || ".html";
+    return `${cleaned}${fallbackExtension}`;
   };
 
   const handleHtmlDownload = async (downloadUrl?: string, filename?: string) => {
+    if (currentMediaMeta?.artifactKind === "static_worksheet" && widgetHtml) {
+      try {
+        const worksheetId = currentMediaMeta.worksheetId || "static_worksheet";
+        const prepared = prepareStaticWorksheetHtml(widgetHtml, worksheetId);
+        const blob = new Blob([prepared], { type: "text/html;charset=utf-8" });
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = sanitizeDownloadFilename(
+          filename || "upcurved_static_worksheet.html",
+          "upcurved_static_worksheet.html",
+        );
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        return;
+      } catch (error) {
+        console.error("Static worksheet HTML export failed", error);
+      }
+    }
+
     if (!downloadUrl) {
       toast({
         title: "Download unavailable",
-        description: "No downloadable HTML file was found for this item.",
+        description: "No downloadable artifact file was found for this item.",
         duration: 4000,
       });
       return;
@@ -5081,7 +5329,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(
-        blob.type ? blob : new Blob([blob], { type: "text/html;charset=utf-8" })
+        blob.type ? blob : new Blob([blob], { type: currentMediaMeta?.artifactKind === "diagram" ? "image/svg+xml" : "text/html;charset=utf-8" })
       );
 
       const link = document.createElement("a");
@@ -5093,10 +5341,37 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     } catch (error) {
-      console.error("HTML download failed", error);
+      console.error("Artifact download failed", error);
       toast({
         title: "Download failed",
-        description: "The HTML file could not be downloaded.",
+        description: "The file could not be downloaded.",
+        duration: 5000,
+      });
+    }
+  };
+
+  const handleDiagramPngDownload = async () => {
+    if (!widgetHtml || currentMediaMeta?.artifactKind !== "diagram") return;
+    try {
+      const blob = await svgToPngBlob(widgetHtml);
+      const objectUrl = URL.createObjectURL(blob);
+      const svgName = sanitizeDownloadFilename(
+        htmlDownloadFilename || "upcurved_diagram.svg",
+        "upcurved_diagram.svg",
+      );
+      const pngName = svgName.replace(/\.svg$/i, ".png");
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = pngName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error: any) {
+      console.error("Diagram PNG export failed", error);
+      toast({
+        title: "PNG export failed",
+        description: error?.message || "The diagram could not be converted to PNG.",
         duration: 5000,
       });
     }
@@ -5445,7 +5720,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             <div
                               className={`mt-3 bg-card border rounded-lg p-3 cursor-pointer hover:bg-accent transition-colors ${busy ? 'opacity-50 pointer-events-none' : ''}`}
                               onClick={() => { if (!busy && !podcastLoading && !quizLoading && !widgetLoading) void openMediaFromMessage(msg); }}
-                              title="Open widget"
+                              title={normalizeArtifactKind(msg.media, msg) === "diagram" ? "Open diagram" : normalizeArtifactKind(msg.media, msg) === "static_worksheet" ? "Open static worksheet" : "Open interactive worksheet"}
                             >
                               <div className="flex items-center gap-3">
                                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${getThemeGradient(colorTheme)}`}>
@@ -5453,7 +5728,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <p className="font-medium text-sm truncate">
-                                    {msg.media.title || "Interactive Widget"}
+                                    {msg.media.title || (normalizeArtifactKind(msg.media, msg) === "diagram" ? "Diagram" : normalizeArtifactKind(msg.media, msg) === "static_worksheet" ? "Static Worksheet" : "Interactive Worksheet")}
                                   </p>
                                   <p className="text-xs text-muted-foreground">
                                     Click to open in right panel
@@ -5879,13 +6154,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     }
                     className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                   >
+                    <option value="static_worksheet">Generate: Static Worksheet</option>
+                    <option value="widget">Generate: Interactive Worksheet</option>
+                    <option value="diagram">Generate: Diagram</option>
                     <option value="video">Generate: Video</option>
-                    <option value="story">Generate: Story</option>
+                    <option value="quiz">Generate: Multiple Choice Quiz</option>
                     <option value="podcast_single">Generate: Podcast (Single)</option>
                     <option value="podcast_debate">Generate: Podcast (Debate)</option>
-                    <option value="quiz">Generate: Quiz</option>
-                    <option value="widget">Generate: Widget</option>
-                    <option value="flowchart">Generate: Flowchart</option>
+                    <option value="story">Generate: Story</option>
                   </select>
                 )}
                 <select
@@ -5919,17 +6195,31 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             onContextMenu={(e) => e.preventDefault()}
           >
             {widgetHtml ? (
-              <WidgetFrame
-                widgetCode={widgetHtml}
-                className="w-full h-full rounded-xl border-0"
-                title={
-                  currentMediaMeta?.artifactKind === "flowchart"
-                    ? "Flowchart"
-                    : currentMediaMeta?.artifactKind === "story"
-                    ? "Story"
-                    : "Interactive Widget"
-                }
-              />
+              currentMediaMeta?.artifactKind === "diagram" ? (
+                <DiagramFrame
+                  svgCode={widgetHtml}
+                  className="flex h-full w-full items-center justify-center overflow-auto rounded-xl bg-white p-3"
+                  title={currentMediaMeta?.title || "Educational diagram"}
+                />
+              ) : currentMediaMeta?.artifactKind === "static_worksheet" ? (
+                <StaticWorksheetFrame
+                  worksheetHtml={widgetHtml}
+                  worksheetId={currentMediaMeta?.worksheetId || "static_worksheet"}
+                  userEmail={user.email}
+                  className="w-full h-full rounded-xl border-0 bg-white"
+                  title={currentMediaMeta?.title || "Static Worksheet"}
+                />
+              ) : (
+                <WidgetFrame
+                  widgetCode={widgetHtml}
+                  className="w-full h-full rounded-xl border-0"
+                  title={
+                    currentMediaMeta?.artifactKind === "story"
+                      ? "Story"
+                      : "Interactive Worksheet"
+                  }
+                />
+              )
             ) : !videoUrl ? (
               <div className="text-center p-4">
                 {busy || podcastLoading || widgetLoading ? (
@@ -5946,7 +6236,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      {busy ? "Rendering video…" : widgetLoading ? (generationType === "flowchart" ? "Generating flowchart…" : "Generating widget…") : "Generating podcast…"}
+                      {busy ? "Rendering video…" : widgetLoading ? (generationType === "diagram" ? "Generating diagram…" : generationType === "static_worksheet" ? "Generating static worksheet…" : "Generating interactive worksheet…") : "Generating podcast…"}
                     </p>
                   </div>
                 ) : apiError ? (
@@ -6053,15 +6343,28 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           </Card>
 
           {widgetHtml && htmlDownloadUrl && (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => handleHtmlDownload(htmlDownloadUrl, htmlDownloadFilename || "upcurved_export.html")}
+                onClick={() => handleHtmlDownload(
+                  htmlDownloadUrl,
+                  htmlDownloadFilename || (currentMediaMeta?.artifactKind === "diagram" ? "upcurved_diagram.svg" : currentMediaMeta?.artifactKind === "static_worksheet" ? "upcurved_static_worksheet.html" : "upcurved_export.html"),
+                )}
               >
                 <Download className="w-4 h-4 mr-2" />
-                Download HTML
+                {currentMediaMeta?.artifactKind === "diagram" ? "Download SVG" : "Download HTML"}
               </Button>
+              {currentMediaMeta?.artifactKind === "diagram" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleDiagramPngDownload()}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Download PNG
+                </Button>
+              )}
             </div>
           )}
 

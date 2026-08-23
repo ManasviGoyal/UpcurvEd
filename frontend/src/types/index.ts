@@ -1,6 +1,6 @@
 // frontend/src/types/index.ts
 
-export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'diagram' | 'quiz';
+export type ArtifactKind = 'video' | 'audio' | 'podcast' | 'story' | 'widget' | 'static_worksheet' | 'diagram' | 'quiz';
 
 export type AudienceLevel =
   | 'auto'
@@ -74,6 +74,7 @@ export interface MediaAttachment {
   scriptGcsPath?: string;
   widgetCode?: string;
   downloadFilename?: string;
+  worksheetId?: string;
   generationDiagnostics?: GenerationDiagnostics;
 }
 

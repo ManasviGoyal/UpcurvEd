@@ -21,7 +21,7 @@ _INSTALLATION_ID_PATH = STORAGE / ".generation_installation_id"
 _EXPORTS_ROOT = STORAGE / "exports"
 _RETENTION_MARKER = ".diagnostic_retention.json"
 _SCHEMA_VERSION = 5
-_ALLOWED_GENERATION_TYPES = {"video", "story", "podcast", "quiz", "widget", "diagram"}
+_ALLOWED_GENERATION_TYPES = {"video", "story", "podcast", "quiz", "widget", "diagram", "static_worksheet"}
 
 _EXCEPTION_LINE = re.compile(
     r"^(?:[A-Za-z_][\w.]*Error|Exception|RuntimeError|TypeError|ValueError|NameError|"
@@ -721,7 +721,7 @@ It does not include prompts, chat messages, narration, generated scripts, API ke
 user names, email addresses, local filesystem paths, or full tracebacks.
 
 Files:
-- generation_audit.jsonl: one compact JSON record per video, story, podcast, quiz, widget, or diagram generation/edit.
+- generation_audit.jsonl: one compact JSON record per video, story, podcast, quiz, widget, diagram, or static worksheet generation/edit.
 - generation_summary.json: deterministic aggregate counts by type, outcome, provider, model,
   exact LLM calls, input/output token totals, estimated model cost, pricing coverage,
   separate clarification/failure counts, image/vision routing, failure stage, root error category,
