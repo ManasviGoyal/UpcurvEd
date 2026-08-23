@@ -1,12 +1,16 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 
+import { Trans, useLanguage } from "@/lib/i18n";
+
 interface DocsModalProps {
   isDark: boolean;
   onClose: () => void;
 }
 
 export default function DocsModal({ isDark, onClose }: DocsModalProps) {
+  const { t } = useLanguage();
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -32,6 +36,14 @@ export default function DocsModal({ isDark, onClose }: DocsModalProps) {
   const linkClass = `font-semibold underline underline-offset-4 transition-colors ${
     isDark ? "text-teal-300 hover:text-teal-200" : "text-teal-700 hover:text-teal-800"
   }`;
+  // Rendered inside translated sentences via <Trans>, so each language can place it
+  // wherever its own grammar wants.
+  const setupGuideLink = (
+    <Link to="/setup-guide" className={linkClass} onClick={onClose}>
+      {t("docs.setupGuideLink")}
+    </Link>
+  );
+
   const codeClass = isDark
     ? "border-slate-700 bg-slate-950 text-slate-100"
     : "border-slate-200 bg-white text-slate-800";
@@ -58,12 +70,12 @@ export default function DocsModal({ isDark, onClose }: DocsModalProps) {
           }`}
         >
           <h2 id="upcurved-docs-title" className="text-2xl font-bold">
-            Help &amp; FAQ
+            {t("docs.title")}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Help"
+            aria-label={t("docs.close")}
             className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${
               isDark
                 ? "border-slate-700 bg-slate-800 hover:bg-slate-700"
@@ -96,85 +108,55 @@ export default function DocsModal({ isDark, onClose }: DocsModalProps) {
 
           <dl className="space-y-6">
             <div>
-              <dt className="font-semibold">How do I install and set up UpcurvEd?</dt>
+              <dt className="font-semibold">{t("docs.q.install")}</dt>
               <dd className={`mt-1 ${mutedTextClass}`}>
-                Follow the{" "}
-                <Link to="/setup-guide" className={linkClass} onClick={onClose}>
-                  Setup Guide
-                </Link>
-                . It walks through downloading the app, installing it on macOS or Windows, and adding your API key in
-                Settings.
+                <Trans k="docs.a.install" components={{ setupGuide: setupGuideLink }} />
               </dd>
             </div>
 
             <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">Do I need an API key?</dt>
+              <dt className="font-semibold">{t("docs.q.apiKey")}</dt>
+              <dd className={`mt-1 ${mutedTextClass}`}>{t("docs.a.apiKey")}</dd>
+            </div>
+
+            <div className={`border-t pt-6 ${dividerClass}`}>
+              <dt className="font-semibold">{t("docs.q.free")}</dt>
               <dd className={`mt-1 ${mutedTextClass}`}>
-                Yes. UpcurvEd connects to the model provider selected in Settings using the API key you provide.
+                <Trans k="docs.a.free" components={{ setupGuide: setupGuideLink }} />
               </dd>
             </div>
 
             <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">Can I use UpcurvEd without paying for AI usage?</dt>
-              <dd className={`mt-1 ${mutedTextClass}`}>
-                Yes. Select OpenRouter Free or another currently available free model. The{" "}
-                <Link to="/setup-guide" className={linkClass} onClick={onClose}>
-                  Setup Guide
-                </Link>{" "}
-                has step-by-step instructions for getting a free OpenRouter key. Free model availability and limits may
-                change.
-              </dd>
+              <dt className="font-semibold">{t("docs.q.freeFailed")}</dt>
+              <dd className={`mt-1 ${mutedTextClass}`}>{t("docs.a.freeFailed")}</dd>
             </div>
 
             <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">Why did a free model fail or take longer?</dt>
-              <dd className={`mt-1 ${mutedTextClass}`}>
-                Free providers may be busy or temporarily unavailable. Try again or select a different free model.
-              </dd>
+              <dt className="font-semibold">{t("docs.q.changeProvider")}</dt>
+              <dd className={`mt-1 ${mutedTextClass}`}>{t("docs.a.changeProvider")}</dd>
             </div>
 
             <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">Where do I change providers or models?</dt>
-              <dd className={`mt-1 ${mutedTextClass}`}>
-                Open Settings inside UpcurvEd, then choose the provider and model you want to use.
-              </dd>
+              <dt className="font-semibold">{t("docs.q.whatCreate")}</dt>
+              <dd className={`mt-1 ${mutedTextClass}`}>{t("docs.a.whatCreate")}</dd>
             </div>
 
             <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">What can UpcurvEd create?</dt>
+              <dt className="font-semibold">{t("docs.q.getStarted")}</dt>
               <dd className={`mt-1 ${mutedTextClass}`}>
-                Educational animations, stories, quizzes, podcasts, and interactive visuals.
-              </dd>
-            </div>
-
-            <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">What should I type to get started?</dt>
-              <dd className={`mt-1 ${mutedTextClass}`}>
-                Describe what you want to create in plain language. For example:
+                {t("docs.a.getStarted")}
                 <span className={`mt-2 block rounded-lg border p-3 font-mono text-sm ${codeClass}`}>
-                  Explain how to add fractions.
+                  {t("docs.example.prompt")}
                 </span>
               </dd>
             </div>
 
             <div className={`border-t pt-6 ${dividerClass}`}>
-              <dt className="font-semibold">Is my API key shown publicly?</dt>
-              <dd className={`mt-1 ${mutedTextClass}`}>
-                No. UpcurvEd Desktop stores your chats, settings, and generated files locally on your computer. Your API
-                key is used only to connect to the AI provider you select.
-              </dd>
-              <dd className={`mt-2 ${mutedTextClass}`}>
-                Some features require an internet connection, including AI generation, voice generation, software
-                downloads, and the feedback form.
-              </dd>
-              <dd className={`mt-2 ${mutedTextClass}`}>
-                If you are participating in a pilot or troubleshooting with the UpcurvEd team, you may voluntarily
-                export and share optional diagnostic files. These exports do not include API keys, prompts, chat
-                messages, names, email addresses, or generated scripts.
-              </dd>
-              <dd className={`mt-2 font-medium ${mutedTextClass}`}>
-                As always, never paste an API key into prompts, feedback forms, screenshots, or shared content.
-              </dd>
+              <dt className="font-semibold">{t("docs.q.keyPublic")}</dt>
+              <dd className={`mt-1 ${mutedTextClass}`}>{t("docs.a.keyPublic.1")}</dd>
+              <dd className={`mt-2 ${mutedTextClass}`}>{t("docs.a.keyPublic.2")}</dd>
+              <dd className={`mt-2 ${mutedTextClass}`}>{t("docs.a.keyPublic.3")}</dd>
+              <dd className={`mt-2 font-medium ${mutedTextClass}`}>{t("docs.a.keyPublic.4")}</dd>
             </div>
           </dl>
         </div>

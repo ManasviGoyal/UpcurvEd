@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 
+import { Trans, useLanguage } from "@/lib/i18n";
+
 const FORM_ID = "1FAIpQLSemR4uuVdmnGVFjcGRc3bSGsZ1zcNRLgQuSXZuYSVw-CkI68g";
 
 // Not embedded in an iframe: the form redirects to a Google sign-in page, which
@@ -14,6 +16,8 @@ interface FeedbackModalProps {
 }
 
 export default function FeedbackModal({ isDark, onClose }: FeedbackModalProps) {
+  const { t, language } = useLanguage();
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -63,12 +67,12 @@ export default function FeedbackModal({ isDark, onClose }: FeedbackModalProps) {
           }`}
         >
           <h2 id="upcurved-feedback-title" className="text-2xl font-bold">
-            Feedback
+            {t("feedback.title")}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Feedback"
+            aria-label={t("feedback.close")}
             className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${
               isDark
                 ? "border-slate-700 bg-slate-800 hover:bg-slate-700"
@@ -90,60 +94,57 @@ export default function FeedbackModal({ isDark, onClose }: FeedbackModalProps) {
               className="mx-auto mb-4 h-20 w-20"
             />
             <h3 className={`text-2xl font-bold ${accentClass}`}>
-              UpcurvEd &ndash; Export Diagnostics and Feedback Form
+              {t("feedback.heading")}
             </h3>
-            <p className={`mt-2 text-sm ${mutedTextClass}`}>August 16, 2026</p>
+            <p className={`mt-2 text-sm ${mutedTextClass}`}>{t("common.date.2026-08-16")}</p>
+            {/* The English wording is what these terms are written against. */}
+            {language !== "en" && (
+              <p className={`mt-2 text-xs italic ${mutedTextClass}`}>
+                {t("legal.translationNote")}
+              </p>
+            )}
           </div>
 
           <section className={`rounded-xl border p-5 ${sectionClass}`}>
-            <h4 className="mb-3 text-lg font-bold">Disclaimer</h4>
-            <p className={`leading-relaxed ${mutedTextClass}`}>
-              By voluntarily sending us your export diagnostics data you are agreeing that UpcurvEd (meaning Isabela
-              Yepes, and Manasvi Goyal) has full ownership and control of the data.
-            </p>
+            <h4 className="mb-3 text-lg font-bold">{t("feedback.disclaimer.heading")}</h4>
+            <p className={`leading-relaxed ${mutedTextClass}`}>{t("feedback.disclaimer.body")}</p>
           </section>
 
           <section className={`rounded-xl border p-5 ${sectionClass}`}>
-            <h4 className="mb-3 text-lg font-bold">What data do we collect and why?</h4>
-            <p className={`leading-relaxed ${mutedTextClass}`}>
-              We will never include API keys, or your original user prompts in our export diagnostics. The data
-              collected includes performance data such as but not limited to generation type, model, provider, success
-              or failure, and if failure the error log. The sole purpose of data collection is to understand, and
-              better serve user needs to improve the product.
-            </p>
+            <h4 className="mb-3 text-lg font-bold">{t("feedback.data.heading")}</h4>
+            <p className={`leading-relaxed ${mutedTextClass}`}>{t("feedback.data.body")}</p>
           </section>
 
           <section className={`rounded-xl border p-5 ${sectionClass}`}>
-            <h4 className="mb-3 text-lg font-bold">How to export diagnostics?</h4>
-            <p className={`leading-relaxed ${mutedTextClass}`}>
-              Find the Export Diagnostics section and button in Settings (lower left gear and settings label button in
-              the main UpcurvEd dashboard):
-            </p>
+            <h4 className="mb-3 text-lg font-bold">{t("feedback.how.heading")}</h4>
+            <p className={`leading-relaxed ${mutedTextClass}`}>{t("feedback.how.body")}</p>
             <img
               src={DIAGNOSTICS_SCREENSHOT}
-              alt="UpcurvEd Settings panel with the Export generation diagnostics button highlighted"
+              alt={t("feedback.how.imageAlt")}
               loading="lazy"
               className="mt-4 w-full max-w-xs rounded-xl border border-slate-600 shadow-lg"
             />
           </section>
 
           <section className={`rounded-xl border p-5 ${sectionClass}`}>
-            <h4 className="mb-3 text-lg font-bold">Where to upload export diagnostics?</h4>
+            <h4 className="mb-3 text-lg font-bold">{t("feedback.where.heading")}</h4>
             <p className={`leading-relaxed ${mutedTextClass}`}>
-              Find the link to upload the diagnostics to a Google Drive folder in the{" "}
-              <a className={linkClass} href={FEEDBACK_FORM_URL} target="_blank" rel="noopener noreferrer">
-                Feedback Form
-              </a>
-              .
+              <Trans
+                k="feedback.where.body"
+                components={{
+                  form: (
+                    <a className={linkClass} href={FEEDBACK_FORM_URL} target="_blank" rel="noopener noreferrer">
+                      {t("feedback.formLink")}
+                    </a>
+                  ),
+                }}
+              />
             </p>
           </section>
 
           <section className={`rounded-xl border p-5 ${sectionClass}`}>
-            <h4 className="mb-3 text-lg font-bold">Feedback?</h4>
-            <p className={`leading-relaxed ${mutedTextClass}`}>
-              Leave your feedback by submitting the feedback form. Our endeavor is to make this product a beneficial
-              learning and teaching tool. We learn from your feedback!
-            </p>
+            <h4 className="mb-3 text-lg font-bold">{t("feedback.ask.heading")}</h4>
+            <p className={`leading-relaxed ${mutedTextClass}`}>{t("feedback.ask.body")}</p>
 
             <a
               href={FEEDBACK_FORM_URL}
@@ -151,7 +152,7 @@ export default function FeedbackModal({ isDark, onClose }: FeedbackModalProps) {
               rel="noopener noreferrer"
               className="mt-4 inline-flex items-center gap-2 rounded-full bg-teal-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-teal-600"
             >
-              Open the Feedback Form
+              {t("feedback.openForm")}
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" aria-hidden="true">
                 <path
                   d="M14 5h5v5M19 5l-8 8M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4"
@@ -162,14 +163,12 @@ export default function FeedbackModal({ isDark, onClose }: FeedbackModalProps) {
               </svg>
             </a>
 
-            <p className={`mt-3 text-sm ${mutedTextClass}`}>
-              Opens in a new tab. The form may ask you to sign in to Google.
-            </p>
+            <p className={`mt-3 text-sm ${mutedTextClass}`}>{t("feedback.newTab")}</p>
           </section>
 
           <div className="pt-1 text-center">
             <p className={`text-base ${mutedTextClass}`}>
-              🍎 📚 Thank you for helping us improve UpcurvEd.
+              🍎 📚 {t("feedback.thanks")}
             </p>
           </div>
         </div>

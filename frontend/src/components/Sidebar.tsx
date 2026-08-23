@@ -27,6 +27,8 @@ import {
   UserX
 } from "lucide-react";
 import type { Chat, User, ColorTheme, Theme } from "@/types";
+import LanguageMenu from "@/components/LanguageMenu";
+import { useLanguage } from "@/lib/i18n";
 
 interface SidebarProps {
   user: User;
@@ -73,6 +75,7 @@ export const Sidebar = ({
   onToggleShare,
 }: SidebarProps) => {
   const navigate = useNavigate();
+  const { t } = useLanguage();
   const getThemeGradient = (theme: ColorTheme) => {
     switch (theme) {
       case 'rose':
@@ -139,12 +142,12 @@ export const Sidebar = ({
       setCopiedShareLink(shareToken);
       setTimeout(() => setCopiedShareLink(null), 2000);
       toast({
-        title: "Share link copied to clipboard",
+        title: t("toast.shareLinkCopied"),
         duration: 2000,
       });
     } catch (err) {
       toast({
-        title: "Failed to copy link",
+        title: t("toast.copyLinkFailed"),
         variant: "destructive",
         duration: 2000,
       });
@@ -159,12 +162,12 @@ export const Sidebar = ({
       const currentShareable = (chat as any).shareable || false;
       await onToggleShare(chat.id, !currentShareable);
       toast({
-        title: !currentShareable ? "Chat is now shareable" : "Chat sharing disabled",
+        title: !currentShareable ? t("toast.chatShareable") : t("toast.chatSharingDisabled"),
         duration: 2000,
       });
     } catch (err) {
       toast({
-        title: "Failed to update sharing",
+        title: t("toast.sharingUpdateFailed"),
         variant: "destructive",
         duration: 2000,
       });
@@ -176,18 +179,18 @@ export const Sidebar = ({
       <div className={`p-4 border-b border-border flex ${isSidebarCollapsed ? 'justify-center' : 'justify-between items-center'}`}>
         {!isSidebarCollapsed && (
           <div className="flex items-center gap-2">
-            <Button onClick={() => navigate('/home')} variant="ghost" size="icon" className="w-8 h-8 flex-shrink-0" title="Home">
+            <Button onClick={() => navigate('/home')} variant="ghost" size="icon" className="w-8 h-8 flex-shrink-0" title={t("sidebar.home")}>
               <Home className="w-5 h-5"/>
             </Button>
-            <h1 className="text-lg font-semibold">Conversations</h1>
+            <h1 className="text-lg font-semibold">{t("sidebar.conversations")}</h1>
           </div>
         )}
         {isSidebarCollapsed && (
-          <Button onClick={() => navigate('/home')} variant="ghost" size="icon" className="w-8 h-8 flex-shrink-0" title="Home">
+          <Button onClick={() => navigate('/home')} variant="ghost" size="icon" className="w-8 h-8 flex-shrink-0" title={t("sidebar.home")}>
             <Home className="w-5 h-5"/>
           </Button>
         )}
-        <Button onClick={handleNewChat} variant="ghost" size="icon" className="w-8 h-8 flex-shrink-0" title="New Chat">
+        <Button onClick={handleNewChat} variant="ghost" size="icon" className="w-8 h-8 flex-shrink-0" title={t("sidebar.newChat")}>
           <Plus className="w-5 h-5"/>
         </Button>
       </div>
@@ -199,7 +202,7 @@ export const Sidebar = ({
             <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               type="text"
-              placeholder="Search chats..."
+              placeholder={t("sidebar.searchPlaceholder")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 pr-8"
@@ -209,6 +212,8 @@ export const Sidebar = ({
                 variant="ghost"
                 size="icon"
                 className="absolute right-0 top-1/2 transform -translate-y-1/2 h-6 w-6"
+                title={t("sidebar.clearSearch")}
+                aria-label={t("sidebar.clearSearch")}
                 onClick={() => setSearchQuery("")}
               >
                 <X className="w-4 h-4" />
@@ -260,7 +265,7 @@ export const Sidebar = ({
                         onClick={(e) => e.stopPropagation()}
                         variant="ghost"
                         size="icon"
-                        title="Share chat"
+                        title={t("sidebar.shareChat")}
                         className={`w-8 h-8 opacity-0 group-hover:opacity-100 ${activeChatId === chat.id ? 'opacity-100' : ''}`}
                       >
                         <Share2 className="w-4 h-4" />
@@ -277,12 +282,12 @@ export const Sidebar = ({
                         {(chat as any).shareable ? (
                           <>
                             <X className="w-4 h-4 mr-2" />
-                            Disable sharing
+                            {t("sidebar.disableSharing")}
                           </>
                         ) : (
                           <>
                             <Share2 className="w-4 h-4 mr-2" />
-                            Enable sharing
+                            {t("sidebar.enableSharing")}
                           </>
                         )}
                       </DropdownMenuItem>
@@ -296,12 +301,12 @@ export const Sidebar = ({
                           {copiedShareLink === (chat as any).share_token ? (
                             <>
                               <Check className="w-4 h-4 mr-2" />
-                              Link copied!
+                              {t("sidebar.linkCopied")}
                             </>
                           ) : (
                             <>
                               <Copy className="w-4 h-4 mr-2" />
-                              Copy share link
+                              {t("sidebar.copyShareLink")}
                             </>
                           )}
                         </DropdownMenuItem>
@@ -314,7 +319,7 @@ export const Sidebar = ({
                   onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.id); }}
                   variant="ghost"
                   size="icon"
-                  title="Delete chat"
+                  title={t("sidebar.deleteChat")}
                   className={`w-8 h-8 opacity-0 group-hover:opacity-100 ${activeChatId === chat.id ? 'opacity-100' : ''}`}
                 >
                   <Trash2 className="w-4 h-4 text-red-500" />
@@ -331,62 +336,70 @@ export const Sidebar = ({
           return isPersisted || hasMsgs;
         }).length === 0 && (
           <div className="text-xs text-muted-foreground px-2 py-4">
-            {searchQuery ? "No chats match your search." : "No conversations yet. Type a prompt to start."}
+            {searchQuery ? t("sidebar.noSearchResults") : t("sidebar.noChats")}
           </div>
         )}
       </div>
 
       <div className="p-2 border-t border-border space-y-1">
         <div className={`p-2 ${isSidebarCollapsed ? 'space-y-2' : ''}`}>
-          {!isSidebarCollapsed && <label className="px-1 text-sm font-medium text-muted-foreground">Theme</label>}
+          {!isSidebarCollapsed && (
+            <label className="px-1 text-sm font-medium text-muted-foreground">{t("sidebar.theme")}</label>
+          )}
           <div className={`flex ${isSidebarCollapsed ? 'justify-center' : 'justify-start'} gap-2 mt-1`}>
-            {themes.map(t => (
+            {themes.map(themeOption => (
               <button
-                key={t.name}
-                onClick={() => setColorTheme(t.name)}
-                className={`w-6 h-6 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 ring-offset-background bg-gradient-to-br ${getThemeGradient(t.name)} ${colorTheme === t.name ? 'ring-2 ring-primary' : 'hover:ring-1 ring-gray-400'}`}
-                title={t.name.charAt(0).toUpperCase() + t.name.slice(1)}
+                key={themeOption.name}
+                onClick={() => setColorTheme(themeOption.name)}
+                className={`w-6 h-6 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 ring-offset-background bg-gradient-to-br ${getThemeGradient(themeOption.name)} ${colorTheme === themeOption.name ? 'ring-2 ring-primary' : 'hover:ring-1 ring-gray-400'}`}
+                title={t(`theme.${themeOption.name}`)}
+                aria-label={t(`theme.${themeOption.name}`)}
               />
             ))}
           </div>
         </div>
 
+        {/* Sits directly under the colour swatches, with the other display settings. */}
+        <LanguageMenu variant="sidebar" collapsed={isSidebarCollapsed} align="start" />
+
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          title={theme === 'dark' ? t("sidebar.lightMode") : t("sidebar.darkMode")}
           className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
         >
           {theme === 'dark' ? <Sun className="w-5 h-5"/> : <Moon className="w-5 h-5"/>}
-          {!isSidebarCollapsed && <span>{theme === 'dark' ? 'Light' : 'Dark'} Mode</span>}
+          {!isSidebarCollapsed && (
+            <span>{theme === 'dark' ? t("sidebar.lightMode") : t("sidebar.darkMode")}</span>
+          )}
         </button>
 
         <button
           onClick={() => { onOpenSettings ? onOpenSettings() : setView('settings'); }}
-          title="Settings"
+          title={t("sidebar.settings")}
           className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
         >
           <Settings className="w-5 h-5"/>
-          {!isSidebarCollapsed && <span>Settings</span>}
+          {!isSidebarCollapsed && <span>{t("sidebar.settings")}</span>}
         </button>
 
         {!desktopLocal && (
           <>
             <button
               onClick={handleLogout}
-              title="Logout"
+              title={t("sidebar.logout")}
               className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
             >
               <LogOut className="w-5 h-5"/>
-              {!isSidebarCollapsed && <span>Logout</span>}
+              {!isSidebarCollapsed && <span>{t("sidebar.logout")}</span>}
             </button>
 
             <button
               onClick={handleDeleteAccount}
-              title="Delete Account"
+              title={t("sidebar.deleteAccount")}
               className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-destructive hover:text-destructive-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
             >
               <UserX className="w-5 h-5"/>
-              {!isSidebarCollapsed && <span>Delete Account</span>}
+              {!isSidebarCollapsed && <span>{t("sidebar.deleteAccount")}</span>}
             </button>
           </>
         )}
@@ -395,11 +408,11 @@ export const Sidebar = ({
 
         <button
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          title="Collapse"
+          title={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
           className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
         >
           <ChevronsLeft className={`w-5 h-5 transition-transform duration-300 ${isSidebarCollapsed ? 'rotate-180' : ''}`} />
-          {!isSidebarCollapsed && <span>Collapse</span>}
+          {!isSidebarCollapsed && <span>{t("sidebar.collapse")}</span>}
         </button>
       </div>
     </div>

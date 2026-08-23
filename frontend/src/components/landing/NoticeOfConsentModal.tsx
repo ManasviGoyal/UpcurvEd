@@ -1,11 +1,15 @@
 import { useEffect } from "react";
 
+import { useLanguage } from "@/lib/i18n";
+
 interface NoticeOfConsentModalProps {
   isDark: boolean;
   onClose: () => void;
 }
 
 export default function NoticeOfConsentModal({ isDark, onClose }: NoticeOfConsentModalProps) {
+  const { t, language } = useLanguage();
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -52,12 +56,12 @@ export default function NoticeOfConsentModal({ isDark, onClose }: NoticeOfConsen
           }`}
         >
           <h2 id="upcurved-consent-title" className="text-2xl font-bold">
-            Notice of Consent
+            {t("nav.consent")}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Notice of Consent"
+            aria-label={t("consent.close")}
             className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${
               isDark
                 ? "border-slate-700 bg-slate-800 hover:bg-slate-700"
@@ -89,39 +93,35 @@ export default function NoticeOfConsentModal({ isDark, onClose }: NoticeOfConsen
               className="mx-auto mb-4 h-20 w-20"
             />
             <h3 className={`text-2xl font-bold ${accentClass}`}>
-              UpcurvEd Notice of Consent
+              {t("consent.heading")}
             </h3>
-            <p className={`mt-2 text-sm ${mutedTextClass}`}>August 16, 2026</p>
+            <p className={`mt-2 text-sm ${mutedTextClass}`}>{t("common.date.2026-08-16")}</p>
+            {/* The English wording is what this notice is written against. */}
+            {language !== "en" && (
+              <p className={`mt-2 text-xs italic ${mutedTextClass}`}>
+                {t("legal.translationNote")}
+              </p>
+            )}
           </div>
 
           <div className="space-y-6">
             <section className={`rounded-xl border p-5 ${sectionClass}`}>
-              <h4 className="mb-3 text-lg font-bold">Note</h4>
-              <p className={`leading-relaxed ${mutedTextClass}`}>
-                The goal of UpcurvEd is to serve as a non-conversational AI tool for creating
-                educational content with natural language. The platform supports open-source free
-                models with the intention of improving access to these tools towards the benefit of
-                students and teachers. The product is currently open-source and free to use by the
-                same intention.
-              </p>
+              <h4 className="mb-3 text-lg font-bold">{t("consent.note.heading")}</h4>
+              <p className={`leading-relaxed ${mutedTextClass}`}>{t("consent.note.body")}</p>
             </section>
 
             <section className={`rounded-xl border p-5 ${sectionClass}`}>
-              <h4 className="mb-3 text-lg font-bold">Disclaimer</h4>
-              <p className={`leading-relaxed ${mutedTextClass}`}>
-                By agreeing to use UpcurvEd, you consent and assume full risk of the use of
-                UpcurvEd. UpcurvEd (meaning Isabela Yepes, and Manasvi Goyal) will not be held
-                liable for any damages caused or associated with use of UpcurvEd.
-              </p>
+              <h4 className="mb-3 text-lg font-bold">{t("consent.disclaimer.heading")}</h4>
+              <p className={`leading-relaxed ${mutedTextClass}`}>{t("consent.disclaimer.body")}</p>
             </section>
           </div>
 
           <div className="pt-3 text-center">
             <p className={`mb-3 text-base font-medium ${mutedTextClass}`}>
-              Thank you <span className="inline-block -translate-y-0.5">🖍️</span>
+              {t("consent.thanks")} <span className="inline-block -translate-y-0.5">🖍️</span>
             </p>
             <p className={`text-base ${mutedTextClass}`}>
-              🍎 📚 We hope the tool helps you with your learning or teaching.
+              🍎 📚 {t("consent.closing")}
             </p>
           </div>
         </div>

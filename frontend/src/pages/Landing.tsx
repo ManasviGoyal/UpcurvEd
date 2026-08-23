@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DocsModal from "@/components/landing/DocsModal";
 import FeedbackModal from "@/components/landing/FeedbackModal";
 import NoticeOfConsentModal from "@/components/landing/NoticeOfConsentModal";
 import { trackEvent } from "@/lib/analytics";
+import SettingsMenu from "@/components/SettingsMenu";
+import { useLanguage } from "@/lib/i18n";
+import { useAppearance } from "@/lib/appearance";
 
 // Direct release-asset links. On a public repo these need no GitHub account: the URL
 // redirects to a signed CDN link served with `Content-Disposition: attachment`, so the
@@ -25,7 +28,8 @@ const DOWNLOADS = {
 
 export default function Landing({ setView: _setView }: { setView?: (view: string) => void }) {
   const navigate = useNavigate();
-  const [isDark, setIsDark] = useState(true);
+  const { t } = useLanguage();
+  const { isDark, reduceMotion } = useAppearance();
   const [mutedStates, setMutedStates] = useState([true, true, true]);
   const [isDocsOpen, setIsDocsOpen] = useState(false);
   const [isConsentOpen, setIsConsentOpen] = useState(false);
@@ -33,12 +37,6 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
   const iconColor = isDark ? "FFFFFF" : "0F172A";
   const appleLogo = `https://cdn.simpleicons.org/apple/${iconColor}`;
   const linuxLogo = `https://cdn.simpleicons.org/linux/${iconColor}`;
-
-  useEffect(() => {
-    // Dark mode from 6 PM to 6 AM.
-    const hour = new Date().getHours();
-    setIsDark(hour >= 18 || hour < 6);
-  }, []);
 
   const toggleMute = (index: number) => {
     setMutedStates((previous) => {
@@ -86,24 +84,26 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
     ? "border-slate-600 bg-slate-900/65 text-slate-100 hover:border-slate-500 hover:bg-slate-800"
     : "border-slate-300 bg-white/75 text-slate-800 hover:border-slate-400 hover:bg-white";
 
+  // Titles are technical names and stay as written; the description and category are
+  // ordinary UI copy and come from the translation table.
   const exampleVideos = [
     {
       title: "Convex Optimization",
-      description: "Visualize 3D graphs",
+      description: t("demo.convex.description"),
       videoUrl: "/landing_snippets/demo1_convex.mov",
-      category: "Algorithm",
+      category: t("demo.category.algorithm"),
     },
     {
       title: "LangGraph Agent State",
-      description: "Visualize systems",
+      description: t("demo.langgraph.description"),
       videoUrl: "/landing_snippets/demo2_langgraph.mov",
-      category: "AI Systems",
+      category: t("demo.category.aiSystems"),
     },
     {
       title: "Bellman Grid World",
-      description: "Include code snippets",
+      description: t("demo.bellman.description"),
       videoUrl: "/landing_snippets/demo3_bellman.mov",
-      category: "ML Theory",
+      category: t("demo.category.mlTheory"),
     },
   ];
 
@@ -115,7 +115,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
         <div
           className={`absolute right-20 top-20 h-96 w-96 rounded-full ${
             isDark ? "bg-teal-500" : "bg-teal-400"
-          } animate-pulse blur-3xl`}
+          } ${reduceMotion ? "" : "animate-pulse"} blur-3xl`}
         />
         <div
           className={`absolute bottom-20 left-20 h-96 w-96 rounded-full ${
@@ -130,7 +130,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
           type="button"
           onClick={handleSetupGuideClick}
           className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
-          aria-label="Open Setup Guide"
+          aria-label={t("nav.setup.aria")}
         >
           <svg
             viewBox="0 0 24 24"
@@ -142,14 +142,14 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
             <path d="M7 3.5A2.5 2.5 0 004.5 6v12A2.5 2.5 0 007 20.5h10A2.5 2.5 0 0019.5 18V6A2.5 2.5 0 0017 3.5H7z" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             <path d="M8 8h8M8 12h8M8 16h6" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
-          Setup
+          {t("nav.setup")}
         </button>
 
         <button
           type="button"
           onClick={handleDocsOpen}
           className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
-          aria-label="Open Help and FAQ"
+          aria-label={t("nav.help.aria")}
         >
           <svg
             viewBox="0 0 24 24"
@@ -165,14 +165,14 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
               strokeLinejoin="round"
             />
           </svg>
-          Help
+          {t("nav.help")}
         </button>
 
         <button
           type="button"
           onClick={handleFeedbackClick}
           className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
-          aria-label="Open feedback and export diagnostics info"
+          aria-label={t("nav.feedback.aria")}
         >
           <svg
             viewBox="0 0 24 24"
@@ -189,14 +189,14 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
             />
             <path d="M7 9h10M7 13h6" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
-          Feedback
+          {t("nav.feedback")}
         </button>
 
         <button
           type="button"
           onClick={handleConsentClick}
           className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold shadow-sm backdrop-blur-md transition-colors sm:px-4 ${utilityButtonClass}`}
-          aria-label="Open Notice of Consent"
+          aria-label={t("nav.consent.aria")}
         >
           <svg
             viewBox="0 0 24 24"
@@ -208,8 +208,10 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
             <path d="M7 4.5A2.5 2.5 0 004.5 7v10A2.5 2.5 0 007 19.5h10A2.5 2.5 0 0019.5 17V7A2.5 2.5 0 0017 4.5H7z" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             <path d="M8 9h8M8 13h8" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
-          Notice of Consent
+          {t("nav.consent")}
         </button>
+
+        <SettingsMenu isDark={isDark} buttonClassName={utilityButtonClass} />
       </div>
 
       <div className="relative z-10 flex min-h-screen flex-col items-center justify-center p-8 py-16">
@@ -232,16 +234,16 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
             <p
               className={`mx-auto mb-3 max-w-3xl text-xl font-light md:text-2xl ${textSecondary}`}
             >
-              Create Educational Content with Natural Language
+              {t("landing.tagline")}
             </p>
             <p className={`mx-auto max-w-2xl text-lg ${textTertiary}`}>
-              Animations, podcasts, quizzes, and interactive visuals.
+              {t("landing.subtitle")}
             </p>
           </div>
 
           <div className="mx-auto mb-10 max-w-6xl">
             <h2 className={`mb-6 text-center text-xl font-semibold ${textPrimary}`}>
-              See What You Can Create
+              {t("landing.examplesHeading")}
             </h2>
             <div className="flex flex-wrap justify-center gap-6">
               {exampleVideos.map((video, idx) => (
@@ -252,10 +254,11 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                   <div className="relative aspect-video overflow-hidden bg-slate-800">
                     <video
                       className="h-full w-full object-cover"
-                      autoPlay
+                      autoPlay={!reduceMotion}
                       loop
                       muted={mutedStates[idx]}
                       playsInline
+                      controls={reduceMotion}
                     >
                       <source src={video.videoUrl} type="video/mp4" />
                     </video>
@@ -263,7 +266,11 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                     <button
                       type="button"
                       onClick={() => toggleMute(idx)}
-                      aria-label={mutedStates[idx] ? `Unmute ${video.title}` : `Mute ${video.title}`}
+                      aria-label={
+                        mutedStates[idx]
+                          ? t("landing.unmute", { title: video.title })
+                          : t("landing.mute", { title: video.title })
+                      }
                       className={`absolute bottom-3 right-3 z-10 flex h-10 w-10 items-center justify-center rounded-full ${
                         isDark ? "bg-slate-900/70" : "bg-white/70"
                       } backdrop-blur-sm transition-transform hover:scale-110`}
@@ -326,7 +333,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
 
           <div className="flex flex-col items-center gap-4">
             <h3 className={`text-lg font-semibold md:text-xl ${textPrimary}`}>
-              Download UpcurvEd Desktop
+              {t("landing.downloadHeading")}
             </h3>
             <div className="flex flex-wrap items-center justify-center gap-4">
               <a
@@ -337,7 +344,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                     ? "border-teal-500 text-white hover:bg-teal-500 hover:text-white"
                     : "border-teal-500 text-slate-900 hover:bg-teal-500 hover:text-white"
                 }`}
-                title="Download for Windows"
+                title={t("landing.download.windows")}
               >
                 <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                   <path
@@ -345,7 +352,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                     d="M2 3.5l9.5-1.3v9H2v-7.7zm10.8-1.5L22 0.7v10.5h-9.2V2zm-10.8 10.5h9.5v9L2 20.2v-7.7zm10.8 0H22V23.3l-9.2-1.3v-9.5z"
                   />
                 </svg>
-                Download for Windows
+                {t("landing.download.windows")}
               </a>
 
               <a
@@ -356,10 +363,10 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                     ? "border-purple-500 text-white hover:bg-purple-500 hover:text-white"
                     : "border-purple-500 text-slate-900 hover:bg-purple-500 hover:text-white"
                 }`}
-                title="Download for macOS (Apple Silicon)"
+                title={t("landing.download.mac.title")}
               >
                 <img src={appleLogo} alt="Apple logo" className="h-5 w-5" loading="lazy" />
-                Download for macOS
+                {t("landing.download.mac")}
               </a>
 
               <a
@@ -370,10 +377,10 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                     ? "border-blue-500 text-white hover:bg-blue-500 hover:text-white"
                     : "border-blue-500 text-slate-900 hover:bg-blue-500 hover:text-white"
                 }`}
-                title="Download for Linux"
+                title={t("landing.download.linux")}
               >
                 <img src={linuxLogo} alt="Linux logo" className="h-5 w-5" loading="lazy" />
-                Download for Linux
+                {t("landing.download.linux")}
               </a>
             </div>
 

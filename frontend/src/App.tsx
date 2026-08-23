@@ -14,6 +14,8 @@ import { getFirebaseAuth } from "./firebase";
 import { onAuthStateChanged, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { isDesktopLocalMode } from "./lib/runtime";
+import { LanguageProvider } from "./lib/i18n";
+import { AppearanceProvider } from "./lib/appearance";
 import { EMPTY_KEYS, loadApiKeysForUser } from "./lib/secureKeys";
 import { Analytics } from "@vercel/analytics/react";
 
@@ -447,16 +449,21 @@ const App = () => {
   const desktopLocal = isDesktopLocalMode();
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <div className="transition-colors duration-300">
-          <BrowserRouter>
-            <AppContent />
-            {!desktopLocal && <Analytics />}
-          </BrowserRouter>
-        </div>
-      </TooltipProvider>
+      {/* Outermost so the landing page (signed out) and the app share one language choice. */}
+      <LanguageProvider>
+        <AppearanceProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <div className="transition-colors duration-300">
+              <BrowserRouter>
+                <AppContent />
+                {!desktopLocal && <Analytics />}
+              </BrowserRouter>
+            </div>
+          </TooltipProvider>
+        </AppearanceProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 };

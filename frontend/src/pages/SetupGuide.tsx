@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import SettingsMenu from "@/components/SettingsMenu";
+import { Trans, useLanguage } from "@/lib/i18n";
+import { useAppearance } from "@/lib/appearance";
+
 // Screenshots from UpcurvEd_install_open_setup_guide_081626_mac_arm64.docx.
 // `common` = website / in-app screens that look the same on every platform.
 // `mac` / `win` = platform-specific, numbered in the order the guide walks through them.
@@ -54,11 +58,12 @@ const OPENROUTER_KEYS_URL = "https://openrouter.ai/settings/keys";
 const OPENROUTER_SECTION_ID = "openrouter-free";
 
 type Provider = {
+  // Company names are not translated; everything else is a translation key.
   name: string;
-  models: string;
-  cost: string;
+  modelsKey: string;
+  free: boolean;
   href: string;
-  linkLabel: string;
+  linkKey: string;
   // In-page anchor rather than an outside tutorial, so it must not open a new tab.
   internal?: boolean;
 };
@@ -66,33 +71,33 @@ type Provider = {
 const PROVIDERS: Provider[] = [
   {
     name: "OpenRouter",
-    models: "Many models, including open-source oss-gpt-5 and nvidia-nemotron-3",
-    cost: "Free, rate-limited",
+    modelsKey: "setup.provider.openrouter.models",
+    free: true,
     // No external tutorial needed — the step-by-step instructions are on this page.
     href: `#${OPENROUTER_SECTION_ID}`,
-    linkLabel: "See below",
+    linkKey: "setup.link.seeBelow",
     internal: true,
   },
   {
     name: "Google",
-    models: "Gemini models",
-    cost: "Paid",
+    modelsKey: "setup.provider.google.models",
+    free: false,
     href: "https://ai.google.dev/gemini-api/docs/api-key",
-    linkLabel: "Tutorial",
+    linkKey: "setup.link.tutorial",
   },
   {
     name: "Anthropic",
-    models: "Claude models",
-    cost: "Paid",
+    modelsKey: "setup.provider.anthropic.models",
+    free: false,
     href: "https://platform.claude.com/docs/en/get-api-key",
-    linkLabel: "Tutorial",
+    linkKey: "setup.link.tutorial",
   },
   {
     name: "OpenAI",
-    models: "ChatGPT models",
-    cost: "Paid",
+    modelsKey: "setup.provider.openai.models",
+    free: false,
     href: "https://www.apideck.com/blog/how-to-get-your-chatgpt-openai-api-key",
-    linkLabel: "Tutorial",
+    linkKey: "setup.link.tutorial",
   },
 ];
 
@@ -115,14 +120,10 @@ function detectOS(): TargetOS {
 }
 
 export default function SetupGuide() {
-  const [isDark, setIsDark] = useState(true);
+  const { t } = useLanguage();
+  const { isDark } = useAppearance();
   const [os, setOS] = useState<TargetOS>("mac");
   const [installOpen, setInstallOpen] = useState(true);
-
-  useEffect(() => {
-    const hour = new Date().getHours();
-    setIsDark(hour >= 18 || hour < 6);
-  }, []);
 
   useEffect(() => {
     // Precedence: an explicit earlier choice, then platform detection, then macOS.
@@ -194,6 +195,11 @@ export default function SetupGuide() {
     ? "border-slate-700 bg-slate-900/40"
     : "border-slate-200 bg-slate-50";
   const linkClass = "font-semibold text-teal-500 underline underline-offset-4";
+  // Names of things the reader clicks. Operating-system labels (Downloads, Open,
+  // Run anyway…) stay in English because that is what their machine shows unless
+  // their whole OS is localised, and UpcurvEd's own Settings screen is still English.
+  const ui = (label: string) => <strong>{label}</strong>;
+  const noteLabel = <strong>{t("common.note")}</strong>;
   const headingClass = `mb-3 text-xl font-bold ${textPrimary}`;
   const listClass = `ml-5 list-decimal space-y-4 ${textSecondary}`;
 
@@ -224,7 +230,7 @@ export default function SetupGuide() {
           }`}
         >
           <span>
-            Screenshot coming soon
+            {t("setup.shotPending")}
             <span className="mt-1 block font-mono text-xs opacity-70">{name}</span>
           </span>
         </div>
@@ -263,9 +269,10 @@ export default function SetupGuide() {
 
       <div className="relative z-10 mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
         <header className="mb-8">
+          <div className="mb-4 flex items-center justify-between gap-3">
           <Link
             to="/home"
-            className={`mb-4 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${utilityButtonClass}`}
+            className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${utilityButtonClass}`}
           >
             <svg
               viewBox="0 0 24 24"
@@ -276,8 +283,11 @@ export default function SetupGuide() {
             >
               <path d="M15 5l-7 7 7 7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Back to home
+            {t("setup.backToHome")}
           </Link>
+
+          <SettingsMenu isDark={isDark} buttonClassName={utilityButtonClass} />
+          </div>
 
           <div className="text-center">
             <img
@@ -286,9 +296,9 @@ export default function SetupGuide() {
               aria-hidden="true"
               className="mx-auto mb-4 h-20 w-20"
             />
-            <h1 className={`text-2xl font-bold ${textPrimary}`}>Setup Guide</h1>
+            <h1 className={`text-2xl font-bold ${textPrimary}`}>{t("setup.title")}</h1>
             <p className={`mt-1 text-base ${textSecondary}`}>
-              How to install, open, and set up UpcurvEd Desktop.
+              {t("setup.subtitle")}
             </p>
           </div>
         </header>
@@ -301,31 +311,38 @@ export default function SetupGuide() {
                 isDark ? "border-teal-500/30 bg-teal-500/10" : "border-teal-300 bg-teal-50"
               }`}
             >
-              <h2 className={`mb-2 text-xl font-bold ${textPrimary}`}>Before you start</h2>
+              <h2 className={`mb-2 text-xl font-bold ${textPrimary}`}>{t("setup.intro.heading")}</h2>
               <p className={textSecondary}>
-                <strong>These are one-time setup steps.</strong> You install UpcurvEd and add your API key
-                once — after that, just open the app and start working. Come back to this page only if you
-                switch computers, or need a new API key.
+                <Trans
+                  k="setup.intro.body"
+                  components={{ lead: <strong>{t("setup.intro.lead")}</strong> }}
+                />
               </p>
             </section>
 
             {/* The only side-by-side section: a short list next to the download screenshot. */}
             <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
               <div>
-                <h2 className={headingClass}>Download the app</h2>
+                <h2 className={headingClass}>{t("setup.download.heading")}</h2>
                 <ol className={`ml-5 list-decimal space-y-2 ${textSecondary}`}>
                   <li>
-                    Go to{" "}
-                    <a className={linkClass} href="https://upcurved.vercel.app/home" target="_blank" rel="noreferrer">
-                      https://upcurved.vercel.app/home
-                    </a>
+                    <Trans
+                      k="setup.download.step1"
+                      components={{
+                        link: (
+                          <a className={linkClass} href="https://upcurved.vercel.app/home" target="_blank" rel="noreferrer">
+                            https://upcurved.vercel.app/home
+                          </a>
+                        ),
+                      }}
+                    />
                   </li>
-                  <li>Click the download button for your operating system.</li>
+                  <li>{t("setup.download.step2")}</li>
                 </ol>
               </div>
               <img
                 src={IMG.common.downloadPage}
-                alt="UpcurvEd home page download section"
+                alt={t("setup.download.imageAlt")}
                 className="w-full rounded-xl border border-slate-600 shadow-lg"
               />
             </section>
@@ -357,11 +374,11 @@ export default function SetupGuide() {
                   </svg>
                   <span>
                     <span className={`block text-xl font-bold ${textPrimary} group-hover:underline`}>
-                      Install and open the app
+                      {t("setup.install.heading")}
                     </span>
                     {!installOpen && (
                       <span className={`mt-1 block text-sm ${textSecondary}`}>
-                        Already installed? Leave this collapsed and skip to the API key steps below.
+                        {t("setup.install.collapsedHint")}
                       </span>
                     )}
                   </span>
@@ -369,7 +386,7 @@ export default function SetupGuide() {
 
                 <div
                   role="tablist"
-                  aria-label="Operating system"
+                  aria-label={t("setup.os.aria")}
                   className={`inline-flex shrink-0 rounded-full border p-1 ${
                     isDark ? "border-slate-700 bg-slate-900/60" : "border-slate-300 bg-white"
                   }`}
@@ -403,75 +420,78 @@ export default function SetupGuide() {
               {os === "mac" ? (
                 <div role="tabpanel" id="setup-panel-mac" aria-labelledby="setup-tab-mac" className="space-y-8">
                   <section>
-                    <h3 className={headingClass}>Open the installer</h3>
+                    <h3 className={headingClass}>{t("setup.installer.heading")}</h3>
                     <ol className={listClass}>
                       <li>
-                        Once the download finishes, open your <strong>Downloads</strong> folder and click the
-                        file <strong>UpcurvEd-mac-arm64.dmg</strong>.
-                        <Shot src={IMG.mac.dmgFile} alt="The UpcurvEd mac arm64 .dmg file in Finder" />
+                        <Trans
+                          k="setup.mac.installer.step1"
+                          components={{
+                            downloads: ui("Downloads"),
+                            file: ui("UpcurvEd-mac-arm64.dmg"),
+                          }}
+                        />
+                        <Shot src={IMG.mac.dmgFile} alt={t("setup.mac.installer.step1.alt")} />
                       </li>
                       <li>
-                        You will see this popup — drag the application icon to the Applications folder.
+                        {t("setup.mac.installer.step2")}
                         <Shot
                           src={IMG.mac.dragToApplications}
-                          alt="Drag the UpcurvEd icon onto the Applications folder"
+                          alt={t("setup.mac.installer.step2.alt")}
                         />
                       </li>
                       <li>
-                        Wait for UpcurvEd to copy to Applications (around 1.5 GB).
+                        {t("setup.mac.installer.step3")}
                         <Shot
                           src={IMG.mac.copyProgress}
-                          alt="Copy progress dialog showing UpcurvEd being copied to Applications"
+                          alt={t("setup.mac.installer.step3.alt")}
                         />
                       </li>
                     </ol>
                   </section>
 
                   <section>
-                    <h3 className={headingClass}>Finish installation</h3>
+                    <h3 className={headingClass}>{t("setup.finish.heading")}</h3>
                     <ol className={listClass}>
-                      <li>Double-click the Applications folder icon.</li>
+                      <li>{t("setup.mac.finish.step1")}</li>
                       <li>
                         {/* Just an app icon — sits beside the text rather than stretched below it. */}
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                          <span>In the Applications folder you will find the UpcurvEd icon.</span>
+                          <span>{t("setup.mac.finish.step2")}</span>
                           <Shot
                             src={IMG.mac.applicationsFolderIcon}
-                            alt="UpcurvEd icon inside the Applications folder"
+                            alt={t("setup.mac.finish.step2.alt")}
                             className="w-24 shrink-0"
                           />
                         </div>
                       </li>
                       <li>
-                        <strong>Note:</strong> once it is installed, you can safely eject the UpcurvEd installer.
-                        <Shot src={IMG.mac.ejectInstaller} alt="Ejecting the UpcurvEd installer" />
+                        <Trans k="setup.mac.finish.step3" components={{ note: noteLabel }} />
+                        <Shot src={IMG.mac.ejectInstaller} alt={t("setup.mac.finish.step3.alt")} />
                       </li>
                     </ol>
                   </section>
 
                   <section>
-                    <h3 className={headingClass}>Open the app on macOS</h3>
+                    <h3 className={headingClass}>{t("setup.mac.open.heading")}</h3>
                     <ol className={listClass}>
                       <li>
-                        <strong>Note:</strong> if you double-click it, it will not let you open it.
+                        <Trans k="setup.mac.open.step1" components={{ note: noteLabel }} />
                         <Shot
                           src={IMG.mac.doubleClickBlocked}
-                          alt="macOS warning shown when double-clicking the app"
+                          alt={t("setup.mac.open.step1.alt")}
                         />
                       </li>
                       <li>
-                        Instead, right-click the icon (on a Mac trackpad, click the icon with two fingers). You will
-                        see the <strong>Open</strong> option — click it.
-                        <Shot src={IMG.mac.rightClickOpen} alt="Right-click menu showing the Open option" />
+                        <Trans k="setup.mac.open.step2" components={{ open: ui("Open") }} />
+                        <Shot src={IMG.mac.rightClickOpen} alt={t("setup.mac.open.step2.alt")} />
                       </li>
                       <li>
-                        You will get the popup warning and the option to Open. Click <strong>Open</strong>.
-                        <Shot src={IMG.mac.confirmOpen} alt="macOS popup with the Open button" />
+                        <Trans k="setup.mac.open.step3" components={{ open: ui("Open") }} />
+                        <Shot src={IMG.mac.confirmOpen} alt={t("setup.mac.open.step3.alt")} />
                       </li>
                       <li>
-                        Now that the application is open you will see it on your dock at the bottom of the screen, and
-                        it will be open for you. It should look like this:
-                        <Shot src={IMG.common.appRunning} alt="UpcurvEd open and ready to use" />
+                        {t("setup.mac.open.step4")}
+                        <Shot src={IMG.common.appRunning} alt={t("setup.common.appRunningAlt")} />
                       </li>
                     </ol>
                   </section>
@@ -479,72 +499,79 @@ export default function SetupGuide() {
               ) : (
                 <div role="tabpanel" id="setup-panel-windows" aria-labelledby="setup-tab-windows" className="space-y-8">
                   <section>
-                    <h3 className={headingClass}>Open the installer</h3>
+                    <h3 className={headingClass}>{t("setup.installer.heading")}</h3>
                     <ol className={listClass}>
                       <li>
-                        Once the download finishes, open your <strong>Downloads</strong> folder and find{" "}
-                        <strong>UpcurvEd-win-x64.exe</strong>.
+                        <Trans
+                          k="setup.win.installer.step1"
+                          components={{
+                            downloads: ui("Downloads"),
+                            file: ui("UpcurvEd-win-x64.exe"),
+                          }}
+                        />
                         <Shot
                           src={IMG.win.downloadedInstaller}
-                          alt="The downloaded UpcurvEd installer in the Downloads folder"
+                          alt={t("setup.win.installer.step1.alt")}
                         />
                       </li>
-                      <li>Double-click the file to start the installer.</li>
+                      <li>{t("setup.win.installer.step2")}</li>
                     </ol>
                   </section>
 
                   <section>
-                    <h3 className={headingClass}>Get past the SmartScreen warning</h3>
+                    <h3 className={headingClass}>{t("setup.win.smartscreen.heading")}</h3>
                     <ol className={listClass}>
                       <li>
-                        <strong>Note:</strong> UpcurvEd is not code-signed yet, so Windows shows a blue{" "}
-                        <strong>Windows protected your PC</strong> screen instead of running the installer.
-                        <Shot src={IMG.win.smartScreenWarning} alt="Windows protected your PC SmartScreen warning" />
+                        <Trans
+                          k="setup.win.smartscreen.step1"
+                          components={{ note: noteLabel, screen: ui("Windows protected your PC") }}
+                        />
+                        <Shot src={IMG.win.smartScreenWarning} alt={t("setup.win.smartscreen.step1.alt")} />
                       </li>
                       <li>
-                        Click <strong>More info</strong>. It expands to show the app name and{" "}
-                        <strong>Unknown publisher</strong>, along with a <strong>Run anyway</strong> button. Click{" "}
-                        <strong>Run anyway</strong>.
+                        <Trans
+                          k="setup.win.smartscreen.step2"
+                          components={{
+                            moreInfo: ui("More info"),
+                            unknownPublisher: ui("Unknown publisher"),
+                            runAnyway: ui("Run anyway"),
+                          }}
+                        />
                         <Shot
                           src={IMG.win.smartScreenRunAnyway}
-                          alt="SmartScreen expanded with the Run anyway button"
+                          alt={t("setup.win.smartscreen.step2.alt")}
                         />
                       </li>
-                      <li>
-                        If your antivirus quarantines the download, restore it and allow the file, then run it again.
-                      </li>
+                      <li>{t("setup.win.smartscreen.step3")}</li>
                     </ol>
                   </section>
 
                   <section>
-                    <h3 className={headingClass}>Finish installation</h3>
+                    <h3 className={headingClass}>{t("setup.finish.heading")}</h3>
                     <ol className={listClass}>
                       <li>
-                        UpcurvEd installs on its own — there is nothing to choose. Wait for{" "}
-                        <strong>Installing, please wait…</strong> to finish. The app is around 1.5 GB, so this can take
-                        a few minutes.
-                        <Shot src={IMG.win.installing} alt="UpcurvEd Setup showing an install progress bar" />
+                        <Trans
+                          k="setup.win.finish.step1"
+                          components={{ installing: ui("Installing, please wait…") }}
+                        />
+                        <Shot src={IMG.win.installing} alt={t("setup.win.finish.step1.alt")} />
                       </li>
-                      <li>UpcurvEd opens by itself once the install completes.</li>
+                      <li>{t("setup.win.finish.step2")}</li>
                     </ol>
                   </section>
 
                   <section>
-                    <h3 className={headingClass}>Open the app on Windows</h3>
+                    <h3 className={headingClass}>{t("setup.win.open.heading")}</h3>
                     <ol className={listClass}>
                       <li>
-                        After the first launch, open UpcurvEd from the <strong>Start menu</strong> or the desktop
-                        shortcut.
-                        <Shot src={IMG.win.startMenu} alt="UpcurvEd in the Windows Start menu" />
+                        <Trans k="setup.win.open.step1" components={{ startMenu: ui("Start menu") }} />
+                        <Shot src={IMG.win.startMenu} alt={t("setup.win.open.step1.alt")} />
                       </li>
+                      <li>{t("setup.win.open.step2")}</li>
+                      <li>{t("setup.win.open.step3")}</li>
                       <li>
-                        The first launch is slower than later ones — UpcurvEd starts a local server on your machine
-                        before the window appears.
-                      </li>
-                      <li>Once the window opens, you can pin UpcurvEd to your taskbar for quicker access.</li>
-                      <li>
-                        It should look like this:
-                        <Shot src={IMG.common.appRunning} alt="UpcurvEd open and ready to use" />
+                        {t("setup.win.open.step4")}
+                        <Shot src={IMG.common.appRunning} alt={t("setup.common.appRunningAlt")} />
                       </li>
                     </ol>
                   </section>
@@ -555,39 +582,34 @@ export default function SetupGuide() {
 
             <section className="space-y-5">
               <div>
-                <h2 className={headingClass}>Get your API key</h2>
+                <h2 className={headingClass}>{t("setup.api.heading")}</h2>
                 <div className={`space-y-3 ${textSecondary}`}>
                   <p>
-                    <strong>What is an API key?</strong> API stands for Application Programming Interface. API keys are
-                    used to securely access and send data — in this case prompts and generated responses — to the AI
-                    model provider&apos;s online server.
+                    <strong>{t("setup.api.whatIs.q")}</strong> {t("setup.api.whatIs.a")}
                   </p>
-                  <p>Because of this, UpcurvEd requires an internet connection to work.</p>
+                  <p>{t("setup.api.internet")}</p>
                   <p>
-                    <strong>Where do I obtain an API key?</strong> UpcurvEd supports four AI model providers. Of these
-                    four, only OpenRouter has models that are free but rate-limited, meaning you have a certain daily
-                    limit.
+                    <strong>{t("setup.api.where.q")}</strong> {t("setup.api.where.a")}
                   </p>
                   <ul className="ml-5 list-disc space-y-2">
                     <li>
-                      <strong>You obtain an API key once.</strong> Create it at your provider, paste it into UpcurvEd,
-                      and you are done — you do not need a new key each time you use the app.
+                      <strong>{t("setup.api.bullet1.lead")}</strong> {t("setup.api.bullet1.body")}
                     </li>
                     <li>
-                      <strong>Store your API key in a secure place.</strong> Most providers show the key only once, so
-                      keep a copy somewhere safe (a password manager, for example) before you close the page. Treat it
-                      like a password and do not share it.
+                      <strong>{t("setup.api.bullet2.lead")}</strong> {t("setup.api.bullet2.body")}
                     </li>
                     <li>
-                      <strong>Use the Secure key storage toggle.</strong> In UpcurvEd&apos;s{" "}
-                      <strong>Settings</strong>, turn on <strong>Secure key storage</strong> to keep your key in your
-                      operating system&apos;s keychain instead of ordinary app storage. Your system may show a prompt
-                      the first time you save.
+                      <strong>{t("setup.api.bullet3.lead")}</strong>{" "}
+                      <Trans
+                        k="setup.api.bullet3.body"
+                        components={{
+                          settings: ui("Settings"),
+                          secureKeyStorage: ui("Secure key storage"),
+                        }}
+                      />
                     </li>
                     <li>
-                      <strong>Some API keys expire.</strong> Depending on the limit or expiry you set when creating the
-                      key — and on your provider&apos;s own policy — a key can stop working. If generation suddenly
-                      fails, create a fresh key and paste the new one into Settings.
+                      <strong>{t("setup.api.bullet4.lead")}</strong> {t("setup.api.bullet4.body")}
                     </li>
                   </ul>
                 </div>
@@ -596,13 +618,13 @@ export default function SetupGuide() {
               <div className={`overflow-hidden rounded-xl border ${panelClass}`}>
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse text-left text-sm">
-                    <caption className="sr-only">Supported AI model providers and where to get an API key</caption>
+                    <caption className="sr-only">{t("setup.table.caption")}</caption>
                     <thead>
                       <tr className={`border-b ${isDark ? "border-slate-700" : "border-slate-200"}`}>
-                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>Provider</th>
-                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>Models</th>
-                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>Cost</th>
-                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>Get a key</th>
+                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>{t("setup.table.provider")}</th>
+                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>{t("setup.table.models")}</th>
+                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>{t("setup.table.cost")}</th>
+                        <th scope="col" className={`px-4 py-3 font-semibold ${textPrimary}`}>{t("setup.table.getKey")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -614,11 +636,11 @@ export default function SetupGuide() {
                           <th scope="row" className={`px-4 py-3 font-semibold ${textPrimary}`}>
                             {provider.name}
                           </th>
-                          <td className={`px-4 py-3 ${textSecondary}`}>{provider.models}</td>
+                          <td className={`px-4 py-3 ${textSecondary}`}>{t(provider.modelsKey)}</td>
                           <td className="px-4 py-3">
                             <span
                               className={`inline-block whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${
-                                provider.cost.startsWith("Free")
+                                provider.free
                                   ? isDark
                                     ? "bg-emerald-500/15 text-emerald-300"
                                     : "bg-emerald-100 text-emerald-800"
@@ -627,7 +649,7 @@ export default function SetupGuide() {
                                     : "bg-slate-200 text-slate-700"
                               }`}
                             >
-                              {provider.cost}
+                              {t(provider.free ? "setup.cost.freeRateLimited" : "setup.cost.paid")}
                             </span>
                           </td>
                           <td className="px-4 py-3">
@@ -636,7 +658,7 @@ export default function SetupGuide() {
                               href={provider.href}
                               {...(provider.internal ? {} : { target: "_blank", rel: "noreferrer" })}
                             >
-                              {provider.linkLabel}
+                              {t(provider.linkKey)}
                             </a>
                           </td>
                         </tr>
@@ -645,34 +667,62 @@ export default function SetupGuide() {
                   </table>
                 </div>
               </div>
+
+              {/* The app shows an "est. $x.xx" figure after each generation — this sets
+                  expectations that the number is our estimate, not the provider's bill. */}
+              <div
+                className={`rounded-lg border px-4 py-3 text-sm ${
+                  isDark
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+                    : "border-amber-400 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <p>
+                  <strong>{t("setup.costNotice.lead")}</strong> {t("setup.costNotice.body1")}
+                </p>
+                <p className="mt-2">{t("setup.costNotice.body2")}</p>
+              </div>
             </section>
 
             {/* Linked from the "See below" cell in the provider table above. */}
             <section id={OPENROUTER_SECTION_ID} className={`scroll-mt-6 rounded-xl border p-5 ${panelClass}`}>
-              <h2 className={headingClass}>Use UpcurvEd for free with OpenRouter</h2>
+              <h2 className={headingClass}>{t("setup.openrouter.heading")}</h2>
               <ol className={`ml-5 list-decimal space-y-2 ${textSecondary}`}>
                 <li>
-                  Visit{" "}
-                  <a className={linkClass} href={OPENROUTER_HOME_URL} target="_blank" rel="noreferrer">
-                    OpenRouter
-                  </a>{" "}
-                  and create an account or sign in.
+                  <Trans
+                    k="setup.openrouter.step1"
+                    components={{
+                      link: (
+                        <a className={linkClass} href={OPENROUTER_HOME_URL} target="_blank" rel="noreferrer">
+                          OpenRouter
+                        </a>
+                      ),
+                    }}
+                  />
                 </li>
                 <li>
-                  Open the{" "}
-                  <a className={linkClass} href={OPENROUTER_KEYS_URL} target="_blank" rel="noreferrer">
-                    API Keys page
-                  </a>
-                  , select <strong>Create Key</strong>, and give it a recognizable name such as{" "}
-                  <strong>UpcurvEd</strong>.
+                  <Trans
+                    k="setup.openrouter.step2"
+                    components={{
+                      keysPage: (
+                        <a className={linkClass} href={OPENROUTER_KEYS_URL} target="_blank" rel="noreferrer">
+                          {t("setup.openrouter.keysPageLink")}
+                        </a>
+                      ),
+                      createKey: ui("Create Key"),
+                      name: ui("UpcurvEd"),
+                    }}
+                  />
                 </li>
-                <li>Copy the new key when OpenRouter shows it.</li>
+                <li>{t("setup.openrouter.step3")}</li>
                 <li>
-                  In UpcurvEd, open <strong>Settings</strong>, select <strong>OpenRouter</strong>, paste the key, and
-                  save it.
+                  <Trans
+                    k="setup.openrouter.step4"
+                    components={{ settings: ui("Settings"), openrouter: ui("OpenRouter") }}
+                  />
                 </li>
                 <li>
-                  Choose <strong>OpenRouter Free</strong> or another model marked as free, then start generating.
+                  <Trans k="setup.openrouter.step5" components={{ openrouterFree: ui("OpenRouter Free") }} />
                 </li>
               </ol>
               <div
@@ -682,28 +732,27 @@ export default function SetupGuide() {
                     : "border-amber-300 bg-amber-50 text-amber-900"
                 }`}
               >
-                Free models do not charge for model requests, but availability, speed, and usage limits can vary. During
-                busy periods, try again or select a different free model.
+                {t("setup.openrouter.note")}
               </div>
             </section>
 
             <section>
-              <h2 className={headingClass}>Add your key in Settings</h2>
+              <h2 className={headingClass}>{t("setup.settings.heading")}</h2>
               <ol className={listClass}>
                 <li>
-                  Click <strong>Settings</strong> in the lower right.
+                  <Trans k="setup.settings.step1" components={{ settings: ui("Settings") }} />
                   <Shot
                     src={IMG.common.settingsButton}
-                    alt="Settings button in the lower right of UpcurvEd"
+                    alt={t("setup.settings.step1.alt")}
                     className="mt-3 w-full max-w-sm"
                   />
                 </li>
                 <li>
-                  Here is where you enter your API key and the model you want to use in the current chat.
+                  {t("setup.settings.step2")}
                   {/* Tall portrait screenshot (912x1696) — capped so it doesn't dominate the page. */}
                   <Shot
                     src={IMG.common.apiKeyEntry}
-                    alt="UpcurvEd settings screen showing API key and model entry"
+                    alt={t("setup.settings.step2.alt")}
                     className="mt-3 w-full max-w-xs"
                   />
                 </li>
@@ -715,44 +764,44 @@ export default function SetupGuide() {
                 isDark ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-300 bg-emerald-50"
               }`}
             >
-              <h2 className={`mb-2 text-xl font-bold ${textPrimary}`}>🎉 Congratulations</h2>
-              <p className={textSecondary}>
-                Your setup is complete, and you are now ready to use UpcurvEd. We hope the tool helps you with your
-                learning or teaching.
-              </p>
+              <h2 className={`mb-2 text-xl font-bold ${textPrimary}`}>🎉 {t("setup.congrats.heading")}</h2>
+              <p className={textSecondary}>{t("setup.congrats.body")}</p>
             </section>
 
             <section>
-              <h2 className={headingClass}>Uninstall UpcurvEd</h2>
-              <p className={`mb-4 ${textSecondary}`}>
-                You only need this if you want to remove UpcurvEd from your computer. UpcurvEd can uninstall itself
-                from inside the app.
-              </p>
+              <h2 className={headingClass}>{t("setup.uninstall.heading")}</h2>
+              <p className={`mb-4 ${textSecondary}`}>{t("setup.uninstall.intro")}</p>
               <ol className={listClass}>
                 <li>
-                  In UpcurvEd, click <strong>Settings</strong> in the lower right and scroll down to{" "}
-                  <strong>Uninstall UpcurvEd</strong>. Click{" "}
-                  <strong>Uninstall UpcurvEd &amp; Delete Local Data</strong>.
+                  <Trans
+                    k="setup.uninstall.step1"
+                    components={{
+                      settings: ui("Settings"),
+                      section: ui("Uninstall UpcurvEd"),
+                      button: ui("Uninstall UpcurvEd & Delete Local Data"),
+                    }}
+                  />
                   <Shot
                     src={IMG.common.uninstallButton}
-                    alt="The Uninstall UpcurvEd and Delete Local Data button in Settings"
+                    alt={t("setup.uninstall.step1.alt")}
                     className="mt-3 w-full max-w-md"
                   />
                 </li>
                 <li>
-                  A confirmation appears. Click <strong>Uninstall &amp; Delete Local Data</strong> to go ahead, or{" "}
-                  <strong>Cancel</strong> to keep the app.
+                  <Trans
+                    k="setup.uninstall.step2"
+                    components={{
+                      confirm: ui("Uninstall & Delete Local Data"),
+                      cancel: ui("Cancel"),
+                    }}
+                  />
                   <Shot
                     src={IMG.common.uninstallConfirm}
-                    alt="Confirmation dialog asking whether to uninstall UpcurvEd and delete its local data"
+                    alt={t("setup.uninstall.step2.alt")}
                     className="mt-3 w-full max-w-xs"
                   />
                 </li>
-                <li>
-                  UpcurvEd closes and removes itself along with your local chats, generated working files,
-                  diagnostics, settings, caches, and saved API keys. Files you exported or downloaded yourself are
-                  left alone.
-                </li>
+                <li>{t("setup.uninstall.step3")}</li>
               </ol>
               <div
                 className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
@@ -762,14 +811,17 @@ export default function SetupGuide() {
                 }`}
               >
                 <p>
-                  <strong>On Windows:</strong> the in-app uninstall is currently macOS only. Uninstall UpcurvEd from{" "}
-                  <strong>Settings &rsaquo; Apps &rsaquo; Installed apps</strong>, find <strong>UpcurvEd</strong>, and
-                  choose <strong>Uninstall</strong>.
+                  <Trans
+                    k="setup.uninstall.windows"
+                    components={{
+                      label: <strong>{t("setup.uninstall.windowsLabel")}</strong>,
+                      path: ui("Settings \u203a Apps \u203a Installed apps"),
+                      app: ui("UpcurvEd"),
+                      uninstall: ui("Uninstall"),
+                    }}
+                  />
                 </p>
-                <p className="mt-2">
-                  Uninstalling deletes the copy of your API key on this computer, but the key itself stays active at
-                  your provider. Delete it in your provider&apos;s dashboard if you no longer want it.
-                </p>
+                <p className="mt-2">{t("setup.uninstall.keyNote")}</p>
               </div>
             </section>
           </div>
