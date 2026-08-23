@@ -11,6 +11,8 @@ const IMG = {
     appRunning: "/setup-guide/common/app-running.png",
     settingsButton: "/setup-guide/common/settings-button.png",
     apiKeyEntry: "/setup-guide/common/api-key-entry.png",
+    uninstallButton: "/setup-guide/common/uninstall-button.jpeg",
+    uninstallConfirm: "/setup-guide/common/uninstall-confirm.jpeg",
   },
   mac: {
     dmgFile: "/setup-guide/mac/02-dmg-file.png",
@@ -47,30 +49,50 @@ type TargetOS = "mac" | "windows";
 const OPENROUTER_HOME_URL = "https://openrouter.ai/";
 const OPENROUTER_KEYS_URL = "https://openrouter.ai/settings/keys";
 
-const PROVIDERS = [
+// Anchor for the OpenRouter walkthrough further down the page; the provider table
+// points at it instead of an outside tutorial.
+const OPENROUTER_SECTION_ID = "openrouter-free";
+
+type Provider = {
+  name: string;
+  models: string;
+  cost: string;
+  href: string;
+  linkLabel: string;
+  // In-page anchor rather than an outside tutorial, so it must not open a new tab.
+  internal?: boolean;
+};
+
+const PROVIDERS: Provider[] = [
   {
     name: "OpenRouter",
     models: "Many models, including open-source oss-gpt-5 and nvidia-nemotron-3",
     cost: "Free, rate-limited",
-    href: "https://developer.puter.com/tutorials/how-to-get-openrouter-api-key/",
+    // No external tutorial needed — the step-by-step instructions are on this page.
+    href: `#${OPENROUTER_SECTION_ID}`,
+    linkLabel: "See below",
+    internal: true,
   },
   {
     name: "Google",
     models: "Gemini models",
     cost: "Paid",
     href: "https://ai.google.dev/gemini-api/docs/api-key",
+    linkLabel: "Tutorial",
   },
   {
     name: "Anthropic",
     models: "Claude models",
     cost: "Paid",
     href: "https://platform.claude.com/docs/en/get-api-key",
+    linkLabel: "Tutorial",
   },
   {
     name: "OpenAI",
     models: "ChatGPT models",
     cost: "Paid",
     href: "https://www.apideck.com/blog/how-to-get-your-chatgpt-openai-api-key",
+    linkLabel: "Tutorial",
   },
 ];
 
@@ -273,6 +295,20 @@ export default function SetupGuide() {
 
         <main className={`rounded-2xl border ${cardBorder} ${cardBg} shadow-2xl backdrop-blur-sm`}>
           <div className="space-y-8 p-5 sm:p-8">
+            {/* Sets expectations before the long walkthrough: this is done once, not every time. */}
+            <section
+              className={`rounded-xl border p-5 ${
+                isDark ? "border-teal-500/30 bg-teal-500/10" : "border-teal-300 bg-teal-50"
+              }`}
+            >
+              <h2 className={`mb-2 text-xl font-bold ${textPrimary}`}>Before you start</h2>
+              <p className={textSecondary}>
+                <strong>These are one-time setup steps.</strong> You install UpcurvEd and add your API key
+                once — after that, just open the app and start working. Come back to this page only if you
+                switch computers, or need a new API key.
+              </p>
+            </section>
+
             {/* The only side-by-side section: a short list next to the download screenshot. */}
             <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
               <div>
@@ -532,6 +568,28 @@ export default function SetupGuide() {
                     four, only OpenRouter has models that are free but rate-limited, meaning you have a certain daily
                     limit.
                   </p>
+                  <ul className="ml-5 list-disc space-y-2">
+                    <li>
+                      <strong>You obtain an API key once.</strong> Create it at your provider, paste it into UpcurvEd,
+                      and you are done — you do not need a new key each time you use the app.
+                    </li>
+                    <li>
+                      <strong>Store your API key in a secure place.</strong> Most providers show the key only once, so
+                      keep a copy somewhere safe (a password manager, for example) before you close the page. Treat it
+                      like a password and do not share it.
+                    </li>
+                    <li>
+                      <strong>Use the Secure key storage toggle.</strong> In UpcurvEd&apos;s{" "}
+                      <strong>Settings</strong>, turn on <strong>Secure key storage</strong> to keep your key in your
+                      operating system&apos;s keychain instead of ordinary app storage. Your system may show a prompt
+                      the first time you save.
+                    </li>
+                    <li>
+                      <strong>Some API keys expire.</strong> Depending on the limit or expiry you set when creating the
+                      key — and on your provider&apos;s own policy — a key can stop working. If generation suddenly
+                      fails, create a fresh key and paste the new one into Settings.
+                    </li>
+                  </ul>
                 </div>
               </div>
 
@@ -573,8 +631,12 @@ export default function SetupGuide() {
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            <a className={linkClass} href={provider.href} target="_blank" rel="noreferrer">
-                              Tutorial
+                            <a
+                              className={linkClass}
+                              href={provider.href}
+                              {...(provider.internal ? {} : { target: "_blank", rel: "noreferrer" })}
+                            >
+                              {provider.linkLabel}
                             </a>
                           </td>
                         </tr>
@@ -585,7 +647,8 @@ export default function SetupGuide() {
               </div>
             </section>
 
-            <section className={`rounded-xl border p-5 ${panelClass}`}>
+            {/* Linked from the "See below" cell in the provider table above. */}
+            <section id={OPENROUTER_SECTION_ID} className={`scroll-mt-6 rounded-xl border p-5 ${panelClass}`}>
               <h2 className={headingClass}>Use UpcurvEd for free with OpenRouter</h2>
               <ol className={`ml-5 list-decimal space-y-2 ${textSecondary}`}>
                 <li>
@@ -657,6 +720,57 @@ export default function SetupGuide() {
                 Your setup is complete, and you are now ready to use UpcurvEd. We hope the tool helps you with your
                 learning or teaching.
               </p>
+            </section>
+
+            <section>
+              <h2 className={headingClass}>Uninstall UpcurvEd</h2>
+              <p className={`mb-4 ${textSecondary}`}>
+                You only need this if you want to remove UpcurvEd from your computer. UpcurvEd can uninstall itself
+                from inside the app.
+              </p>
+              <ol className={listClass}>
+                <li>
+                  In UpcurvEd, click <strong>Settings</strong> in the lower right and scroll down to{" "}
+                  <strong>Uninstall UpcurvEd</strong>. Click{" "}
+                  <strong>Uninstall UpcurvEd &amp; Delete Local Data</strong>.
+                  <Shot
+                    src={IMG.common.uninstallButton}
+                    alt="The Uninstall UpcurvEd and Delete Local Data button in Settings"
+                    className="mt-3 w-full max-w-md"
+                  />
+                </li>
+                <li>
+                  A confirmation appears. Click <strong>Uninstall &amp; Delete Local Data</strong> to go ahead, or{" "}
+                  <strong>Cancel</strong> to keep the app.
+                  <Shot
+                    src={IMG.common.uninstallConfirm}
+                    alt="Confirmation dialog asking whether to uninstall UpcurvEd and delete its local data"
+                    className="mt-3 w-full max-w-xs"
+                  />
+                </li>
+                <li>
+                  UpcurvEd closes and removes itself along with your local chats, generated working files,
+                  diagnostics, settings, caches, and saved API keys. Files you exported or downloaded yourself are
+                  left alone.
+                </li>
+              </ol>
+              <div
+                className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
+                  isDark
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
+                    : "border-amber-300 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <p>
+                  <strong>On Windows:</strong> the in-app uninstall is currently macOS only. Uninstall UpcurvEd from{" "}
+                  <strong>Settings &rsaquo; Apps &rsaquo; Installed apps</strong>, find <strong>UpcurvEd</strong>, and
+                  choose <strong>Uninstall</strong>.
+                </p>
+                <p className="mt-2">
+                  Uninstalling deletes the copy of your API key on this computer, but the key itself stays active at
+                  your provider. Delete it in your provider&apos;s dashboard if you no longer want it.
+                </p>
+              </div>
             </section>
           </div>
         </main>
