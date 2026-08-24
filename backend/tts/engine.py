@@ -137,6 +137,181 @@ def _normalize_role(role: str | None) -> str | None:
     return value or None
 
 
+# Narration shorter than this is not enough for langdetect to be trusted; a
+# five-word line flips between languages on a coin toss.
+_MIN_CHARS_FOR_DETECTION = 40
+
+
+# Writing system -> (default language, languages that share the script).
+#
+# The script a sentence is written in is far harder evidence than word
+# statistics. Educational narration mixes in Latin technical terms -- "video",
+# "photosynthesis", "chlorophyll" -- and langdetect weighs those heavily enough
+# to call a majority-Devanagari sentence English, which then gets read by an
+# English voice. Counting characters does not have that failure mode.
+_SCRIPT_BLOCKS: tuple[tuple[str, int, int], ...] = (
+    ("deva", 0x0900, 0x097F),
+    ("beng", 0x0980, 0x09FF),
+    ("guru", 0x0A00, 0x0A7F),
+    ("gujr", 0x0A80, 0x0AFF),
+    ("taml", 0x0B80, 0x0BFF),
+    ("telu", 0x0C00, 0x0C7F),
+    ("knda", 0x0C80, 0x0CFF),
+    ("mlym", 0x0D00, 0x0D7F),
+    ("thai", 0x0E00, 0x0E7F),
+    ("hebr", 0x0590, 0x05FF),
+    ("arab", 0x0600, 0x06FF),
+    ("cyrl", 0x0400, 0x04FF),
+    ("grek", 0x0370, 0x03FF),
+    ("kana", 0x3040, 0x30FF),
+    ("hang", 0xAC00, 0xD7AF),
+    ("hani", 0x4E00, 0x9FFF),
+)
+
+_SCRIPT_DEFAULT: dict[str, str] = {
+    "deva": "hi",
+    "beng": "bn",
+    "guru": "pa",
+    "gujr": "gu",
+    "taml": "ta",
+    "telu": "te",
+    "knda": "kn",
+    "mlym": "ml",
+    "thai": "th",
+    "hebr": "he",
+    "arab": "ar",
+    "cyrl": "ru",
+    "grek": "el",
+    "kana": "ja",
+    "hang": "ko",
+    "hani": "zh",
+}
+
+# Languages that share a script, so langdetect only has to choose between them
+# rather than being trusted outright.
+_SCRIPT_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "deva": ("hi", "mr", "ne"),
+    "arab": ("ar", "fa", "ur"),
+    "cyrl": ("ru", "uk", "bg", "sr", "mk"),
+    "hani": ("zh", "ja"),
+}
+
+# Below this share of the letters, a non-Latin script is incidental -- a quoted
+# term or a symbol -- rather than the language the narration is written in.
+_SCRIPT_SHARE_THRESHOLD = 0.20
+
+
+# A script is only evidence if there is enough of it. Deliberately low, because
+# CJK is dense: a 40-character Chinese sentence says as much as 150 Latin ones.
+_MIN_SCRIPT_CHARS = 10
+
+
+def _dominant_script(text: str) -> str | None:
+    """The non-Latin script the text is mostly written in, if there is one."""
+    counts: dict[str, int] = {}
+    letters = 0
+    for char in text:
+        if not char.isalpha():
+            continue
+        letters += 1
+        code = ord(char)
+        for name, start, end in _SCRIPT_BLOCKS:
+            if start <= code <= end:
+                counts[name] = counts.get(name, 0) + 1
+                break
+
+    if not letters or not counts:
+        return None
+
+    script, count = max(counts.items(), key=lambda item: item[1])
+    if count < _MIN_SCRIPT_CHARS:
+        return None
+    if count / letters < _SCRIPT_SHARE_THRESHOLD:
+        return None
+
+    # Kana settles Japanese vs Chinese: both use Han, only Japanese uses kana.
+    if script == "hani" and counts.get("kana"):
+        return "kana"
+    return script
+
+
+def resolve_narration_lang(text: str) -> str:
+    """Pick the narration language for a video or podcast, degrading safely to English.
+
+    The writing system decides first, because it is unambiguous; langdetect is
+    then used only to choose between languages that share that script. For
+    Latin-script text langdetect decides on its own.
+
+    One detector, no per-caller hint: a model-stated language field looked
+    like a cleaner signal, but it is a schema field the model fills in on
+    every response whether or not it actually engages with it, so it can
+    silently carry a copied placeholder instead of the truth -- and "en" is
+    the one wrong value that fails silently, since everything still renders,
+    just in the wrong voice. Detecting straight from the text the model
+    already committed to has no such failure mode.
+
+    The result is resolved through three tiers:
+      1. a language with a neural voice  -> use it
+      2. a language gTTS can speak       -> use it (robotic, still correct)
+      3. anything else                   -> "en"
+
+    Tier 3 matters: an unknown code reaches gTTS, raises, and kills a render that
+    already cost an LLM call and minutes of Manim time. Falling back to English
+    is exactly today's behaviour, so this can only be an improvement on it.
+    """
+    sample = (text or "").strip()
+
+    # Script first, and before the length gate: that gate counts characters, and
+    # a dense script says far more per character than Latin text does.
+    script = _dominant_script(sample)
+
+    if not script and len(sample) < _MIN_CHARS_FOR_DETECTION:
+        return "en"
+
+    detected = ""
+    try:
+        from langdetect import detect
+
+        detected = str(detect(sample) or "").lower()
+    except Exception:
+        detected = ""
+
+    if script:
+        candidates = _SCRIPT_CANDIDATES.get(script)
+        if candidates and detected in candidates:
+            detected = detected
+        else:
+            detected = _SCRIPT_DEFAULT.get(script, detected)
+
+    if not detected:
+        return "en"
+
+    return _speakable_lang(detected)
+
+
+def _speakable_lang(lang: str) -> str:
+    """Narrow a language code to one some engine can actually speak."""
+    if voice_for(lang):
+        return lang
+
+    try:
+        from gtts.lang import tts_langs
+
+        supported = tts_langs()
+    except Exception:
+        return "en"
+
+    if lang in supported:
+        return lang
+
+    # Regional variants gTTS lists separately, e.g. zh-cn for a bare "zh".
+    for candidate in (f"{lang}-cn", f"{lang}-CN"):
+        if candidate in supported:
+            return candidate
+
+    return "en"
+
+
 def voice_for(lang: str | None, role: str | None = None) -> str | None:
     """Return the neural voice for a language/speaker, or None if unmapped.
 

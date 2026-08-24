@@ -9,6 +9,8 @@ Legacy ``MANIM_BODY`` bundles remain readable and are migrated through the compl
 
 from __future__ import annotations
 
+import ast
+import contextvars
 import functools
 import html
 import json
@@ -71,8 +73,17 @@ from backend.utils.failure_log import (
 from backend.utils.diagnostics import diagnostic_category, diagnostic_retryable, public_error_message
 
 from backend.runner import job_progress
+from backend.tts.engine import resolve_narration_lang
 
-logger = logging.getLogger(__name__)
+# Import to trigger app-level logging configuration (handlers, format, level).
+from backend.utils import app_logging  # noqa: F401
+
+# Under "app." so the handler that module installs actually receives these records. This
+# was the one logger in the backend outside that namespace, which left it propagating to a
+# handler-less root: Python's last-resort handler only emits WARNING and above, so every
+# INFO line this pipeline logged -- including which language it was narrating in -- was
+# silently discarded.
+logger = logging.getLogger(f"app.{__name__}")
 
 _PLAN_START = "<<<PLAN_JSON>>>"
 _PLAN_END = "<<<END_PLAN_JSON>>>"
@@ -1818,11 +1829,206 @@ def _video_url_to_path(video_url: str) -> pathlib.Path:
     return pathlib.Path(STORAGE) / value.lstrip("/")
 
 
+# GTTSService(lang="...") as emitted by our templates and by model-authored
+# scenes. Rewritten here rather than in five builders, because every render
+# passes through _render_code_once.
+_SPEECH_LANG_RE = re.compile(r"""(GTTSService\(\s*lang\s*=\s*)(['"])[\w-]*\2""")
+
+# Model-authored scenes only have to call GTTSService(...) somewhere -- the sanitizer
+# contract never requires a lang= kwarg -- so GTTSService() with no arguments is legal
+# and passes every check. _SPEECH_LANG_RE has nothing to match there, which used to
+# leave the scene silently defaulted to lang="en": a neural voice that doesn't
+# mispronounce non-Latin narration, it drops it, since it's outside that voice's
+# locale entirely. This is the fallback for exactly that case.
+_SPEECH_CALL_RE = re.compile(r"GTTSService\(")
+
+
+# One language for the whole video. Set once from the plan, read by every scene
+# render, so a short scene cannot disagree with the rest and switch voices.
+_narration_lang: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "upcurved_narration_lang", default="en"
+)
+
+
+def _plan_narration_text(plan: dict[str, Any]) -> str:
+    """All spoken text in the plan, for language detection."""
+    parts: list[str] = []
+    for scene in plan.get("scenes") or []:
+        if isinstance(scene, dict):
+            narration = scene.get("narration")
+            if isinstance(narration, str):
+                parts.append(narration)
+    return " ".join(parts).strip()
+
+
+def _scene_plan_narration(scene: dict[str, Any]) -> str:
+    """The narration this scene was planned to speak, in the plan's own language."""
+    parts: list[str] = []
+    narration = scene.get("narration")
+    if isinstance(narration, str) and narration.strip():
+        parts.append(narration.strip())
+    step_narrations = scene.get("step_narrations")
+    if isinstance(step_narrations, list):
+        for value in step_narrations:
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+    return " ".join(parts).strip()
+
+
+def _voiceover_text_spans(code: str) -> list[tuple[int, int, str]]:
+    """(start, end, current_text) for every self.voiceover(text=...) argument.
+
+    Located by AST rather than regex so the span is the argument's real extent whatever
+    form it takes -- plain string, implicit concatenation, or f-string -- and so a `text=`
+    belonging to some other call can never be hit by accident.
+    """
+    tree = ast.parse(code)
+    line_starts = [0]
+    for line in code.splitlines(keepends=True):
+        line_starts.append(line_starts[-1] + len(line))
+
+    def offset(lineno: int, col: int) -> int:
+        return line_starts[lineno - 1] + col
+
+    spans: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "voiceover"):
+            continue
+        target: ast.expr | None = None
+        for keyword in node.keywords:
+            if keyword.arg == "text":
+                target = keyword.value
+                break
+        if target is None and node.args:
+            target = node.args[0]
+        if target is None or target.end_lineno is None or target.end_col_offset is None:
+            continue
+        current = (
+            target.value
+            if isinstance(target, ast.Constant) and isinstance(target.value, str)
+            else ""
+        )
+        spans.append(
+            (
+                offset(target.lineno, target.col_offset),
+                offset(target.end_lineno, target.end_col_offset),
+                current,
+            )
+        )
+    spans.sort(key=lambda item: item[0])
+    return spans
+
+
+def _split_for_slots(text: str, slots: int) -> list[str]:
+    """Divide narration across a scene's voiceover blocks, keeping sentences whole.
+
+    Falls back to splitting on words when there are fewer sentences than blocks: a block
+    given an empty string would fail synthesis, which is worse than an awkward break.
+    The danda is included as a terminator so Devanagari narration splits on its own
+    punctuation rather than being treated as one long sentence.
+    """
+    if slots <= 1:
+        return [text]
+
+    def spread(units: list[str]) -> list[str]:
+        per = len(units) / slots
+        chunks = []
+        for index in range(slots):
+            start = int(round(index * per))
+            end = len(units) if index == slots - 1 else int(round((index + 1) * per))
+            chunks.append(" ".join(units[start:end]).strip())
+        return chunks
+
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?।])\s+", text) if part.strip()]
+    if len(sentences) >= slots:
+        return spread(sentences)
+    words = text.split()
+    if len(words) >= slots:
+        return spread(words)
+    return [text] + [text] * (slots - 1)
+
+
+def _align_voiceover_language(code: str, scene: dict[str, Any]) -> str:
+    """Make a custom scene speak the plan's narration when its own text is another language.
+
+    Standard scenes take their spoken text straight from the plan, so they are correct by
+    construction. A custom scene's voiceover text is written by the model in a second,
+    independent pass with nothing tying it to the NARRATION that same scene was planned
+    with -- so it can come back in English for a Hindi video. Forcing the voice to Hindi
+    then only gets a Hindi voice reading English words. The plan narration is already in
+    the right language, which makes substituting it deterministic where an instruction to
+    the model is not.
+
+    Deliberately gated on an actual mismatch: when the model did write this scene in the
+    video's language, its own phrasing is matched to its own animation beats, and there is
+    nothing to gain by overwriting it.
+    """
+    lang = _narration_lang.get()
+    if not lang or lang == "en":
+        return code
+    narration = _scene_plan_narration(scene)
+    if not narration:
+        return code
+
+    try:
+        spans = _voiceover_text_spans(code)
+        if not spans:
+            return code
+        spoken = " ".join(text for _start, _end, text in spans if text).strip()
+        if spoken and resolve_narration_lang(spoken) == lang:
+            return code
+
+        chunks = _split_for_slots(narration, len(spans))
+        updated = code
+        for (start, end, _current), chunk in zip(reversed(spans), reversed(chunks)):
+            literal = json.dumps(chunk, ensure_ascii=False)
+            updated = f"{updated[:start]}{literal}{updated[end:]}"
+        # Never hand a broken rewrite to the renderer.
+        ast.parse(updated)
+    except Exception:
+        return code
+
+    logger.info(
+        "structured_video: realigned custom scene narration to %s (%d block(s))",
+        lang,
+        len(spans),
+    )
+    return updated
+
+
+def _with_narration_lang(code: str, lang: str) -> str:
+    """Point the scene's speech service at `lang` instead of the hardcoded en."""
+    if not lang or lang == "en":
+        return code
+    if _SPEECH_LANG_RE.search(code):
+        return _SPEECH_LANG_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{lang}{m.group(2)}", code)
+    # No lang= kwarg anywhere in the call (e.g. GTTSService() or GTTSService(tld="com")):
+    # inject one immediately after the opening paren rather than leave it un-rewritten.
+    return _SPEECH_CALL_RE.sub(f'GTTSService(lang="{lang}", ', code, count=1)
+
+
 def _render_code_once(
     *,
     code: str,
     scene_job_id: str,
 ) -> tuple[pathlib.Path | None, dict[str, Any], str]:
+    lang = _narration_lang.get()
+    code = _with_narration_lang(code, lang)
+    # Logged because the rendered scene.py is discarded (retain_logs=False), so without this
+    # there is no record anywhere of the language the renderer was actually handed -- which
+    # made "the voice was English" impossible to tell apart from "detection said English".
+    from backend.tts.engine import voice_for as _voice_for
+
+    logger.info(
+        "structured_video: rendering %s narration_lang=%s neural_voice=%s code_lang=%s",
+        scene_job_id,
+        lang,
+        _voice_for(lang) or "none (gTTS fallback)",
+        sorted(set(re.findall(r"GTTSService\(\s*lang\s*=\s*['\"]([\w-]+)", code))) or "unset",
+    )
     last_result: dict[str, Any] = {}
     last_detail = ""
     for attempt in range(_VOICE_SYNTHESIS_RETRIES + 1):
@@ -1866,6 +2072,14 @@ def _attempt_custom_render(
 ) -> bool:
     index = int(state["scene_index"])
     code = str(state.get("current_script") or "").strip()
+    # Applied here rather than in _render_code_once: this is the one path whose spoken text
+    # the model authored, and it is the only path with the scene's plan narration to hand.
+    code = _align_voiceover_language(code, state.get("scene") or {})
+    # Also applied here, not only inside _render_code_once, so state["rendered_code"] below
+    # is the code that actually rendered. It used to be the pre-substitution copy, which made
+    # scene_bundle.txt claim lang="en" for a Hindi video and left no artifact anywhere
+    # recording the language the renderer was really given. Idempotent by design.
+    code = _with_narration_lang(code, _narration_lang.get())
     stage_slug = _safe_ref(stage)
     scene_job_id = f"{final_job_id}-scene-{index:02d}-{stage_slug}"
     clip, result, detail = _render_code_once(code=code, scene_job_id=scene_job_id)
@@ -1934,7 +2148,9 @@ def _render_standard_scene(
     logs_dir: pathlib.Path,
     metrics: dict[str, Any],
 ) -> tuple[pathlib.Path, dict[str, Any], str]:
-    code = sanitize_minimally(build_component_scene_code(scene))
+    code = _with_narration_lang(
+        sanitize_minimally(build_component_scene_code(scene)), _narration_lang.get()
+    )
     clip, result, detail = _render_code_once(
         code=code,
         scene_job_id=f"{final_job_id}-scene-{scene_index:02d}-component",
@@ -2979,6 +3195,13 @@ def _render_structured_plan(
     logs_dir = job_dir / "logs"
     job_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
+
+    narration_lang = resolve_narration_lang(_plan_narration_text(plan))
+    _narration_lang.set(narration_lang)
+    if narration_lang != "en":
+        logger.info(
+            "structured_video: narrating job_id=%s in %s", final_job_id, narration_lang
+        )
 
     job_progress.set_stage(final_job_id, "preparing")
     custom_states = _prepare_custom_states(

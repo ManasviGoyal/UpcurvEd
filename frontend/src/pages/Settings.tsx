@@ -195,15 +195,14 @@ export const SettingsPage = ({
         return;
       }
 
-      // The main process has already scheduled secure-key/data cleanup. Clear renderer-owned
-      // app keys immediately while this window is still alive. User-exported files are untouched.
+      // The main process has already scheduled secure-key/data cleanup, including this
+      // window's own Local Storage on disk. Clear it in the live session too so nothing
+      // stale renders in the moment before the app quits. This app is the sole occupant of
+      // its origin, so a full clear (not just "app."-prefixed keys) is safe and matches what
+      // the confirmation dialog promised: settings, caches, and saved keys, not a subset.
       try {
-        Object.keys(localStorage).forEach((key) => {
-          if (key.startsWith("app.")) localStorage.removeItem(key);
-        });
-        Object.keys(sessionStorage).forEach((key) => {
-          if (key.startsWith("app.")) sessionStorage.removeItem(key);
-        });
+        localStorage.clear();
+        sessionStorage.clear();
       } catch {}
 
       setUninstallStatus(

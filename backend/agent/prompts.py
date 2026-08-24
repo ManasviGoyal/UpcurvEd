@@ -185,7 +185,9 @@ Each script must:
   whenever 3D objects or 3D camera methods are used.
 - Call self.set_speech_service(GTTSService(lang="en")) inside construct().
 - Include voiceover. Prefer one voiceover block for the scene, never more than two, and never
-  place voiceover calls inside loops.
+  place voiceover calls inside loops. Write the voiceover text in the exact same language as
+  this scene's NARRATION field, not the language of the examples shown here -- a mismatch means
+  a narrator voice chosen for one language reads text written in another.
 - Use stable Manim 0.19 APIs. Do not use Tex or MathTex; use Text and plain-text formulas.
 - Keep important objects comfortably inside the frame. Preserve complete learner questions;
   wrap or scale them rather than truncating them.

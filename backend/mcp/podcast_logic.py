@@ -5,7 +5,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from gtts import gTTS
-from langdetect import detect
 
 from backend.agent.llm.multimodal import (
     NEEDS_CLARIFICATION_MESSAGE,
@@ -24,6 +23,7 @@ from backend.utils.diagnostics import DiagnosticError
 from backend.utils import app_logging  # noqa: F401
 
 from backend.runner import job_cancel
+from backend.tts.engine import resolve_narration_lang
 
 logger = logging.getLogger(f"app.{__name__}")
 
@@ -121,18 +121,16 @@ def _ensure_debate_greeting(script: str, user_prompt: str) -> str:
 
 
 def _infer_gtts_lang(script_text: str) -> str:
-    """Infer a gTTS language code from script text using langdetect with sane fallbacks."""
-    try:
-        code = detect(script_text or "")
-    except Exception:
-        return "en"
-    code = (code or "en").lower()
-    # Map common variants for gTTS compatibility
-    if code.startswith("zh"):
-        return "zh-cn"
-    if code in {"pt-br", "pt_pt"}:
-        return "pt"
-    return code
+    """Infer the narration language for a podcast script.
+
+    Shares the video pipeline's resolution rather than calling langdetect
+    directly, for two reasons this path got wrong on its own: a script written in
+    Devanagari or Han was decided by word statistics, so embedded English terms
+    could flip it (and Chinese scripts were being reported as Korean); and the old
+    "zh" -> "zh-cn" mapping produced a code gTTS does not accept - its list has
+    "zh" and "zh-CN", never "zh-cn".
+    """
+    return resolve_narration_lang(script_text)
 
 
 def _split_sentences(text: str) -> list[str]:

@@ -1178,28 +1178,6 @@
       "id": "UpcurvEd akan menutup dan menghapus dirinya sendiri beserta obrolan lokal, berkas kerja hasil generasi, diagnostik, pengaturan, cache, dan kunci API yang tersimpan. Berkas yang Anda ekspor atau unduh sendiri tidak akan diusik.",
       "ja": "UpcurvEd が終了し、ローカルのチャット、生成された作業ファイル、診断情報、設定、キャッシュ、保存済みの API キーとともに、アプリ自体が削除されます。ご自身で書き出した、またはダウンロードしたファイルはそのまま残ります。"
     },
-    "setup.uninstall.windowsLabel": {
-      "en": "On Windows:",
-      "es": "En Windows:",
-      "pt": "No Windows:",
-      "fr": "Sous Windows :",
-      "it": "Su Windows:",
-      "hi": "Windows पर:",
-      "zh-Hans": "在 Windows 上：",
-      "id": "Di Windows:",
-      "ja": "Windows の場合:"
-    },
-    "setup.uninstall.windows": {
-      "en": "{label} the in-app uninstall is currently macOS only. Uninstall UpcurvEd from {path}, find {app}, and choose {uninstall}.",
-      "es": "{label} la desinstalación desde la aplicación solo está disponible por ahora en macOS. Desinstala UpcurvEd desde {path}, busca {app} y elige {uninstall}.",
-      "pt": "{label} a desinstalação pelo aplicativo está disponível apenas no macOS por enquanto. Desinstale o UpcurvEd em {path}, localize {app} e escolha {uninstall}.",
-      "fr": "{label} la désinstallation depuis l'application n'est pour l'instant disponible que sur macOS. Désinstallez UpcurvEd depuis {path}, repérez {app} et choisissez {uninstall}.",
-      "it": "{label} la disinstallazione dall'app è per ora disponibile solo su macOS. Disinstalla UpcurvEd da {path}, individua {app} e scegli {uninstall}.",
-      "hi": "{label} ऐप के भीतर से अनइंस्टॉल फ़िलहाल केवल macOS पर उपलब्ध है। UpcurvEd को {path} से अनइंस्टॉल करें, {app} ढूँढें और {uninstall} चुनें।",
-      "zh-Hans": "{label} 应用内卸载目前仅支持 macOS。请从{path}卸载 UpcurvEd：找到 {app}，然后选择 {uninstall}。",
-      "id": "{label} penghapusan dari dalam aplikasi saat ini hanya tersedia di macOS. Hapus UpcurvEd melalui {path}, cari {app}, lalu pilih {uninstall}.",
-      "ja": "{label} アプリ内からのアンインストールは現在 macOS のみ対応です。UpcurvEd は{path}からアンインストールしてください。{app} を選び、{uninstall} を実行します。"
-    },
     "setup.uninstall.keyNote": {
       "en": "Uninstalling deletes the copy of your API key on this computer, but the key itself stays active at your provider. Delete it in your provider's dashboard if you no longer want it.",
       "es": "Al desinstalar se borra la copia de tu clave de API en este ordenador, pero la clave sigue activa en tu proveedor. Elimínala en el panel de tu proveedor si ya no la quieres.",

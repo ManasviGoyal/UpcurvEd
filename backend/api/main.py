@@ -173,6 +173,20 @@ def _with_audience_guidance(
             "</STANDING_CONTEXT>"
         )
 
+    # Last block, so it is the most recent instruction the model reads, and it is
+    # unconditional: every generation and edit route passes through here. The UI
+    # language is deliberately not consulted -- the request itself decides.
+    result = (
+        f"{result.rstrip()}\n\n"
+        "<LANGUAGE>\n"
+        "Write every learner-facing word in the same language as the request above: "
+        "narration, on-screen text, headings, labels, questions, options, hints, and "
+        "feedback. If the request explicitly asks for a different language, use the one it "
+        "asks for. Do not translate code: identifiers, HTML attributes, CSS property names, "
+        "and library calls stay in English.\n"
+        "</LANGUAGE>"
+    )
+
     return result
 
 try:

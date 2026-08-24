@@ -810,18 +810,7 @@ export default function SetupGuide() {
                     : "border-amber-300 bg-amber-50 text-amber-900"
                 }`}
               >
-                <p>
-                  <Trans
-                    k="setup.uninstall.windows"
-                    components={{
-                      label: <strong>{t("setup.uninstall.windowsLabel")}</strong>,
-                      path: ui("Settings \u203a Apps \u203a Installed apps"),
-                      app: ui("UpcurvEd"),
-                      uninstall: ui("Uninstall"),
-                    }}
-                  />
-                </p>
-                <p className="mt-2">{t("setup.uninstall.keyNote")}</p>
+                <p>{t("setup.uninstall.keyNote")}</p>
               </div>
             </section>
           </div>

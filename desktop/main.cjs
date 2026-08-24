@@ -218,14 +218,174 @@ function macPackagedCleanupTargets() {
   return [...targets].filter(Boolean);
 }
 
-function scheduleMacCleanupAfterExit({ removeApp }) {
+// Shared by Windows and Linux, which have no OS-level app-data registration to lean
+// on the way mac's Library paths do -- just the directories this app itself created.
+function genericPackagedCleanupTargets() {
+  const targets = new Set();
   const userData = app.getPath("userData");
-  const targets = IS_PACKAGED
-    ? macPackagedCleanupTargets()
-    : [
-        path.join(userData, "storage"),
-        path.join(userData, "state"),
-      ];
+  if (isUpcurvedOwnedPath(userData)) {
+    targets.add(userData);
+  } else {
+    // Safety fallback: never remove a generic Electron userData directory.
+    targets.add(path.join(userData, "storage"));
+    targets.add(path.join(userData, "state"));
+  }
+
+  try {
+    const logs = app.getPath("logs");
+    if (isUpcurvedOwnedPath(logs)) targets.add(logs);
+  } catch (_) {
+    // no-op
+  }
+
+  try {
+    const cacheCandidate = path.join(app.getPath("cache"), app.getName());
+    if (isUpcurvedOwnedPath(cacheCandidate)) targets.add(cacheCandidate);
+  } catch (_) {
+    // no-op
+  }
+
+  return [...targets].filter(Boolean);
+}
+
+function findWindowsUninstallerPath() {
+  if (process.platform !== "win32") return "";
+  const installDir = path.dirname(app.getPath("exe"));
+  const candidate = path.join(installDir, `Uninstall ${app.getName()}.exe`);
+  return fs.existsSync(candidate) ? candidate : "";
+}
+
+function scheduleWindowsCleanupAfterExit({ removeApp }) {
+  // Same target set whether this is a real uninstall or a dev "clear data": both promise to
+  // reset local settings, and Chromium's own Local Storage/IndexedDB/Cache live as siblings of
+  // our storage/state folders inside userData, not inside them, so only deleting those two
+  // subfolders would leave every browser-side setting untouched.
+  const targets = genericPackagedCleanupTargets();
+
+  const uninstallerPath = removeApp ? findWindowsUninstallerPath() : "";
+  if (removeApp && !uninstallerPath) {
+    throw new Error("Could not find the UpcurvEd uninstaller.");
+  }
+
+  // Written to the OS temp dir rather than userData, so it still exists after the
+  // cleanup it performs deletes userData. Waits for this process to exit, deletes the
+  // directories UpcurvEd owns, then hands off to the NSIS-generated uninstaller for the
+  // installed app files and registry entries, exactly like the "Uninstall" entry in
+  // Windows Settings would.
+  const scriptLines = [
+    "param([int]$ProcId, [string]$UninstallerPath, [string[]]$Targets)",
+    "while (Get-Process -Id $ProcId -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 200 }",
+    "foreach ($target in $Targets) {",
+    "  if ($target -and (Test-Path -LiteralPath $target)) {",
+    "    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue",
+    "  }",
+    "}",
+    "if ($UninstallerPath -and (Test-Path -LiteralPath $UninstallerPath)) {",
+    "  Start-Process -FilePath $UninstallerPath -ArgumentList '/S' -Wait",
+    "}",
+    "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+  ].join("\r\n");
+
+  const scriptPath = path.join(app.getPath("temp"), `upcurved-uninstall-${process.pid}.ps1`);
+  fs.writeFileSync(scriptPath, scriptLines, "utf8");
+
+  const helper = spawn(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-WindowStyle",
+      "Hidden",
+      "-File",
+      scriptPath,
+      "-ProcId",
+      String(process.pid),
+      "-UninstallerPath",
+      uninstallerPath,
+      "-Targets",
+      ...targets,
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    }
+  );
+  helper.unref();
+
+  console.log(
+    `[desktop] scheduled windows ${removeApp ? "uninstall" : "dev cleanup"}; targets=${targets.length}`
+  );
+}
+
+// The AppImage runtime sets this to the absolute path of the outer .AppImage file --
+// not the temporary squashfs mount under /tmp/.mount_*, which is torn down on exit on
+// its own. There is no installer to hand off to: removing this one file is the uninstall.
+function findLinuxAppImagePath() {
+  if (process.platform !== "linux") return "";
+  const appImagePath = process.env.APPIMAGE || "";
+  return appImagePath && fs.existsSync(appImagePath) ? appImagePath : "";
+}
+
+function scheduleLinuxCleanupAfterExit({ removeApp }) {
+  // Same target set whether this is a real uninstall or a dev "clear data": both promise to
+  // reset local settings, and Chromium's own Local Storage/IndexedDB/Cache live as siblings of
+  // our storage/state folders inside userData, not inside them, so only deleting those two
+  // subfolders would leave every browser-side setting untouched.
+  const targets = genericPackagedCleanupTargets();
+
+  const appImagePath = removeApp ? findLinuxAppImagePath() : "";
+  if (removeApp && !appImagePath) {
+    throw new Error("Could not identify the UpcurvEd AppImage file safely.");
+  }
+
+  const cleanupScript = [
+    'pid="$1"',
+    "shift",
+    'appimage="$1"',
+    "shift",
+    'while /bin/kill -0 "$pid" 2>/dev/null; do /bin/sleep 0.2; done',
+    'for target in "$@"; do',
+    '  [ -n "$target" ] || continue',
+    '  if [ -e "$target" ]; then',
+    '    /bin/rm -rf "$target"',
+    "  fi",
+    "done",
+    'if [ -n "$appimage" ] && [ -e "$appimage" ]; then',
+    '  /bin/rm -f "$appimage"',
+    "fi",
+  ].join("\n");
+
+  const helper = spawn(
+    "/bin/sh",
+    [
+      "-c",
+      cleanupScript,
+      "upcurved-uninstall",
+      String(process.pid),
+      appImagePath,
+      ...targets,
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+    }
+  );
+  helper.unref();
+
+  console.log(
+    `[desktop] scheduled linux ${removeApp ? "uninstall" : "dev cleanup"}; targets=${targets.length}`
+  );
+}
+
+function scheduleMacCleanupAfterExit({ removeApp }) {
+  // Same target set whether this is a real uninstall or a dev "clear data": both promise to
+  // reset local settings, and Chromium's own Local Storage/IndexedDB/Cache live as siblings of
+  // our storage/state folders inside userData, not inside them, so only deleting those two
+  // subfolders would leave every browser-side setting untouched.
+  const targets = macPackagedCleanupTargets();
   const appBundle = removeApp ? findMacAppBundlePath() : "";
 
   if (removeApp && (!appBundle || !appBundle.toLowerCase().endsWith(".app"))) {
@@ -277,11 +437,13 @@ ipcMain.handle("app:uninstall-and-delete-local-data", async () => {
   if (uninstallScheduled) {
     return { ok: true, alreadyScheduled: true };
   }
-  if (process.platform !== "darwin") {
+  const platformSupported =
+    process.platform === "darwin" || process.platform === "win32" || process.platform === "linux";
+  if (!platformSupported) {
     return {
       ok: false,
       reason: "unsupported_platform",
-      message: "Full in-app uninstall is currently available on macOS.",
+      message: "Full in-app uninstall is currently available on macOS, Windows, and Linux.",
     };
   }
 
@@ -309,7 +471,13 @@ ipcMain.handle("app:uninstall-and-delete-local-data", async () => {
 
   try {
     await clearAllSecureApiKeys();
-    scheduleMacCleanupAfterExit({ removeApp: IS_PACKAGED });
+    if (process.platform === "darwin") {
+      scheduleMacCleanupAfterExit({ removeApp: IS_PACKAGED });
+    } else if (process.platform === "win32") {
+      scheduleWindowsCleanupAfterExit({ removeApp: IS_PACKAGED });
+    } else {
+      scheduleLinuxCleanupAfterExit({ removeApp: IS_PACKAGED });
+    }
     uninstallScheduled = true;
 
     // Let the renderer receive the successful IPC response and clear its app.* storage keys,
@@ -881,30 +1049,65 @@ function startStaticServer() {
   });
 }
 
+// Resolves once `proc` has actually exited, not just been signaled -- callers that quit
+// right after asking a child to die can otherwise outlive it. That matters for the backend
+// specifically: a --reload dev server that survives as an orphan keeps listening on its
+// port, so the next launch's canAdoptBackend() check finds it "healthy" and reuses it
+// instead of starting fresh -- silently resurrecting whatever it still has in memory,
+// including chats a cleanup/uninstall just deleted from disk.
 function killProcessTree(proc) {
-  if (!proc || proc.killed) return;
+  if (!proc || proc.killed || proc.exitCode !== null) return Promise.resolve();
 
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(proc.pid), "/t", "/f"]);
-    killer.on("error", () => {
+  return new Promise((resolve) => {
+    let settled = false;
+    let hardKillTimer = null;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (hardKillTimer) clearTimeout(hardKillTimer);
+      resolve();
+    };
+
+    proc.once("exit", finish);
+
+    if (process.platform === "win32") {
+      const killer = spawn("taskkill", ["/pid", String(proc.pid), "/t", "/f"]);
+      killer.on("error", () => {
+        try {
+          proc.kill("SIGTERM");
+        } catch (_) {
+          // no-op
+        }
+      });
+    } else {
       try {
-        proc.kill("SIGTERM");
+        process.kill(-proc.pid, "SIGTERM");
+      } catch (_) {
+        try {
+          proc.kill("SIGTERM");
+        } catch (_) {
+          // no-op
+        }
+      }
+    }
+
+    // Graceful exit gets a bounded window; past it, force so shutdown can never hang
+    // and a stuck process can never linger as an adoptable orphan.
+    hardKillTimer = setTimeout(() => {
+      try {
+        if (process.platform === "win32") {
+          spawnSync("taskkill", ["/pid", String(proc.pid), "/t", "/f"]);
+        } else {
+          process.kill(-proc.pid, "SIGKILL");
+        }
       } catch (_) {
         // no-op
       }
-    });
-    return;
-  }
-
-  try {
-    process.kill(-proc.pid, "SIGTERM");
-  } catch (_) {
-    try {
-      proc.kill("SIGTERM");
-    } catch (_) {
-      // no-op
-    }
-  }
+      finish();
+    }, 3000);
+    if (typeof hardKillTimer.unref === "function") hardKillTimer.unref();
+  });
 }
 
 async function shutdown() {
@@ -922,8 +1125,7 @@ async function shutdown() {
     // no-op
   }
 
-  killProcessTree(frontendDevProcess);
-  killProcessTree(backendProcess);
+  await Promise.all([killProcessTree(frontendDevProcess), killProcessTree(backendProcess)]);
 
   frontendDevProcess = null;
   backendProcess = null;
