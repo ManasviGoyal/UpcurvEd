@@ -14,6 +14,12 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useLanguage } from "@/lib/i18n";
 import {
+  CUSTOM_CONTEXT_MAX_CHARS,
+  loadCustomContext,
+  normalizeCustomContext,
+  saveCustomContext,
+} from "@/lib/customContext";
+import {
   clearSecurelyStoredApiKeysForUser,
   isSecureStorageEnabledForUser,
   loadApiKeysForUser,
@@ -55,6 +61,7 @@ export const SettingsPage = ({
   const [exportBusy, setExportBusy] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
   const { t } = useLanguage();
+  const [customContext, setCustomContext] = useState<string>("");
   const [uninstallBusy, setUninstallBusy] = useState<boolean>(false);
   const [uninstallStatus, setUninstallStatus] = useState<string>("");
   const [customModelSelected, setCustomModelSelected] = useState<boolean>(false);
@@ -71,6 +78,7 @@ export const SettingsPage = ({
         setLocalKeys(normalizeApiKeys(loaded));
         setSecureStorageEnabled(secureEnabled);
         setUseSecureStorage(secureEnabled);
+        setCustomContext(loadCustomContext(user.email));
       }
     }
 
@@ -85,6 +93,7 @@ export const SettingsPage = ({
     if (trimmedName && trimmedName !== user.name && onUpdateName) {
       onUpdateName(trimmedName);
     }
+    saveCustomContext(user.email, customContext);
 
     setBusy(true);
     setStatusMessage("");
@@ -387,6 +396,44 @@ export const SettingsPage = ({
               </div>
             </div>
           )}
+
+          <div className="grid grid-cols-1 gap-2">
+            <label className="text-sm font-medium" htmlFor="upcurved-standing-context">
+              {t("settingsPage.customContext")}
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t("settingsPage.customContext.hint")}
+            </p>
+            <textarea
+              id="upcurved-standing-context"
+              value={customContext}
+              // One line by contract: newlines are collapsed on the way in, so a
+              // pasted paragraph cannot quietly become a second prompt.
+              onChange={(event) => setCustomContext(normalizeCustomContext(event.target.value))}
+              maxLength={CUSTOM_CONTEXT_MAX_CHARS}
+              rows={2}
+              placeholder={t("settingsPage.customContext.placeholder")}
+              disabled={busy}
+              className="resize-none rounded border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {t("settingsPage.customContext.budget")}
+              </p>
+              <p
+                className={`shrink-0 text-xs tabular-nums ${
+                  customContext.length >= CUSTOM_CONTEXT_MAX_CHARS
+                    ? "font-medium text-amber-600"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {t("settingsPage.customContext.count", {
+                  used: customContext.length,
+                  max: CUSTOM_CONTEXT_MAX_CHARS,
+                })}
+              </p>
+            </div>
+          </div>
 
           {statusMessage && (
             <p className="text-sm text-muted-foreground">{statusMessage}</p>

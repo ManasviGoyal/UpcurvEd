@@ -120,23 +120,60 @@ def _normalize_audience(audience: object | None) -> str | None:
     return None
 
 
-def _with_audience_guidance(text: str, audience: object | None) -> str:
-    """Attach trusted learner-level guidance without changing the saved user prompt."""
-    normalized = _normalize_audience(audience)
-    if not normalized:
-        return text
+# A saved instruction is standing context, not an instruction to obey blindly: it
+# is capped short client-side, and the block below tells the model to treat it as
+# background that must not override what the user actually asked for this time.
+_MAX_CUSTOM_CONTEXT_CHARS = 300
 
-    guidance = _AUDIENCE_GUIDANCE.get(normalized)
-    if not guidance:
-        return text
-    return (
-        f"{text.rstrip()}\n\n"
-        "<LEARNER_LEVEL_REQUIREMENTS>\n"
-        f"{guidance}\n"
-        "Keep the material factually complete for the topic while adapting its vocabulary, "
-        "examples, pacing, visuals, interactions, and assessment difficulty to this audience.\n"
-        "</LEARNER_LEVEL_REQUIREMENTS>"
-    )
+
+def _normalize_custom_context(value: object | None) -> str | None:
+    """Trim, collapse to one line, and cap a saved instruction. None if empty."""
+    if not isinstance(value, str):
+        return None
+    # Collapsing newlines keeps the block a single paragraph, which also stops a
+    # pasted multi-line payload from imitating our own tag structure.
+    collapsed = re.sub(r"\s+", " ", value).strip()
+    if not collapsed:
+        return None
+    return collapsed[:_MAX_CUSTOM_CONTEXT_CHARS]
+
+
+def _with_audience_guidance(
+    text: str,
+    audience: object | None,
+    custom_context: object | None = None,
+) -> str:
+    """Attach trusted guidance without changing the saved user prompt.
+
+    Two blocks, both optional: the learner level chosen for this generation, and
+    the standing context saved in Settings.
+    """
+    result = text
+    normalized = _normalize_audience(audience)
+    guidance = _AUDIENCE_GUIDANCE.get(normalized) if normalized else None
+    if guidance:
+        result = (
+            f"{result.rstrip()}\n\n"
+            "<LEARNER_LEVEL_REQUIREMENTS>\n"
+            f"{guidance}\n"
+            "Keep the material factually complete for the topic while adapting its vocabulary, "
+            "examples, pacing, visuals, interactions, and assessment difficulty to this audience.\n"
+            "</LEARNER_LEVEL_REQUIREMENTS>"
+        )
+
+    context = _normalize_custom_context(custom_context)
+    if context:
+        result = (
+            f"{result.rstrip()}\n\n"
+            "<STANDING_CONTEXT>\n"
+            f"{context}\n"
+            "This is background the user saved once for all their requests. Apply it where it "
+            "fits, but it must never override the specific request above, and never mention it "
+            "in the output.\n"
+            "</STANDING_CONTEXT>"
+        )
+
+    return result
 
 try:
     from google.cloud import firestore as gcf  # type: ignore
@@ -633,6 +670,7 @@ class GenerateIn(BaseModel):
     model: str | None = None
     mode: Literal["standard", "story"] | None = "standard"
     audience: str | None = "auto"
+    customContext: str | None = None
     storyOptions: dict | None = None
     jobId: str | None = None
     chatId: str | None = None
@@ -649,6 +687,7 @@ class QuizIn(BaseModel):
     model: str | None = None
     context: str | None = None
     audience: str | None = "auto"
+    customContext: str | None = None
     userEmail: str | None = None
     jobId: str | None = None
     chatId: str | None = None
@@ -663,6 +702,7 @@ class PodcastIn(BaseModel):
     model: str | None = None
     mode: Literal["standard", "debate"] | None = "standard"
     audience: str | None = "auto"
+    customContext: str | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -675,6 +715,7 @@ class WidgetIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     audience: str | None = "auto"
+    customContext: str | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -687,6 +728,7 @@ class EditVideoIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     audience: str | None = "auto"
+    customContext: str | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -700,6 +742,7 @@ class EditWidgetIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     audience: str | None = "auto"
+    customContext: str | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -714,6 +757,7 @@ class EditStoryIn(BaseModel):
     model: str | None = None
     storyOptions: dict | None = None
     audience: str | None = "auto"
+    customContext: str | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -728,6 +772,7 @@ class EditQuizIn(BaseModel):
     provider: ProviderName | None = None
     model: str | None = None
     audience: str | None = "auto"
+    customContext: str | None = None
     jobId: str | None = None
     chatId: str | None = None
     sessionId: str | None = None
@@ -1453,7 +1498,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
                     image_payload,
                 )
                 story_res = _generate_story_slider(
-                    prompt=_with_audience_guidance(effective_prompt, body.audience),
+                    prompt=_with_audience_guidance(effective_prompt, body.audience, body.customContext),
                     learner_prompt=body.prompt,
                     images=image_payload,
                     default_image_prompt_used=default_image_prompt_used,
@@ -1605,7 +1650,7 @@ def generate(body: GenerateIn, uid: str = Depends(require_firebase_user)):
         )
         with track_llm_calls():
             result = generate_structured_manim_video(
-                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience, body.customContext),
                 learner_prompt=body.prompt,
                 images=image_payload,
                 default_image_prompt_used=default_image_prompt_used,
@@ -1703,6 +1748,7 @@ def edit_video(body: EditVideoIn, uid: str = Depends(require_firebase_user)):
                 edit_instructions=_with_audience_guidance(
                     body.edit_instructions,
                     body.audience,
+                    body.customContext,
                 ),
                 provider=provider,
                 model=model,
@@ -1755,7 +1801,7 @@ def quiz_embedded(body: QuizIn, uid: str = Depends(require_firebase_user)):
                 image_payload,
             )
             quiz = _generate_quiz_embedded(
-                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience, body.customContext),
                 learner_prompt=body.prompt,
                 images=image_payload,
                 default_image_prompt_used=default_image_prompt_used,
@@ -1874,6 +1920,7 @@ def quiz_media(body: dict, uid: str = Depends(require_firebase_user)):
             media_prompt = _with_audience_guidance(
                 media_prompt,
                 body.get("audience"),
+                body.get("customContext"),
             )
             quiz = _generate_quiz_embedded(
                 prompt=media_prompt,
@@ -1972,7 +2019,7 @@ def podcast(body: PodcastIn, uid: str = Depends(require_firebase_user)):
                 image_payload,
             )
             result = _generate_podcast(
-                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience, body.customContext),
                 learner_prompt=body.prompt,
                 images=image_payload,
                 default_image_prompt_used=default_image_prompt_used,
@@ -2977,7 +3024,7 @@ def widget(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 image_payload,
             )
             result = _generate_widget(
-                prompt=_with_audience_guidance(effective_prompt, body.audience),
+                prompt=_with_audience_guidance(effective_prompt, body.audience, body.customContext),
                 learner_prompt=body.prompt,
                 images=image_payload,
                 default_image_prompt_used=default_image_prompt_used,
@@ -3090,7 +3137,7 @@ def static_worksheet(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 model=model,
                 system=STATIC_WORKSHEET_SYSTEM,
                 user=build_static_worksheet_user_prompt(
-                    _with_audience_guidance(effective_prompt, body.audience)
+                    _with_audience_guidance(effective_prompt, body.audience, body.customContext)
                 ),
                 learner_prompt=body.prompt,
                 images=image_payload,
@@ -3222,7 +3269,7 @@ def diagram(body: WidgetIn, uid: str = Depends(require_firebase_user)):
                 model=model,
                 system=DIAGRAM_SYSTEM,
                 user=build_diagram_user_prompt(
-                    _with_audience_guidance(effective_prompt, body.audience)
+                    _with_audience_guidance(effective_prompt, body.audience, body.customContext)
                 ),
                 learner_prompt=body.prompt,
                 images=image_payload,
@@ -3364,7 +3411,7 @@ def edit_static_worksheet_endpoint(
                 system=STATIC_WORKSHEET_EDIT_SYSTEM,
                 user=build_static_worksheet_edit_user_prompt(
                     original_html=original_html,
-                    edit_instructions=_with_audience_guidance(body.edit_instructions, body.audience),
+                    edit_instructions=_with_audience_guidance(body.edit_instructions, body.audience, body.customContext),
                 ),
                 temperature=0.1,
                 max_tokens=12000,
@@ -3471,6 +3518,7 @@ def edit_diagram_endpoint(
                     edit_instructions=_with_audience_guidance(
                         body.edit_instructions,
                         body.audience,
+                        body.customContext,
                     ),
                 ),
                 temperature=0.1,
@@ -3560,6 +3608,7 @@ def edit_widget_endpoint(
                 edit_instructions=_with_audience_guidance(
                     body.edit_instructions,
                     body.audience,
+                    body.customContext,
                 ),
                 original_title=body.original_title,
                 provider=provider,
@@ -3637,6 +3686,7 @@ def edit_story_endpoint(
                 edit_instructions=_with_audience_guidance(
                     body.edit_instructions,
                     body.audience,
+                    body.customContext,
                 ),
                 original_title=body.original_title,
                 provider=provider,
@@ -3714,6 +3764,7 @@ def edit_quiz_endpoint(
                 edit_instructions=_with_audience_guidance(
                     body.edit_instructions,
                     body.audience,
+                    body.customContext,
                 ),
                 num_questions=body.num_questions,
                 difficulty=body.difficulty or "medium",

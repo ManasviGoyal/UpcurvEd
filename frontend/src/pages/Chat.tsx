@@ -16,6 +16,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Sidebar } from "@/components/Sidebar";
+import HelpModal from "@/components/HelpModal";
+import { loadCustomContext } from "@/lib/customContext";
 import { useLanguage, type Translate } from "@/lib/i18n";
 import { useJobProgress } from "@/hooks/useJobProgress";
 import { SettingsPage } from "@/pages/Settings";
@@ -653,6 +655,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 }: ChatInterfaceProps) => {
   const { t } = useLanguage();
   const desktopLocal = isDesktopLocalMode();
+  // Standing context saved in Settings, read fresh for each request so an edit
+  // takes effect on the very next generation.
+  const currentCustomContext = () => loadCustomContext(user?.email) || undefined;
   const { toast } = useToast();
   const currentUser = users.find((u) => u.email === user.email);
   const [chats, setChats] = useState<Chat[]>(currentUser?.chats || []);
@@ -1146,6 +1151,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const lastNonZeroVolumeRef = useRef<number>(75);
   const outboxFlushScheduled = useRef<boolean>(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   // Chat switch confirmation dialog visibility
   const [showSwitchWarning, setShowSwitchWarning] = useState(false);
   const NEW_CHAT_SENTINEL = Symbol('new-chat');
@@ -2854,6 +2860,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         model: llmConfig.model,
         mode: requestedMode,
         audience: requestAudience,
+        customContext: currentCustomContext(),
         images,
         sessionId,
       };
@@ -3081,6 +3088,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider: llmConfig.provider,
         model: llmConfig.model,
         audience: requestAudience,
+        customContext: currentCustomContext(),
         sessionId,
         jobId,
         chatId: String(finalChatId),
@@ -3206,6 +3214,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         model: llmConfig.model,
         keys: llmConfig.keys,
         audience: requestAudience,
+        customContext: currentCustomContext(),
         chatId: String(finalChatId),
         sessionId: ensureChatSessionId(),
         jobId: makeJobId(),
@@ -4049,6 +4058,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         model: llmConfig.model,
         mode: requestedMode,
         audience: requestAudience,
+        customContext: currentCustomContext(),
         images,
         storyOptions: requestedMode === "story" ? (storyOptions || {}) : undefined,
         jobId,
@@ -4399,6 +4409,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         chatId: String(finalChatId),
         jobId: makeJobId(),
         audience: requestAudience,
+        customContext: currentCustomContext(),
       } as any, videoAbort.signal);
 
       // Store quiz data like embedded quiz for interactive UI
@@ -4500,6 +4511,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         chatId: String(finalChatId),
         jobId: makeJobId(),
         audience: requestAudience,
+        customContext: currentCustomContext(),
       } as any, controller.signal);
 
       const quizChatId = persistedId || activeChatId;
@@ -4602,6 +4614,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             provider: llmConfig.provider,
             model: llmConfig.model,
             audience: requestAudience,
+            customContext: currentCustomContext(),
             sessionId: ensureChatSessionId(),
             jobId: makeJobId(),
             chatId: String(chatIdForGeneration),
@@ -4671,6 +4684,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             provider: llmConfig.provider,
             model: llmConfig.model,
             audience: requestAudience,
+            customContext: currentCustomContext(),
             sessionId: ensureChatSessionId(),
             jobId: makeJobId(),
             chatId: String(chatIdForGeneration),
@@ -4799,6 +4813,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         provider: llmConfig.provider,
         model: llmConfig.model,
         audience: requestAudience,
+        customContext: currentCustomContext(),
         jobId,
         sessionId,
         chatId: chatIdForGeneration,
@@ -5721,6 +5736,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           const el = videoRef.current;
           try { if (el && !el.paused) el.pause(); } catch {}
         }}
+        onOpenHelp={() => setHelpOpen(true)}
         theme={theme}
         setTheme={setTheme}
         handleLogout={handleLogout}
@@ -6249,39 +6265,51 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             <div className="mt-2 flex justify-end">
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {!isEditMode && (
+                  <label className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">{t("chat.gen.label")}</span>
+                    <select
+                      aria-label={t("chat.gen.aria")}
+                      // Hovering the closed control describes the current choice;
+                      // hovering an option in the open list describes that one.
+                      title={t(`chat.gen.${generationType}.desc`)}
+                      value={generationType}
+                      disabled={anyGenerationLoading}
+                      onChange={(event) =>
+                        setGenerationType(event.target.value as GenerationSelection)
+                      }
+                      className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      {GENERATION_SELECTIONS.map((selection) => (
+                        <option
+                          key={selection}
+                          value={selection}
+                          title={t(`chat.gen.${selection}.desc`)}
+                        >
+                          {t(`chat.gen.${selection}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground">{t("chat.level.label")}</span>
                   <select
-                    aria-label={t("chat.gen.aria")}
-                    title={t("chat.gen.title")}
-                    value={generationType}
+                    aria-label={t("chat.level.aria")}
+                    title={t(`chat.level.${audienceLevel}.desc`)}
+                    value={audienceLevel}
                     disabled={anyGenerationLoading}
                     onChange={(event) =>
-                      setGenerationType(event.target.value as GenerationSelection)
+                      setAudienceLevel(event.target.value as AudienceLevel)
                     }
-                    className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="h-7 max-w-[11rem] rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                   >
-                    {GENERATION_SELECTIONS.map((selection) => (
-                      <option key={selection} value={selection}>
-                        {t("chat.gen.option", { label: t(`chat.gen.${selection}`) })}
+                    {AUDIENCE_LEVELS.map((level) => (
+                      <option key={level} value={level} title={t(`chat.level.${level}.desc`)}>
+                        {t(`chat.level.${level}`)}
                       </option>
                     ))}
                   </select>
-                )}
-                <select
-                  aria-label={t("chat.level.aria")}
-                  title={t("chat.level.title")}
-                  value={audienceLevel}
-                  disabled={anyGenerationLoading}
-                  onChange={(event) =>
-                    setAudienceLevel(event.target.value as AudienceLevel)
-                  }
-                  className="h-7 max-w-[11rem] rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {AUDIENCE_LEVELS.map((level) => (
-                    <option key={level} value={level}>
-                      {t("chat.level.option", { label: t(`chat.level.${level}`) })}
-                    </option>
-                  ))}
-                </select>
+                </label>
               </div>
             </div>
           </div>
@@ -6700,6 +6728,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           </button>
         )}
       </div>
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       {settingsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm">
           <SettingsPage

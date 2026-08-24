@@ -24,7 +24,8 @@ import {
   Copy,
   Check,
   Home,
-  UserX
+  UserX,
+  HelpCircle
 } from "lucide-react";
 import type { Chat, User, ColorTheme, Theme } from "@/types";
 import LanguageMenu from "@/components/LanguageMenu";
@@ -38,6 +39,7 @@ interface SidebarProps {
   handleNewChat: () => void;
   setView: (view: string) => void;
   onOpenSettings?: () => void;
+  onOpenHelp?: () => void;
   theme: Theme;
   setTheme: (theme: Theme) => void;
   colorTheme: ColorTheme;
@@ -60,6 +62,7 @@ export const Sidebar = ({
   handleNewChat,
   setView,
   onOpenSettings,
+  onOpenHelp,
   theme,
   setTheme,
   colorTheme,
@@ -380,6 +383,17 @@ export const Sidebar = ({
         >
           <Settings className="w-5 h-5"/>
           {!isSidebarCollapsed && <span>{t("sidebar.settings")}</span>}
+        </button>
+
+        {/* Directly under Settings: the two things you reach for when the app is
+            not doing what you expected. */}
+        <button
+          onClick={() => onOpenHelp?.()}
+          title={t("help.title")}
+          className={`w-full text-left flex items-center gap-3 px-3 py-2 rounded-md text-sm hover:bg-accent ${isSidebarCollapsed ? 'justify-center' : ''}`}
+        >
+          <HelpCircle className="w-5 h-5"/>
+          {!isSidebarCollapsed && <span>{t("help.title")}</span>}
         </button>
 
         {!desktopLocal && (
