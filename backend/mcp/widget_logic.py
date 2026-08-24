@@ -34,6 +34,15 @@ from backend.utils import app_logging  # noqa: F401
 
 logger = logging.getLogger(f"app.{__name__}")
 
+# Output budget for a whole widget document. The retry uses the same larger cap
+# the edit and repair paths already use, so this is not a new ceiling.
+WIDGET_OUTPUT_TOKENS = 5000
+WIDGET_RETRY_OUTPUT_TOKENS = 8000
+
+
+class WidgetTruncated(RuntimeError):
+    """The model's HTML stopped mid-document, i.e. it ran out of output budget."""
+
 
 def _extract_html(raw: str) -> str:
     text = raw.strip()
@@ -48,11 +57,11 @@ def _extract_html(raw: str) -> str:
     if not low.startswith("<!doctype") and "<html" not in low:
         raise RuntimeError("Model did not return a valid HTML document.")
     if "<script" in low and "</script>" not in low:
-        raise RuntimeError("Widget script block appears truncated (missing </script>).")
+        raise WidgetTruncated("Widget script block appears truncated (missing </script>).")
     if "</body>" not in low:
-        raise RuntimeError("Widget HTML appears truncated (missing </body>).")
+        raise WidgetTruncated("Widget HTML appears truncated (missing </body>).")
     if "</html>" not in low:
-        raise RuntimeError("Widget HTML appears truncated (missing </html>).")
+        raise WidgetTruncated("Widget HTML appears truncated (missing </html>).")
     # Defensive sanitation: strip accidental external assets that break sandboxed iframes.
     text = re.sub(
         r"""<script\b[^>]*\bsrc\s*=\s*["']https?://[^"']*["'][^>]*>\s*</script>""",
@@ -740,8 +749,8 @@ def generate_widget(
     first_error: Exception | None = None
     generation_diagnostics: dict[str, object] | None = None
 
-    try:
-        llm_result = call_multimodal_llm(
+    def _call_primary(output_budget: int):
+        return call_multimodal_llm(
             provider=prov,
             api_key=api_key,
             model=model,
@@ -752,9 +761,12 @@ def generate_widget(
             provider_keys=provider_keys,
             default_image_prompt_used=default_image_prompt_used,
             temperature=0.15,
-            max_tokens=5000,
-            max_output_tokens=5000,
+            max_tokens=output_budget,
+            max_output_tokens=output_budget,
         )
+
+    try:
+        llm_result = _call_primary(WIDGET_OUTPUT_TOKENS)
         raw = llm_result.text
         generation_diagnostics = llm_result.metadata.to_dict()
         if is_needs_clarification(raw):
@@ -769,7 +781,25 @@ def generate_widget(
         if not raw or not raw.strip():
             raise RuntimeError("LLM returned empty widget.")
 
-        html = _extract_html(raw)
+        try:
+            html = _extract_html(raw)
+        except WidgetTruncated as truncated:
+            # Nothing is wrong with the request; the document did not fit. Retry
+            # once with more room before treating this as a failure.
+            logger.warning(
+                "widget: output truncated at %d tokens (%s); retrying at %d",
+                WIDGET_OUTPUT_TOKENS,
+                truncated,
+                WIDGET_RETRY_OUTPUT_TOKENS,
+            )
+            llm_result = _call_primary(WIDGET_RETRY_OUTPUT_TOKENS)
+            raw = llm_result.text
+            generation_diagnostics = llm_result.metadata.to_dict()
+            if not raw or not raw.strip():
+                raise RuntimeError("LLM returned empty widget on the retry.") from truncated
+            html = _extract_html(raw)
+            generation_path = "retried_larger_budget"
+
         ok, reason = _validate_widget_html(html)
         if not ok:
             logger.warning("widget: primary validation failed (%s); attempting targeted repair", reason)

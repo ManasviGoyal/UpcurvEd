@@ -23,6 +23,8 @@ from backend.utils.diagnostics import DiagnosticError
 # Import to trigger app-level logging configuration (handlers, format, level).
 from backend.utils import app_logging  # noqa: F401
 
+from backend.runner import job_cancel
+
 logger = logging.getLogger(f"app.{__name__}")
 
 WELCOME_PREFIX = "welcome to upcurved podcasts"
@@ -341,6 +343,9 @@ def _render_debate_segments(segments, lang: str, out_mp3_path, *, use_edge: bool
     temp_files = []
     try:
         for speaker, text in segments:
+            # Each segment is a separate network round trip, so a cancelled job
+            # should stop between them rather than voice the whole episode.
+            job_cancel.raise_if_canceled()
             if not text.strip():
                 continue
             with NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:

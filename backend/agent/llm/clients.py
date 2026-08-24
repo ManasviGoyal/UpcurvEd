@@ -13,6 +13,7 @@ from backend.agent.llm.usage import estimate_call_cost
 
 import requests
 
+from backend.runner import job_cancel
 from backend.agent.llm.provider_config import (
     ProviderName,
     default_openai_model,
@@ -737,6 +738,9 @@ def call_llm(
     purpose: str | None = None,
 ) -> str:
     """Dispatch to the selected provider and record request-local usage when available."""
+    # A cancelled job must not start another paid model call. This cannot abort a
+    # request already in flight, only refuse to begin the next one.
+    job_cancel.raise_if_canceled()
     resolved_model = str(model or get_default_model(provider) or "").strip()
     output_limit = max_tokens or max_output_tokens
     record = _record_llm_call(str(provider), resolved_model, purpose)

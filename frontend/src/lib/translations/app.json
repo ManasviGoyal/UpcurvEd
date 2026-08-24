@@ -3245,6 +3245,193 @@
       "zh-Hans": "适用对象",
       "id": "Untuk siapa",
       "ja": "対象"
+    },
+    "palette.title": {
+      "en": "Quick actions",
+      "es": "Acciones rápidas",
+      "pt": "Ações rápidas",
+      "fr": "Actions rapides",
+      "it": "Azioni rapide",
+      "hi": "त्वरित कार्य",
+      "zh-Hans": "快捷操作",
+      "id": "Tindakan cepat",
+      "ja": "クイック操作"
+    },
+    "palette.placeholder": {
+      "en": "Type to search actions…",
+      "es": "Escribe para buscar acciones…",
+      "pt": "Digite para buscar ações…",
+      "fr": "Tapez pour rechercher une action…",
+      "it": "Scrivi per cercare un'azione…",
+      "hi": "कार्य खोजने के लिए लिखें…",
+      "zh-Hans": "输入以搜索操作…",
+      "id": "Ketik untuk mencari tindakan…",
+      "ja": "入力して操作を検索…"
+    },
+    "palette.empty": {
+      "en": "No matching action.",
+      "es": "Ninguna acción coincide.",
+      "pt": "Nenhuma ação corresponde.",
+      "fr": "Aucune action correspondante.",
+      "it": "Nessuna azione corrispondente.",
+      "hi": "कोई मेल खाता कार्य नहीं मिला।",
+      "zh-Hans": "没有匹配的操作。",
+      "id": "Tidak ada tindakan yang cocok.",
+      "ja": "一致する操作がありません。"
+    },
+    "palette.group.generate": {
+      "en": "Generate",
+      "es": "Generar",
+      "pt": "Gerar",
+      "fr": "Générer",
+      "it": "Genera",
+      "hi": "बनाएँ",
+      "zh-Hans": "生成",
+      "id": "Buat",
+      "ja": "生成"
+    },
+    "palette.group.level": {
+      "en": "Learner level",
+      "es": "Nivel",
+      "pt": "Nível",
+      "fr": "Niveau",
+      "it": "Livello",
+      "hi": "स्तर",
+      "zh-Hans": "学习者水平",
+      "id": "Tingkat",
+      "ja": "学習レベル"
+    },
+    "palette.group.other": {
+      "en": "Other",
+      "es": "Otros",
+      "pt": "Outros",
+      "fr": "Autres",
+      "it": "Altro",
+      "hi": "अन्य",
+      "zh-Hans": "其他",
+      "id": "Lainnya",
+      "ja": "その他"
+    },
+    "palette.openHelp": {
+      "en": "Open Help & FAQ",
+      "es": "Abrir ayuda y preguntas frecuentes",
+      "pt": "Abrir ajuda e perguntas frequentes",
+      "fr": "Ouvrir l'aide et la FAQ",
+      "it": "Apri aiuto e domande frequenti",
+      "hi": "सहायता और सामान्य प्रश्न खोलें",
+      "zh-Hans": "打开帮助与常见问题",
+      "id": "Buka bantuan dan tanya jawab",
+      "ja": "ヘルプとよくある質問を開く"
+    },
+    "palette.newChat": {
+      "en": "Start a new chat",
+      "es": "Iniciar un chat nuevo",
+      "pt": "Iniciar um novo chat",
+      "fr": "Démarrer une nouvelle conversation",
+      "it": "Inizia una nuova chat",
+      "hi": "नई चैट शुरू करें",
+      "zh-Hans": "开始新对话",
+      "id": "Mulai obrolan baru",
+      "ja": "新しいチャットを開始"
+    },
+    "help.shortcuts.heading": {
+      "en": "Keyboard shortcuts",
+      "es": "Atajos de teclado",
+      "pt": "Atalhos de teclado",
+      "fr": "Raccourcis clavier",
+      "it": "Scorciatoie da tastiera",
+      "hi": "कीबोर्ड शॉर्टकट",
+      "zh-Hans": "键盘快捷键",
+      "id": "Pintasan papan tik",
+      "ja": "キーボードショートカット"
+    },
+    "help.shortcuts.intro": {
+      "en": "On Windows and Linux, use Ctrl wherever this list shows ⌘.",
+      "es": "En Windows y Linux, usa Ctrl allí donde esta lista muestre ⌘.",
+      "pt": "No Windows e no Linux, use Ctrl onde esta lista mostrar ⌘.",
+      "fr": "Sous Windows et Linux, utilisez Ctrl là où cette liste affiche ⌘.",
+      "it": "Su Windows e Linux, usa Ctrl dove questo elenco mostra ⌘.",
+      "hi": "Windows और Linux पर, जहाँ इस सूची में ⌘ दिखे वहाँ Ctrl दबाएँ।",
+      "zh-Hans": "在 Windows 和 Linux 上，本列表中显示 ⌘ 的地方请改用 Ctrl。",
+      "id": "Di Windows dan Linux, gunakan Ctrl di tempat daftar ini menampilkan ⌘.",
+      "ja": "Windows と Linux では、この一覧の ⌘ の箇所で Ctrl を使ってください。"
+    },
+    "help.table.shortcut": {
+      "en": "Shortcut",
+      "es": "Atajo",
+      "pt": "Atalho",
+      "fr": "Raccourci",
+      "it": "Scorciatoia",
+      "hi": "शॉर्टकट",
+      "zh-Hans": "快捷键",
+      "id": "Pintasan",
+      "ja": "ショートカット"
+    },
+    "help.table.does": {
+      "en": "What it does",
+      "es": "Qué hace",
+      "pt": "O que faz",
+      "fr": "Ce qu'il fait",
+      "it": "Che cosa fa",
+      "hi": "क्या करता है",
+      "zh-Hans": "作用",
+      "id": "Fungsinya",
+      "ja": "動作"
+    },
+    "help.shortcut.palette": {
+      "en": "Open quick actions to switch generation type or level without the mouse",
+      "es": "Abre las acciones rápidas para cambiar el tipo de generación o el nivel sin usar el ratón",
+      "pt": "Abre as ações rápidas para trocar o tipo de geração ou o nível sem usar o mouse",
+      "fr": "Ouvre les actions rapides pour changer de type de génération ou de niveau sans la souris",
+      "it": "Apre le azioni rapide per cambiare tipo di generazione o livello senza il mouse",
+      "hi": "बिना माउस के जनरेशन प्रकार या स्तर बदलने के लिए त्वरित कार्य खोलता है",
+      "zh-Hans": "打开快捷操作，不用鼠标即可切换生成类型或学习者水平",
+      "id": "Membuka tindakan cepat untuk mengganti jenis generasi atau tingkat tanpa mouse",
+      "ja": "クイック操作を開き、マウスを使わずに生成の種類やレベルを切り替えます"
+    },
+    "help.shortcut.send": {
+      "en": "Send the prompt from anywhere in the text box",
+      "es": "Envía la indicación desde cualquier punto del cuadro de texto",
+      "pt": "Envia o prompt de qualquer ponto da caixa de texto",
+      "fr": "Envoie l'instruction depuis n'importe où dans la zone de saisie",
+      "it": "Invia il prompt da qualsiasi punto della casella di testo",
+      "hi": "टेक्स्ट बॉक्स में कहीं से भी प्रॉम्प्ट भेजता है",
+      "zh-Hans": "在输入框中的任意位置发送提示词",
+      "id": "Mengirim prompt dari mana saja di dalam kotak teks",
+      "ja": "入力欄のどこからでもプロンプトを送信します"
+    },
+    "help.shortcut.help": {
+      "en": "Open and close this help page",
+      "es": "Abre y cierra esta página de ayuda",
+      "pt": "Abre e fecha esta página de ajuda",
+      "fr": "Ouvre et ferme cette page d'aide",
+      "it": "Apre e chiude questa pagina di aiuto",
+      "hi": "यह सहायता पृष्ठ खोलता और बंद करता है",
+      "zh-Hans": "打开和关闭这个帮助页面",
+      "id": "Membuka dan menutup halaman bantuan ini",
+      "ja": "このヘルプページを開閉します"
+    },
+    "help.shortcut.enter": {
+      "en": "Send the prompt (Shift+Enter adds a line break)",
+      "es": "Envía la indicación (Mayús+Intro añade un salto de línea)",
+      "pt": "Envia o prompt (Shift+Enter insere uma quebra de linha)",
+      "fr": "Envoie l'instruction (Maj+Entrée insère un saut de ligne)",
+      "it": "Invia il prompt (Maiusc+Invio inserisce un a capo)",
+      "hi": "प्रॉम्प्ट भेजता है (Shift+Enter से नई पंक्ति जुड़ती है)",
+      "zh-Hans": "发送提示词（Shift+Enter 换行）",
+      "id": "Mengirim prompt (Shift+Enter untuk baris baru)",
+      "ja": "プロンプトを送信します（Shift+Enter で改行）"
+    },
+    "help.shortcut.escape": {
+      "en": "Close the open dialog",
+      "es": "Cierra el cuadro de diálogo abierto",
+      "pt": "Fecha a janela aberta",
+      "fr": "Ferme la fenêtre ouverte",
+      "it": "Chiude la finestra aperta",
+      "hi": "खुला हुआ डायलॉग बंद करता है",
+      "zh-Hans": "关闭当前打开的对话框",
+      "id": "Menutup dialog yang sedang terbuka",
+      "ja": "開いているダイアログを閉じます"
     }
   }
 }

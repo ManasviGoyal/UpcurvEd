@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { HelpCircle, X } from "lucide-react";
 
 import { useLanguage } from "@/lib/i18n";
+import { isMacPlatform, shortcutLabel } from "@/lib/hotkeys";
 
 const GENERATION_TYPES = [
   "video",
@@ -34,6 +35,15 @@ const FAQ = ["context", "slow", "language", "cost", "offline"] as const;
 const TIPS = ["topic", "angle", "level", "iterate"] as const;
 
 const EXAMPLES = ["1", "2", "3"] as const;
+
+// Labels come from shortcutLabel() so macOS sees ⌘ and everyone else sees Ctrl.
+const SHORTCUTS: { keys: string; descriptionKey: string }[] = [
+  { keys: shortcutLabel("K"), descriptionKey: "help.shortcut.palette" },
+  { keys: shortcutLabel("Enter"), descriptionKey: "help.shortcut.send" },
+  { keys: shortcutLabel("/"), descriptionKey: "help.shortcut.help" },
+  { keys: "Enter", descriptionKey: "help.shortcut.enter" },
+  { keys: "Esc", descriptionKey: "help.shortcut.escape" },
+];
 
 export function HelpModal({ onClose }: { onClose: () => void }) {
   const { t } = useLanguage();
@@ -146,6 +156,39 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
                       </th>
                       <td className="px-3 py-2 align-top text-muted-foreground">
                         {t(`chat.level.${level}.desc`)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-base font-semibold">{t("help.shortcuts.heading")}</h3>
+            {/* Only worth explaining the modifier difference to people who will
+                actually see the other one. */}
+            {isMacPlatform() ? null : (
+              <p className="mb-3 text-sm text-muted-foreground">{t("help.shortcuts.intro")}</p>
+            )}
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40">
+                    <th scope="col" className="px-3 py-2 font-semibold">{t("help.table.shortcut")}</th>
+                    <th scope="col" className="px-3 py-2 font-semibold">{t("help.table.does")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SHORTCUTS.map(({ keys, descriptionKey }) => (
+                    <tr key={descriptionKey} className="border-b border-border last:border-b-0">
+                      <th scope="row" className="whitespace-nowrap px-3 py-2 align-top">
+                        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">
+                          {keys}
+                        </kbd>
+                      </th>
+                      <td className="px-3 py-2 align-top text-muted-foreground">
+                        {t(descriptionKey)}
                       </td>
                     </tr>
                   ))}

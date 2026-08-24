@@ -17,6 +17,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Sidebar } from "@/components/Sidebar";
 import HelpModal from "@/components/HelpModal";
+import CommandPalette from "@/components/CommandPalette";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { hasPlatformModifier, isTypingTarget } from "@/lib/hotkeys";
 import { loadCustomContext } from "@/lib/customContext";
 import { useLanguage, type Translate } from "@/lib/i18n";
 import { useJobProgress } from "@/hooks/useJobProgress";
@@ -658,6 +661,20 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Standing context saved in Settings, read fresh for each request so an edit
   // takes effect on the very next generation.
   const currentCustomContext = () => loadCustomContext(user?.email) || undefined;
+
+  // Job ids for the generations that are not a subprocess. Aborting the request
+  // only closes the connection; this tells the server to stop the work too.
+  const currentPodcastJobId = useRef<string | null>(null);
+  const currentQuizJobId = useRef<string | null>(null);
+  const currentWidgetJobId = useRef<string | null>(null);
+
+  const cancelServerJob = (jobId: string | null | undefined) => {
+    if (!jobId) return;
+    // Best effort: the user has already seen the run stop locally.
+    fetch(apiUrl(`/jobs/cancel?jobId=${encodeURIComponent(jobId)}`), {
+      method: "POST",
+    }).catch(() => {});
+  };
   const { toast } = useToast();
   const currentUser = users.find((u) => u.email === user.email);
   const [chats, setChats] = useState<Chat[]>(currentUser?.chats || []);
@@ -744,6 +761,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Real stages from the backend. `percent` stays null until it reports, and the
   // synthetic ramp covers that gap and any generation type without instrumentation.
   const jobProgress = useJobProgress(activeVideoJobId, busy);
+
+  useHotkeys([
+    { key: "k", handler: () => setPaletteOpen((open) => !open) },
+    { key: "/", handler: () => setHelpOpen((open) => !open) },
+  ]);
   const videoProgressTimer = useRef<number | null>(null);
   // Podcast generation visual progress (mirrors video progress UX)
   const [podcastProgress, setPodcastProgress] = useState(0);
@@ -1152,6 +1174,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const outboxFlushScheduled = useRef<boolean>(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // Chat switch confirmation dialog visibility
   const [showSwitchWarning, setShowSwitchWarning] = useState(false);
   const NEW_CHAT_SENTINEL = Symbol('new-chat');
@@ -2361,6 +2384,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     try { podcastAbortRef.current?.abort(); } catch {}
     try { quizAbortRef.current?.abort(); } catch {}
     try { widgetAbortRef.current?.abort(); } catch {}
+    // Closing the connection is not enough; tell the server to stop as well.
+    cancelServerJob(currentVideoJobId.current);
+    cancelServerJob(currentPodcastJobId.current);
+    cancelServerJob(currentQuizJobId.current);
+    cancelServerJob(currentWidgetJobId.current);
     // Reset loading flags; progress bars will settle via existing effects
     setBusy(false);
     setPodcastLoading(false);
@@ -2776,6 +2804,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     lastGenerateKindRef.current = 'podcast';
     if (podcastLoading && podcastAbortRef.current) {
       podcastAbortRef.current.abort();
+      cancelServerJob(currentPodcastJobId.current);
       return;
     }
     stopPlayback();
@@ -2853,6 +2882,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const llmConfig = buildLlmRequestConfig(apiKeys);
 
       const sessionId = ensureChatSessionId();
+      const podcastJobId = makeJobId();
+      currentPodcastJobId.current = podcastJobId;
       const body = {
         prompt,
         keys: llmConfig.keys,
@@ -2863,6 +2894,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         customContext: currentCustomContext(),
         images,
         sessionId,
+        jobId: podcastJobId,
       };
       const controller = new AbortController();
       podcastAbortRef.current = controller;
@@ -3036,6 +3068,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   async function generateQuiz() {
     if (quizLoading && quizAbortRef.current) {
       quizAbortRef.current.abort();
+      cancelServerJob(currentQuizJobId.current);
       return;
     }
 
@@ -3079,6 +3112,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const llmConfig = buildLlmRequestConfig(apiKeys);
       const sessionId = ensureChatSessionId();
       const jobId = makeJobId();
+      currentQuizJobId.current = jobId;
       const body = {
         prompt: pendingPrompt || "",
         images,
@@ -3155,6 +3189,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   ) {
     if (widgetLoading && widgetAbortRef.current) {
       widgetAbortRef.current.abort();
+      cancelServerJob(currentWidgetJobId.current);
       return;
     }
 
@@ -3207,6 +3242,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const llmConfig = buildLlmRequestConfig(apiKeys);
       const controller = new AbortController();
       widgetAbortRef.current = controller;
+      const widgetJobId = makeJobId();
+      currentWidgetJobId.current = widgetJobId;
       const body = {
         prompt,
         images,
@@ -3217,7 +3254,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         customContext: currentCustomContext(),
         chatId: String(finalChatId),
         sessionId: ensureChatSessionId(),
-        jobId: makeJobId(),
+        jobId: widgetJobId,
       };
       const endpoint = isDiagram ? "/diagram" : isStaticWorksheet ? "/static_worksheet" : "/widget";
       console.debug(`POST ${endpoint}`, {
@@ -3353,6 +3390,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Cmd/Ctrl+Enter sends from anywhere in the box, including mid-paragraph.
+    if (e.key === "Enter" && hasPlatformModifier(e)) {
+      e.preventDefault();
+      handleSubmit();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -5596,6 +5639,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
+      // Arrow keys belong to the caret while typing; only scrub otherwise.
+      if (isTypingTarget(e.target)) return;
       const vid = videoRef.current;
       if (e.key === "ArrowRight") {
         e.preventDefault();
@@ -6729,6 +6774,17 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         )}
       </div>
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        generationTypes={GENERATION_SELECTIONS}
+        levels={AUDIENCE_LEVELS}
+        onSelectGeneration={(value) => setGenerationType(value)}
+        onSelectLevel={(value) => setAudienceLevel(value)}
+        onOpenHelp={() => setHelpOpen(true)}
+        onNewChat={handleNewChat}
+        disableGenerationChanges={anyGenerationLoading || isEditMode}
+      />
       {settingsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm">
           <SettingsPage

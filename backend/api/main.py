@@ -58,7 +58,7 @@ from backend.agent.prompts import (
     build_story_edit_patch_user_prompt,
 )
 from backend.runner.job_runner import STORAGE, cancel_job, run_job_from_code, to_static_url
-from backend.runner import job_progress
+from backend.runner import job_cancel, job_progress
 from backend.utils import app_logging  # noqa: F401
 from backend.utils.diagnostics import diagnostic_error_response, diagnostic_payload
 from backend.utils.failure_log import append_generation_audit, summarize_error
@@ -193,7 +193,16 @@ def _now_ms() -> int:
 
 
 def _generation_job_id(value: object | None) -> str:
-    return safe_job_id(str(value or uuid4().hex[:12]))
+    """Resolve the job id for this request and bind it for cancellation checks.
+
+    Called at the top of every generation endpoint, which makes it the single
+    place that has to know about the cancellation context. A fresh run clears any
+    stale cancelled flag so a reused id is not born cancelled.
+    """
+    job_id = safe_job_id(str(value or uuid4().hex[:12]))
+    job_cancel.clear(job_id)
+    job_cancel.bind_current_job(job_id)
+    return job_id
 
 
 def _artifact_generation_diagnostics(
@@ -227,6 +236,9 @@ def _artifact_generation_diagnostics(
             quality_status = "needs_clarification"
         elif resolved_outcome == "failed":
             quality_status = "failed"
+        elif resolved_outcome == "canceled":
+            # Distinct from both success and failure: the user stopped it.
+            quality_status = "canceled"
         else:
             quality_status = "standard"
 
@@ -283,6 +295,14 @@ def _append_artifact_generation_audit(
     image_count: int = 0,
     default_image_prompt_used: bool = False,
 ) -> dict[str, object]:
+    # Endpoints funnel every exception into outcome="failed". A cancellation is
+    # not a failure, and recording it as one would skew the diagnostics people
+    # export. Reclassify here so all endpoints get it right without each one
+    # needing its own except branch.
+    if isinstance(error_summary, job_cancel.JobCanceled):
+        outcome = "canceled"
+        failure_stage = None
+
     diagnostics = _artifact_generation_diagnostics(
         generation_diagnostics=generation_diagnostics,
         outcome=outcome,
@@ -5187,6 +5207,10 @@ def _to_ms(timestamp) -> int | None:
 
 @app.post("/jobs/cancel")
 def jobs_cancel(jobId: str = Query(...)):
+    # Two mechanisms, because there are two kinds of work. `cancel_job` kills a
+    # running render subprocess (video); the flag stops every other pipeline at
+    # its next checkpoint.
+    job_cancel.request_cancel(jobId)
     try:
         return cancel_job(jobId)
     except Exception as exc:
