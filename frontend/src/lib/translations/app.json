@@ -3432,6 +3432,61 @@
       "zh-Hans": "关闭当前打开的对话框",
       "id": "Menutup dialog yang sedang terbuka",
       "ja": "開いているダイアログを閉じます"
+    },
+    "toast.imageLimit": {
+      "en": "Up to {count} images",
+      "es": "Hasta {count} imágenes",
+      "pt": "Até {count} imagens",
+      "fr": "Jusqu'à {count} images",
+      "it": "Fino a {count} immagini",
+      "hi": "अधिकतम {count} छवियाँ",
+      "zh-Hans": "最多 {count} 张图片",
+      "id": "Maksimal {count} gambar",
+      "ja": "画像は最大 {count} 枚まで"
+    },
+    "toast.imageLimit.body": {
+      "en": "A generation can use up to {count} images at a time.",
+      "es": "Cada generación puede usar hasta {count} imágenes a la vez.",
+      "pt": "Cada geração pode usar até {count} imagens por vez.",
+      "fr": "Une génération peut utiliser jusqu'à {count} images à la fois.",
+      "it": "Una generazione può usare fino a {count} immagini alla volta.",
+      "hi": "एक जनरेशन में एक बार में अधिकतम {count} छवियाँ इस्तेमाल हो सकती हैं।",
+      "zh-Hans": "每次生成最多可使用 {count} 张图片。",
+      "id": "Satu generasi dapat memakai maksimal {count} gambar sekaligus.",
+      "ja": "1 回の生成で使える画像は最大 {count} 枚です。"
+    },
+    "toast.pasteUnsupported": {
+      "en": "Image format not supported",
+      "es": "Formato de imagen no admitido",
+      "pt": "Formato de imagem não suportado",
+      "fr": "Format d'image non pris en charge",
+      "it": "Formato immagine non supportato",
+      "hi": "यह छवि प्रारूप समर्थित नहीं है",
+      "zh-Hans": "不支持该图片格式",
+      "id": "Format gambar tidak didukung",
+      "ja": "対応していない画像形式です"
+    },
+    "toast.pasteUnsupported.body": {
+      "en": "Paste or attach a PNG, JPEG, or WebP image. Some apps copy screenshots in other formats — saving the image first and attaching the file usually works.",
+      "es": "Pega o adjunta una imagen PNG, JPEG o WebP. Algunas aplicaciones copian las capturas en otros formatos: guardar la imagen y adjuntar el archivo suele funcionar.",
+      "pt": "Cole ou anexe uma imagem PNG, JPEG ou WebP. Alguns aplicativos copiam capturas em outros formatos: salvar a imagem e anexar o arquivo costuma funcionar.",
+      "fr": "Collez ou joignez une image PNG, JPEG ou WebP. Certaines applications copient les captures dans d'autres formats : enregistrer l'image puis joindre le fichier fonctionne en général.",
+      "it": "Incolla o allega un'immagine PNG, JPEG o WebP. Alcune app copiano gli screenshot in altri formati: salvare l'immagine e allegare il file di solito funziona.",
+      "hi": "PNG, JPEG या WebP छवि पेस्ट या संलग्न करें। कुछ ऐप्स स्क्रीनशॉट दूसरे प्रारूपों में कॉपी करते हैं — छवि को पहले सहेजकर फ़ाइल संलग्न करने से आमतौर पर काम बन जाता है।",
+      "zh-Hans": "请粘贴或添加 PNG、JPEG 或 WebP 图片。有些应用复制截图时使用其他格式——先把图片保存下来再添加文件通常可以解决。",
+      "id": "Tempel atau lampirkan gambar PNG, JPEG, atau WebP. Sebagian aplikasi menyalin tangkapan layar dalam format lain — menyimpan gambarnya dulu lalu melampirkan berkasnya biasanya berhasil.",
+      "ja": "PNG・JPEG・WebP の画像を貼り付けるか添付してください。アプリによってはスクリーンショットが別の形式でコピーされます。その場合は画像をいったん保存してからファイルを添付すると通常はうまくいきます。"
+    },
+    "chat.dropImages": {
+      "en": "Drop images to attach",
+      "es": "Suelta las imágenes para adjuntarlas",
+      "pt": "Solte as imagens para anexá-las",
+      "fr": "Déposez les images pour les joindre",
+      "it": "Rilascia le immagini per allegarle",
+      "hi": "छवियाँ संलग्न करने के लिए यहाँ छोड़ें",
+      "zh-Hans": "拖放图片即可添加",
+      "id": "Lepaskan gambar untuk melampirkannya",
+      "ja": "画像をドロップして添付"
     }
   }
 }

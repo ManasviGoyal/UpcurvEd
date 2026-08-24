@@ -1175,6 +1175,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [isDraggingImages, setIsDraggingImages] = useState(false);
   // Chat switch confirmation dialog visibility
   const [showSwitchWarning, setShowSwitchWarning] = useState(false);
   const NEW_CHAT_SENTINEL = Symbol('new-chat');
@@ -2717,8 +2718,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
     if (validation.limitReached) {
       toast({
-        title: `Up to ${MAX_GENERATION_IMAGES} images`,
-        description: `A generation can use up to ${MAX_GENERATION_IMAGES} images at a time.`,
+        title: t("toast.imageLimit", { count: MAX_GENERATION_IMAGES }),
+        description: t("toast.imageLimit.body", { count: MAX_GENERATION_IMAGES }),
         duration: 4000,
       });
     }
@@ -2735,30 +2736,106 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     e.target.value = ""; // allow re-uploading the same file
   };
 
-  const handleImagePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (isEditMode) return;
-    const clipboardItems = Array.from(e.clipboardData?.items || []) as DataTransferItem[];
-    const pastedImages = clipboardItems
+  /** Pull image files out of a clipboard or drag payload, however the platform exposed them. */
+  const imagesFromTransfer = (data: DataTransfer | null): File[] => {
+    if (!data) return [];
+
+    const named = (file: File, index: number): File => {
+      const extension = file.type === "image/jpeg"
+        ? "jpg"
+        : file.type === "image/webp"
+        ? "webp"
+        : "png";
+      return new File(
+        [file],
+        file.name || `pasted-image-${Date.now()}-${index + 1}.${extension}`,
+        { type: file.type, lastModified: Date.now() },
+      );
+    };
+
+    const fromItems = Array.from(data.items || [])
       .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
       .map((item, index) => {
         const file = item.getAsFile();
-        if (!file) return null;
-        const extension = file.type === "image/jpeg"
-          ? "jpg"
-          : file.type === "image/webp"
-          ? "webp"
-          : "png";
-        return new File(
-          [file],
-          file.name || `pasted-image-${Date.now()}-${index + 1}.${extension}`,
-          { type: file.type, lastModified: Date.now() },
-        );
+        return file ? named(file, index) : null;
       })
       .filter((file): file is File => Boolean(file));
+    if (fromItems.length) return fromItems;
 
-    if (!pastedImages.length) return;
-    e.preventDefault();
-    addGenerationImages(pastedImages);
+    // Some platforms and some source apps populate `files` but not `items`.
+    return Array.from(data.files || [])
+      .filter((file) => file.type.startsWith("image/"))
+      .map(named);
+  };
+
+  /** True when the clipboard clearly held an image we simply cannot use. */
+  const clipboardHasUnusableImage = (data: DataTransfer | null): boolean => {
+    if (!data) return false;
+    const types = Array.from(data.types || []);
+    return types.some((type) => type.startsWith("image/"));
+  };
+
+  // Nested elements fire dragleave as the pointer crosses them, so a plain
+  // boolean flickers. Counting enter/leave pairs is the usual remedy.
+  const dragDepth = useRef(0);
+
+  const dragHasFiles = (event: React.DragEvent) =>
+    Array.from(event.dataTransfer?.types || []).includes("Files");
+
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (isEditMode || !dragHasFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setIsDraggingImages(true);
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (isEditMode || !dragHasFiles(event)) return;
+    // Without this the browser navigates to the dropped file instead.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = () => {
+    if (isEditMode) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setIsDraggingImages(false);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (isEditMode) return;
+    dragDepth.current = 0;
+    setIsDraggingImages(false);
+    if (!dragHasFiles(event)) return;
+    event.preventDefault();
+    handlePastedImages(event.dataTransfer);
+  };
+
+  /** Paste is deliberately scoped to the prompt box, not the whole composer. */
+  const handleImagePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (isEditMode) return;
+    if (handlePastedImages(e.clipboardData)) {
+      e.preventDefault();
+    }
+  };
+
+  const handlePastedImages = (data: DataTransfer | null): boolean => {
+    const images = imagesFromTransfer(data);
+    if (images.length) {
+      addGenerationImages(images);
+      return true;
+    }
+    if (clipboardHasUnusableImage(data)) {
+      // Linux and some Windows apps put screenshots on the clipboard as BMP or
+      // TIFF. Saying so beats appearing broken.
+      toast({
+        title: t("toast.pasteUnsupported"),
+        description: t("toast.pasteUnsupported.body"),
+        duration: 6000,
+      });
+      return true;
+    }
+    return false;
   };
 
   const removeFile = (index: number) => {
@@ -6217,7 +6294,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 ))}
               </div>
             )}
-            <div className="relative">
+            <div
+              className="relative"
+              onDragEnter={handleDragEnter}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {isDraggingImages && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-primary bg-background/85 text-sm font-medium">
+                  {t("chat.dropImages")}
+                </div>
+              )}
               <input
                 ref={imageFileInputRef}
                 type="file"
