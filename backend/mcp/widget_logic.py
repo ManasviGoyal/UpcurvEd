@@ -253,7 +253,13 @@ def _detect_unsafe_initial_draw_order(html: str) -> str | None:
     return None
 
 
-def _validate_widget_html(html: str) -> tuple[bool, str]:
+def _validate_widget_html(html: str, *, require_visual: bool = True) -> tuple[bool, str]:
+    """Check a widget document.
+
+    `require_visual` is on for the primary and repair paths, where we are holding
+    out for a good widget, and off for fallbacks and edits, where something
+    working beats something visual.
+    """
     low = html.lower()
     if "<!doctype html" not in low and "<html" not in low:
         return False, "missing full html document structure"
@@ -271,6 +277,11 @@ def _validate_widget_html(html: str) -> tuple[bool, str]:
         return False, "contains forbidden network or storage access"
     if _visible_text_length(html) < 24:
         return False, "missing meaningful visible teaching content"
+    if require_visual and "<svg" not in low and "<canvas" not in low:
+        return False, (
+            "missing a visual representation: add an inline SVG diagram, chart, grid, or "
+            "number line (or a canvas) that changes when the learner interacts"
+        )
 
     init_order_reason = _detect_unsafe_initial_draw_order(html)
     if init_order_reason:
@@ -383,18 +394,43 @@ def _generate_simple_fallback_html(
     model: str | None,
     topic: str,
     reason: str,
+    images: list[object] | None = None,
+    provider_keys: dict[str, str] | None = None,
+    learner_prompt: str | None = None,
+    default_image_prompt_used: bool = False,
 ) -> str:
-    """Generate a fresh, smaller widget without reusing failed HTML."""
-    raw = call_llm(
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        system=WIDGET_SIMPLE_FALLBACK_SYSTEM,
-        user=build_widget_simple_fallback_user_prompt(topic=topic, reason=reason),
-        temperature=0.05,
-        max_tokens=WIDGET_FALLBACK_MAX_TOKENS,
-        max_output_tokens=WIDGET_FALLBACK_MAX_TOKENS,
-    )
+    """Generate a fresh, smaller widget without reusing failed HTML.
+
+    Any attached images are re-sent, so this stays a real second attempt at the
+    user's request rather than a prompt-only substitute that ignores them.
+    """
+    user_prompt = build_widget_simple_fallback_user_prompt(topic=topic, reason=reason)
+    if images:
+        raw = call_multimodal_llm(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            system=WIDGET_SIMPLE_FALLBACK_SYSTEM,
+            user=user_prompt,
+            learner_prompt=(learner_prompt if learner_prompt is not None else topic),
+            images=images,
+            provider_keys=provider_keys,
+            default_image_prompt_used=default_image_prompt_used,
+            temperature=0.05,
+            max_tokens=WIDGET_FALLBACK_MAX_TOKENS,
+            max_output_tokens=WIDGET_FALLBACK_MAX_TOKENS,
+        ).text
+    else:
+        raw = call_llm(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            system=WIDGET_SIMPLE_FALLBACK_SYSTEM,
+            user=user_prompt,
+            temperature=0.05,
+            max_tokens=WIDGET_FALLBACK_MAX_TOKENS,
+            max_output_tokens=WIDGET_FALLBACK_MAX_TOKENS,
+        )
     if not raw or not raw.strip():
         raise RuntimeError("LLM returned empty simple fallback widget.")
     return _extract_html(raw)
@@ -713,7 +749,7 @@ def edit_widget(
         raise RuntimeError("LLM returned empty edited widget.")
 
     html = _extract_html(raw)
-    ok, reason = _validate_widget_html(html)
+    ok, reason = _validate_widget_html(html, require_visual=False)
     if not ok:
         logger.warning("widget edit: validation failed (%s), attempting repair", reason)
         html = _repair_edited_widget_html(
@@ -725,7 +761,7 @@ def edit_widget(
             prior_html=html,
             reason=reason,
         )
-        ok2, reason2 = _validate_widget_html(html)
+        ok2, reason2 = _validate_widget_html(html, require_visual=False)
         if not ok2:
             raise RuntimeError(f"Edited widget failed validation after repair: {reason2}")
 
@@ -797,11 +833,9 @@ def generate_widget(
             generation_path = "repaired_primary"
 
     except Exception as exc:
-        # Never let an image-backed request silently degrade into a prompt-only fallback.
-        # Once images are involved, a failed primary/repair path should surface as a real
-        # generation failure rather than producing a widget that may ignore the source image.
-        if images:
-            raise
+        # Image requests use the same ladder as text ones. What the original guard
+        # protected against -- a fallback quietly ignoring the attached images --
+        # is handled by passing the images down to the simple fallback instead.
         first_error = exc
         logger.warning(
             "widget: primary path failed (%s); generating a fresh simple fallback",
@@ -814,13 +848,26 @@ def generate_widget(
                 model=model,
                 topic=prompt,
                 reason=str(exc),
+                images=images,
+                provider_keys=provider_keys,
+                learner_prompt=learner_prompt,
+                default_image_prompt_used=default_image_prompt_used,
             )
-            ok3, reason3 = _validate_widget_html(html)
+            ok3, reason3 = _validate_widget_html(html, require_visual=False)
             if not ok3:
                 raise RuntimeError(f"Simple fallback failed validation: {reason3}")
             generation_path = "simple_llm_fallback"
 
         except Exception as fallback_exc:
+            # The emergency template is hardcoded and never sees the images, so an
+            # image request stops here rather than returning something unrelated to
+            # what the user attached.
+            if images:
+                raise RuntimeError(
+                    "Widget generation failed for an image request after the primary, "
+                    "repair, and simple fallback attempts. Try again or switch models."
+                ) from fallback_exc
+
             logger.warning(
                 "widget: simple fallback failed (%s); using emergency topic fallback",
                 fallback_exc,
@@ -842,7 +889,7 @@ def generate_widget(
                 model=model,
                 reason=str(fallback_exc),
             )
-            ok4, reason4 = _validate_widget_html(html)
+            ok4, reason4 = _validate_widget_html(html, require_visual=False)
             if not ok4:
                 detail = str(first_error) if first_error else reason4
                 raise RuntimeError(

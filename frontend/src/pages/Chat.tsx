@@ -348,8 +348,8 @@ type GenerationSelection =
   | "story";
 
 const GENERATION_SELECTIONS: GenerationSelection[] = [
-  "static_worksheet",
   "widget",
+  "static_worksheet",
   "diagram",
   "video",
   "quiz",
@@ -745,7 +745,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   // Edit mode state - for editing existing artifacts
   const [isEditMode, setIsEditMode] = useState(false);
   const [isQuizMode, setIsQuizMode] = useState(false);
-  const [generationType, setGenerationType] = useState<GenerationSelection>("static_worksheet");
+  const [generationType, setGenerationType] = useState<GenerationSelection>("widget");
   const [quotedMessage, setQuotedMessage] = useState<{ messageId: string; content: string; media?: import('@/types').MediaAttachment; quizData?: QuizData; artifactKind?: ArtifactKind } | null>(null);
   // backend integration state
   const [videoUrl, setVideoUrl] = useState<string | null>(null);

@@ -641,8 +641,10 @@ WIDGET_SYSTEM = _with_artifact_safety("""\
     Create one self-contained interactive educational HTML worksheet/activity.
     Return ONLY a complete HTML document. No markdown or explanation.
 
-    Core rule: build the smallest working interaction that teaches one important idea.
-    Complexity is a failure unless the concept truly requires it.
+    Core rule: make the idea visible. Teach one important idea through something the
+    learner can see and change - a diagram, chart, grid, number line, or drawing - not
+    through paragraphs with buttons underneath.
+    Keep it focused: cut anything that does not teach. Never cut the visual to stay simple.
 
     Teaching design:
     - Identify one clear learning objective and one obvious learner action.
@@ -652,16 +654,23 @@ WIDGET_SYSTEM = _with_artifact_safety("""\
     - Silently choose the simplest fitting pattern: manipulate, test, classify, sequence,
       compare, graph, or puzzle. Use one pattern unless a second is essential.
     - The learner should do or test the concept, not merely watch an animation.
+    - Every activity must include one visual representation of the idea - an SVG diagram,
+      chart, grid, number line, or canvas drawing - and it must visibly change when the
+      learner acts. A page of text and buttons alone is not acceptable.
+    - Label the visual so it can be read on its own: title or axis labels, units where they
+      apply, and colour used to carry meaning rather than decoration.
     - Helper buttons such as Hint, Step, Play, or Solve may support the main interaction,
       but must not replace it.
 
-    Simplicity rules:
-    - Do not build a dashboard by default.
-    - Do not add decorative metrics, extra sliders, tabs, legends, or animations.
-    - Prefer ordinary DOM elements for choices, inputs, cards, sequencing, and feedback.
-    - Use a small SVG for diagrams or graphs. Use canvas only when drawing, motion, or
-      direct manipulation truly benefits from it.
-    - Use at most two primary controls unless a rule-based puzzle genuinely needs more.
+    Restraint rules (these trim clutter, never the visual):
+    - Do not build a dashboard: one focused activity, not a panel of readouts.
+    - Do not add decorative metrics, extra sliders, or tabs. Short CSS transitions on a
+      state change are fine; looping or ornamental animation is not.
+    - Use ordinary DOM elements for choices, inputs, cards, sequencing, and feedback.
+    - Use SVG for diagrams, graphs, and anything with labels. Use canvas when free drawing,
+      continuous motion, or direct manipulation genuinely benefits from it.
+    - Use up to four primary controls. Use fewer whenever fewer will do, and add another
+      only when it carries real teaching value.
     - Use requestAnimationFrame only for continuous animation; ordinary interactions should
       update only when the learner acts.
 
@@ -685,9 +694,8 @@ WIDGET_SYSTEM = _with_artifact_safety("""\
 def build_widget_user_prompt(topic: str) -> str:
     return dedent(f"""\
         Topic: {topic}
-        Audience: middle/high school learners.
 
-        Create a simple, teacher-ready interactive worksheet with one learning objective, one main learner
+        Create a simple, ready-to-use interactive worksheet with one learning objective, one main learner
         action, immediate topic-specific feedback, and one short thing to try or notice.
         Choose the least complex interaction that makes the idea clearer than text alone.
 
