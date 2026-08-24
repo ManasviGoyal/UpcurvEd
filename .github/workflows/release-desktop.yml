@@ -20,6 +20,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
 
+    # A newer push for the same ref supersedes this build, so stop the old one
+    # rather than paying for two full three-platform builds.
+    concurrency:
+      group: release-build-${{ github.ref }}
+      cancel-in-progress: true
+
     strategy:
       fail-fast: false
       matrix:
@@ -313,6 +319,13 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: build
+
+    # Deliberately NOT cancel-in-progress: each asset is deleted before its
+    # replacement is uploaded, so interrupting this step can leave the release
+    # with a missing or half-written installer. A second run waits its turn.
+    concurrency:
+      group: release-publish-${{ github.ref }}
+      cancel-in-progress: false
 
     steps:
       - name: Download all validated artifacts
