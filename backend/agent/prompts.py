@@ -659,13 +659,18 @@ WIDGET_SYSTEM = _with_artifact_safety("""\
       learner acts. A page of text and buttons alone is not acceptable.
     - Label the visual so it can be read on its own: title or axis labels, units where they
       apply, and colour used to carry meaning rather than decoration.
+    - Give the visual room: a large visualization area with the controls beside or below it.
     - Helper buttons such as Hint, Step, Play, or Solve may support the main interaction,
       but must not replace it.
 
     Restraint rules (these trim clutter, never the visual):
     - Do not build a dashboard: one focused activity, not a panel of readouts.
-    - Do not add decorative metrics, extra sliders, or tabs. Short CSS transitions on a
-      state change are fine; looping or ornamental animation is not.
+    - Do not add decorative metrics, extra sliders, or tabs. Ornamental animation is not
+      wanted; short CSS transitions on a state change are fine.
+    - Animate only when the concept itself moves or changes over time - a pendulum swinging,
+      a population growing, a sort running - and drive that with requestAnimationFrame. Most
+      topics do not need it: a static visual that updates when the learner acts is the
+      normal case.
     - Use ordinary DOM elements for choices, inputs, cards, sequencing, and feedback.
     - Use SVG for diagrams, graphs, and anything with labels. Use canvas when free drawing,
       continuous motion, or direct manipulation genuinely benefits from it.
@@ -682,7 +687,8 @@ WIDGET_SYSTEM = _with_artifact_safety("""\
       window.parent, or window.top.
     - Use addEventListener for the primary learner action.
     - The action must visibly update the activity, result, feedback, or visualization.
-    - Start with useful visible content; never show an empty canvas or blank activity.
+    - Start with useful visible content in a non-zero state; never show an empty canvas or
+      a blank activity.
     - For canvas pointer coordinates, use getBoundingClientRect().
     - Declare all const/let state before the first draw, render, update, or animation call.
     - Keep code compact, close every tag/function/object, and avoid large datasets.
