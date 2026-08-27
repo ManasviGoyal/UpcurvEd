@@ -7,7 +7,7 @@ import { getFirebaseAuth, getGoogleProvider } from "@/firebase";
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { z } from "zod";
 import { isDesktopLocalMode } from "@/lib/runtime";
-import { useLanguage } from "@/lib/i18n";
+import { useLanguage, type Translate } from "@/lib/i18n";
 
 interface LoginPageProps {
   setView: (view: string) => void;
@@ -16,13 +16,13 @@ interface LoginPageProps {
   setUsers: (users: User[]) => void;
 }
 
-const emailSchema = z.string().email("Please enter a valid email address");
+const buildEmailSchema = (t: Translate) => z.string().email(t("login.rule.email"));
 
-const passwordSchema = z.string()
-  .min(8, "Password must be at least 8 characters")
-  .regex(/[A-Z]/, "Password must contain at least 1 uppercase letter")
-  .regex(/[a-z]/, "Password must contain at least 1 lowercase letter")
-  .regex(/[^A-Za-z0-9]/, "Password must contain at least 1 special character");
+const buildPasswordSchema = (t: Translate) => z.string()
+  .min(8, t("login.rule.length"))
+  .regex(/[A-Z]/, t("login.rule.uppercase"))
+  .regex(/[a-z]/, t("login.rule.lowercase"))
+  .regex(/[^A-Za-z0-9]/, t("login.rule.special"));
 
 export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps) => {
   const { t } = useLanguage();
@@ -42,7 +42,7 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
     setError('');
 
     // Validate email
-    const emailValidation = emailSchema.safeParse(formData.email);
+    const emailValidation = buildEmailSchema(t).safeParse(formData.email);
     if (!emailValidation.success) {
       setError(emailValidation.error.errors[0].message);
       return;
@@ -79,13 +79,13 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
 
     // Validate password for signup (frontend policy; Firebase requires min 6 only)
     if (!isLogin) {
-      const passwordValidation = passwordSchema.safeParse(formData.password);
+      const passwordValidation = buildPasswordSchema(t).safeParse(formData.password);
       if (!passwordValidation.success) {
         setError(passwordValidation.error.errors[0].message);
         return;
       }
       if (formData.password !== formData.confirmPassword) {
-        setError('Passwords do not match');
+        setError(t("login.passwordsMismatch"));
         return;
       }
     }
@@ -137,20 +137,20 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
     } catch (err: any) {
       const code = err?.code as string | undefined;
       const msg =
-        code === 'auth/invalid-email' ? 'Invalid email address.' :
-        code === 'auth/invalid-credential' ? 'Incorrect email or password.' :
-        code === 'auth/user-not-found' ? 'No account found with this email.' :
-        code === 'auth/wrong-password' ? 'Incorrect password.' :
-        code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
-        code === 'auth/weak-password' ? 'Password is too weak.' :
-        err?.message || 'Authentication failed';
+        code === 'auth/invalid-email' ? t("login.invalidEmail") :
+        code === 'auth/invalid-credential' ? t("login.wrongCredentials") :
+        code === 'auth/user-not-found' ? t("login.noAccount") :
+        code === 'auth/wrong-password' ? t("login.wrongPassword") :
+        code === 'auth/email-already-in-use' ? t("login.emailInUse") :
+        code === 'auth/weak-password' ? t("login.weakPassword") :
+        err?.message || t("login.authFailed");
       setError(msg);
     }
   };
 
   const handleGoogleSignIn = async () => {
     if (desktopLocal) {
-      setError("Google sign-in is disabled in desktop local mode. Continue with email.");
+      setError(t("login.googleDisabledDesktop"));
       return;
     }
     try {
@@ -178,7 +178,7 @@ export const LoginPage = ({ setView, setUser, users, setUsers }: LoginPageProps)
   setView('chat');
     } catch (e: any) {
       const code = e?.code as string | undefined;
-      const msg = code?.startsWith('auth/') ? 'Google sign-in failed. Please try again.' : (e?.message || 'Google sign-in failed');
+      const msg = code?.startsWith('auth/') ? t("login.googleFailedRetry") : (e?.message || t("login.googleFailed"));
       setError(msg);
     }
   };

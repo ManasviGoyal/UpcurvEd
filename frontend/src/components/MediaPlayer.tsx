@@ -210,7 +210,7 @@ export const MediaPlayer = ({
           </div>
           <div className="flex-1 min-w-0">
             <p className="font-medium text-sm truncate">
-              {title || (isVideo ? 'Generated Video' : 'Generated Podcast')}
+              {title || (isVideo ? t("media.generatedVideo") : t("media.generatedPodcast"))}
             </p>
             <p className="text-xs text-muted-foreground">
               Click to play in media player

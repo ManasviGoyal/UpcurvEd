@@ -45,7 +45,25 @@ const runtimeStyle = `
   }
 </style>`;
 
-const runtimeScript = (worksheetId: string): string => {
+export type WorksheetLabels = {
+  progressRestored: string;
+  progressSaved: string;
+  saving: string;
+  progressUnavailable: string;
+  print: string;
+};
+
+// Injected into the generated worksheet as JS/HTML source, so the strings are
+// interpolated as literals rather than resolved through a hook at runtime.
+const DEFAULT_WORKSHEET_LABELS: WorksheetLabels = {
+  progressRestored: "Progress restored",
+  progressSaved: "Progress saved",
+  saving: "Saving…",
+  progressUnavailable: "This browser could not save progress locally",
+  print: "Print / Save as PDF",
+};
+
+const runtimeScript = (worksheetId: string, labels: WorksheetLabels): string => {
   const idLiteral = JSON.stringify(safeWorksheetId(worksheetId));
   return `<script id="upcurved-static-worksheet-runtime-script">
 (() => {
@@ -97,7 +115,7 @@ const runtimeScript = (worksheetId: string): string => {
       const raw = localStorage.getItem(standaloneKey);
       if (!raw) return false;
       applyResponses(JSON.parse(raw));
-      setStatus("Progress restored");
+      setStatus(${JSON.stringify(labels.progressRestored)});
       return true;
     } catch {
       return false;
@@ -116,7 +134,7 @@ const runtimeScript = (worksheetId: string): string => {
   const saveProgress = (announce = true) => {
     const responses = snapshot();
     if (trySaveLocal(responses)) {
-      if (announce) setStatus("Progress saved");
+      if (announce) setStatus(${JSON.stringify(labels.progressSaved)});
       return;
     }
     if (window.parent && window.parent !== window) {
@@ -126,10 +144,10 @@ const runtimeScript = (worksheetId: string): string => {
         responses,
         announce,
       }, "*");
-      if (announce) setStatus("Saving…");
+      if (announce) setStatus(${JSON.stringify(labels.saving)});
       return;
     }
-    if (announce) setStatus("This browser could not save progress locally");
+    if (announce) setStatus(${JSON.stringify(labels.progressUnavailable)});
   };
 
   const resizeTextareas = () => {
@@ -150,10 +168,10 @@ const runtimeScript = (worksheetId: string): string => {
     if (data.type === "upcurved-static-worksheet-restore") {
       applyResponses(data.responses);
       if (Array.isArray(data.responses) && data.responses.length) {
-        setStatus("Progress restored");
+        setStatus(${JSON.stringify(labels.progressRestored)});
       }
     } else if (data.type === "upcurved-static-worksheet-saved") {
-      if (data.announce !== false) setStatus("Progress saved");
+      if (data.announce !== false) setStatus(${JSON.stringify(labels.progressSaved)});
     }
   });
 
@@ -180,16 +198,17 @@ const runtimeScript = (worksheetId: string): string => {
 </script>`;
 };
 
-const runtimeToolbar = (worksheetId: string): string => `
+const runtimeToolbar = (worksheetId: string, labels: WorksheetLabels): string => `
 <div class="upcurved-worksheet-runtime-toolbar" data-upcurved-static-worksheet-id="${safeWorksheetId(worksheetId)}">
   <button id="upcurved-worksheet-save" type="button">Save Progress</button>
-  <button id="upcurved-worksheet-print" type="button">Print / Save as PDF</button>
+  <button id="upcurved-worksheet-print" type="button">${labels.print}</button>
   <span id="upcurved-worksheet-save-status" class="upcurved-worksheet-runtime-status" aria-live="polite"></span>
 </div>`;
 
 export const prepareStaticWorksheetHtml = (
   sourceHtml: string,
   worksheetId: string,
+  labels: WorksheetLabels = DEFAULT_WORKSHEET_LABELS,
 ): string => {
   let html = String(sourceHtml || "");
   // Defensive cleanup in case a previously prepared copy is re-opened.
@@ -199,8 +218,8 @@ export const prepareStaticWorksheetHtml = (
     .replace(/<div class=["']upcurved-worksheet-runtime-toolbar["'][\s\S]*?<\/div>/gi, "");
 
   const style = runtimeStyle;
-  const toolbar = runtimeToolbar(worksheetId);
-  const script = runtimeScript(worksheetId);
+  const toolbar = runtimeToolbar(worksheetId, labels);
+  const script = runtimeScript(worksheetId, labels);
 
   if (/<\/head>/i.test(html)) {
     html = html.replace(/<\/head>/i, `${style}\n</head>`);

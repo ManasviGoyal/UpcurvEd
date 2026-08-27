@@ -133,7 +133,16 @@ interface WidgetFrameProps {
 
 const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, height }) => {
   const { t } = useLanguage();
-  const preparedHtml = useMemo(() => prepareWidgetHtmlForIframe(widgetCode), [widgetCode]);
+  const preparedHtml = useMemo(
+    () =>
+      prepareWidgetHtmlForIframe(widgetCode, {}, {
+        error: t("widget.error"),
+        unknownError: t("widget.unknownError"),
+        promiseRejection: t("widget.promiseRejection"),
+        unknownRejection: t("widget.unknownRejection"),
+      }),
+    [widgetCode, t],
+  );
 
   const widgetUrl = useMemo(() => {
     const blob = new Blob([preparedHtml], { type: "text/html" });
@@ -174,7 +183,13 @@ const StaticWorksheetFrame: FC<StaticWorksheetFrameProps> = ({
   const { t } = useLanguage();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const preparedHtml = useMemo(
-    () => prepareStaticWorksheetHtml(worksheetHtml, worksheetId),
+    () => prepareStaticWorksheetHtml(worksheetHtml, worksheetId, {
+        progressRestored: t("worksheet.progressRestored"),
+        progressSaved: t("worksheet.progressSaved"),
+        saving: t("worksheet.saving"),
+        progressUnavailable: t("worksheet.progressUnavailable"),
+        print: t("worksheet.print"),
+      }),
     [worksheetHtml, worksheetId],
   );
   const worksheetUrl = useMemo(() => {
@@ -1656,7 +1671,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               const msgs = (chatDetail.messages || []).map(mapApiMessage);
               const updatedChat: Chat & { model?: string } = {
                 id: chatDetail.chat_id,
-                name: chatDetail.title || 'Untitled',
+                name: chatDetail.title || t("chat.untitled"),
                 messages: msgs,
                 sessionId: chatDetail.sessionId,
                 model: chatDetail.model || chatModel, // store model in chat object
@@ -2069,10 +2084,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return String(activeChatId);
     }
     try {
-      const raw = titleHint && titleHint.trim() ? titleHint : 'New Chat';
+      const raw = titleHint && titleHint.trim() ? titleHint : t("chat.newChat");
       // Trim excessive whitespace and punctuation similar to ChatGPT first message heuristic
       const normalized = raw.replace(/\s+/g,' ').replace(/[\?!.,;:]+$/,'').trim();
-      const title = normalized.slice(0, 40) || 'New Chat';
+      const title = normalized.slice(0, 40) || t("chat.newChat");
       const sid = (typeof crypto !== 'undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : `s_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
       const created = await apiCreateChat({ title, sessionId: sid, model });
       const newId: string = created.chat_id;
@@ -2128,9 +2143,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       ) {
         return String(activeChatId);
       }
-      const raw = titleHint && titleHint.trim() ? titleHint : "New Chat";
+      const raw = titleHint && titleHint.trim() ? titleHint : t("chat.newChat");
       const normalized = raw.replace(/\s+/g, " ").replace(/[\?!.,;:]+$/, "").trim();
-      const title = normalized.slice(0, 40) || "New Chat";
+      const title = normalized.slice(0, 40) || t("chat.newChat");
       const sid =
         typeof crypto !== "undefined" && (crypto as any).randomUUID
           ? (crypto as any).randomUUID()
@@ -2222,7 +2237,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             const localHasCustomName = !!localName && !/^New Chat$/i.test(localName);
             const mergedName = remoteHasCustomName
               ? remoteName
-              : (localHasCustomName ? localName : (remoteName || localName || 'New Chat'));
+              : (localHasCustomName ? localName : (remoteName || localName || t("chat.newChat")));
             return {
               ...c,
               name: mergedName,
@@ -2279,7 +2294,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         const updated: Chat[] = [...chats];
         for (const lc of localOnly) {
           const sid = (typeof crypto !== 'undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : `s_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-          const created = await apiCreateChat({ title: lc.name || 'New Chat', sessionId: sid, model });
+          const created = await apiCreateChat({ title: lc.name || t("chat.newChat"), sessionId: sid, model });
           const newId = created.chat_id as string;
           // append messages in order
           for (const message of lc.messages) {
@@ -2635,7 +2650,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       let modifiedChat = { ...currentChat, messages: history, updatedAt: updatedAtValue } as Chat;
       // Instant rename ONLY on first user message (ChatGPT behavior: first prompt sets permanent name)
       if (isUser && wasEmptyBefore) {
-        const title = content.replace(/\s+/g,' ').replace(/[\?!.,;:]+$/,'').trim().slice(0,40) || 'Chat';
+        const title = content.replace(/\s+/g,' ').replace(/[\?!.,;:]+$/,'').trim().slice(0,40) || t("chat.defaultTitle");
         modifiedChat = { ...modifiedChat, name: title } as Chat;
         // Immediately update backend if persisted
         if (typeof modifiedChat.id === 'string' && !String(modifiedChat.id).startsWith('local-') && !String(modifiedChat.id).startsWith('draft-')) {
@@ -2710,7 +2725,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
   const addGenerationImages = (incoming: File[]) => {
     if (!incoming.length) return;
-    const validation = validateGenerationImageFiles(uploadedFiles, incoming);
+    const validation = validateGenerationImageFiles(uploadedFiles, incoming, t);
     if (validation.rejected.length > 0) {
       const first = validation.rejected[0];
       toast({
@@ -2857,7 +2872,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const prepareAttachedImages = async (files: readonly File[]): Promise<GenerationImagePayload[]> => {
     if (!files.length) return [];
     try {
-      return await prepareGenerationImages(files);
+      return await prepareGenerationImages(files, t);
     } catch (error: any) {
       toast({
         title: t("toast.couldNotPrepareImage"),
@@ -4486,11 +4501,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               transcript = await extractTranscriptFromVtt(vttUrl);
               console.log('Successfully refreshed VTT URL and extracted transcript');
             } else {
-              throw new Error('Could not refresh expired caption URL');
+              throw new Error(t("chat.captions.refreshFailed"));
             }
           } catch (refreshErr) {
             console.error('Failed to refresh VTT URL:', refreshErr);
-            throw new Error('Caption URL has expired. Please refresh the page and try again.');
+            throw new Error(t("chat.captions.expired"));
           }
         } else {
           // For podcasts, try fetching script from GCS as fallback
@@ -4512,14 +4527,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     throw new Error(`Failed to fetch script: ${scriptRes.status}`);
                   }
                 } else {
-                  throw new Error('Could not get signed URL for script');
+                  throw new Error(t("chat.script.urlFailed"));
                 }
               } catch (scriptErr) {
                 console.error('Failed to fetch podcast script from GCS:', scriptErr);
-                throw new Error('No captions or script available for this podcast. Please regenerate it.');
+                throw new Error(t("chat.podcast.noCaptionsRegenerate"));
               }
             } else {
-              throw new Error('No captions or script available for this podcast.');
+              throw new Error(t("chat.podcast.noCaptions"));
             }
           } else {
             throw err;
@@ -4548,7 +4563,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           downloadFilename: response.download_filename,
           generationDiagnostics: normalizeGenerationDiagnostics(response.generation_diagnostics),
         };
-        const quizTitle = (quizPayload?.title as string) || 'Media Quiz';
+        const quizTitle = (quizPayload?.title as string) || t("chat.mediaQuiz");
         const quizMsgId = await processAndAddMessage('', false, undefined, String(quizChatId), {
           quizAnchor: true,
           quizTitle,
@@ -4576,7 +4591,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         toast({ title: t("toast.quizFailed"), description: err.message, duration: 4000 });
         await processAndAddMessage(friendly, false, undefined, persistedId);
       } else {
-        await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
+        await processAndAddMessage(`⏹️ ${t("chat.canceledQuiz")}`, false, undefined, persistedId);
       }
     } finally {
       setQuizLoading(false);
@@ -4676,7 +4691,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         toast({ title: t("toast.quizFailed"), description: err.message, duration: 4000 });
         await processAndAddMessage(friendly, false, undefined, persistedId);
       } else {
-        await processAndAddMessage('⏹️ Canceled quiz generation.', false, undefined, persistedId);
+        await processAndAddMessage(`⏹️ ${t("chat.canceledQuiz")}`, false, undefined, persistedId);
       }
     } finally {
       setQuizLoading(false);
@@ -4763,12 +4778,12 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           );
           const titlePrefix =
             kind === 'story'
-              ? 'Edited Story'
+              ? t("chat.edited.story")
               : kind === 'diagram'
-              ? 'Edited Diagram'
+              ? t("chat.edited.diagram")
               : kind === 'static_worksheet'
-              ? 'Edited Static Worksheet'
-              : 'Edited Interactive Worksheet';
+              ? t("chat.edited.staticWorksheet")
+              : t("chat.edited.interactiveWorksheet");
           const mediaAttachment: import('@/types').MediaAttachment = {
             type: 'widget',
             artifactKind: kind as any,
@@ -4779,7 +4794,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             downloadFilename,
             generationDiagnostics: normalizeGenerationDiagnostics(data.generation_diagnostics),
           };
-          await processAndAddMessage(`✅ ${kind === 'story' ? 'Story' : kind === 'diagram' ? 'Diagram' : kind === 'static_worksheet' ? 'Static worksheet' : 'Interactive worksheet'} edited successfully.`, false, mediaAttachment, chatIdForGeneration);
+          await processAndAddMessage(`✅ ${t("chat.msg.editedSuccessfully", { kind: kind === 'story' ? t("artifact.story") : kind === 'diagram' ? t("chat.artifact.diagram") : kind === 'static_worksheet' ? t("chat.artifact.staticWorksheet") : t("chat.artifact.interactiveWorksheet") })}`, false, mediaAttachment, chatIdForGeneration);
           setVideoUrl(null);
           setCurrentMediaMeta({ type: 'widget', artifactKind: kind, title: mediaAttachment.title, worksheetId: mediaAttachment.worksheetId });
           setWidgetHtml(revisedSource);
@@ -4827,7 +4842,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
             downloadFilename: data.download_filename,
             generationDiagnostics: normalizeGenerationDiagnostics(data.generation_diagnostics),
           };
-          const quizTitle = (quizPayload?.title as string) || 'Edited Quiz';
+          const quizTitle = (quizPayload?.title as string) || t("chat.edited.quiz");
           const quizMsgId = await processAndAddMessage('', false, undefined, String(chatIdForGeneration), {
             quizAnchor: true,
             quizTitle,
@@ -5159,10 +5174,10 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           } catch {}
         }
         if (!refreshed?.signed_video_url && !refreshed?.signed_subtitle_url) {
-          try { toast({ title: 'Couldn’t refresh media links', description: 'Try again or re‑generate the media.', duration: 6000 }); } catch {}
+          try { toast({ title: t("chat.media.refreshFailedTitle"), description: t("chat.media.refreshFailedHint"), duration: 6000 }); } catch {}
         }
       } catch (e: any) {
-        try { toast({ title: 'Couldn’t refresh media links', description: e?.message || 'Try again or re‑generate the media.', duration: 6000 }); } catch {}
+        try { toast({ title: t("chat.media.refreshFailedTitle"), description: e?.message || t("chat.media.refreshFailedHint"), duration: 6000 }); } catch {}
       }
     };
     vid.addEventListener('error', onError);
@@ -5484,7 +5499,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     if (currentMediaMeta?.artifactKind === "static_worksheet" && widgetHtml) {
       try {
         const worksheetId = currentMediaMeta.worksheetId || "static_worksheet";
-        const prepared = prepareStaticWorksheetHtml(widgetHtml, worksheetId);
+        const prepared = prepareStaticWorksheetHtml(widgetHtml, worksheetId, {
+        progressRestored: t("worksheet.progressRestored"),
+        progressSaved: t("worksheet.progressSaved"),
+        saving: t("worksheet.saving"),
+        progressUnavailable: t("worksheet.progressUnavailable"),
+        print: t("worksheet.print"),
+      });
         const blob = new Blob([prepared], { type: "text/html;charset=utf-8" });
         const objectUrl = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -5620,8 +5641,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       if (shouldBurnCaptions) {
         toast({
-          title: 'Preparing captioned video',
-          description: 'Burning captions into the MP4. This may take a moment.',
+          title: t("chat.download.preparingVideoTitle"),
+          description: t("chat.download.preparingVideoHint"),
           duration: 5000,
         });
 
@@ -5653,8 +5674,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         fileName = burnData.filename || captionedFilename;
       } else if (shouldPackageAudioCaptions) {
         toast({
-          title: 'Preparing podcast package',
-          description: 'Creating a ZIP with audio, captions, and transcript.',
+          title: t("chat.download.preparingPodcastTitle"),
+          description: t("chat.download.preparingPodcastHint"),
           duration: 5000,
         });
 
@@ -5688,7 +5709,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       const response = await fetch(downloadSource);
       if (!response.ok) {
-        throw new Error('Failed to fetch media');
+        throw new Error(t("chat.download.fetchFailed"));
       }
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -5701,18 +5722,18 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       toast({
-        title: 'Download started',
+        title: t("chat.download.started"),
         description: shouldBurnCaptions
-          ? 'Captioned video download initiated'
+          ? t("chat.download.videoStarted")
           : shouldPackageAudioCaptions
-            ? 'Podcast package download initiated'
-            : 'File download initiated',
+            ? t("chat.download.podcastStarted")
+            : t("chat.download.fileStarted"),
       });
     } catch (error) {
       console.error('Download failed:', error);
       toast({
-        title: 'Download failed',
-        description: error instanceof Error ? error.message : 'Could not download the file',
+        title: t("chat.download.failed"),
+        description: error instanceof Error ? error.message : t("chat.download.failedHint"),
         variant: 'destructive',
       });
     }
@@ -6208,7 +6229,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                                   </div>
                                 </div>
                                 <p className="text-sm mb-1">Score: {quiz.score}/{quiz.data.questions.length}</p>
-                                <p className="mb-4 font-medium">{quiz.score === quiz.data.questions.length ? 'Perfect score! Outstanding! 🎉' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.8) ? 'Great job, almost perfect! ✨' : quiz.score >= Math.ceil(quiz.data.questions.length * 0.6) ? 'Nice work. keep practicing! 👍' : 'You can boost this score, give it another shot! 💪'}</p>
+                                <p className="mb-4 font-medium">{quiz.score === quiz.data.questions.length ? t("chat.quiz.scorePerfect") : quiz.score >= Math.ceil(quiz.data.questions.length * 0.8) ? t("chat.quiz.scoreGreat") : quiz.score >= Math.ceil(quiz.data.questions.length * 0.6) ? t("chat.quiz.scoreGood") : t("chat.quiz.scoreLow")}</p>
                                 <Button onClick={() => retakeQuiz(quizId)} variant="secondary" className="w-full font-semibold">{t("chat.retakeQuiz")}</Button>
                               </div>
                             )}

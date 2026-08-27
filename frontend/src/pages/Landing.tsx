@@ -365,7 +365,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                 }`}
                 title={t("landing.download.mac.title")}
               >
-                <img src={appleLogo} alt="Apple logo" className="h-5 w-5" loading="lazy" />
+                <img src={appleLogo} alt={t("landing.appleLogo")} className="h-5 w-5" loading="lazy" />
                 {t("landing.download.mac")}
               </a>
 
@@ -379,7 +379,7 @@ export default function Landing({ setView: _setView }: { setView?: (view: string
                 }`}
                 title={t("landing.download.linux")}
               >
-                <img src={linuxLogo} alt="Linux logo" className="h-5 w-5" loading="lazy" />
+                <img src={linuxLogo} alt={t("landing.linuxLogo")} className="h-5 w-5" loading="lazy" />
                 {t("landing.download.linux")}
               </a>
             </div>

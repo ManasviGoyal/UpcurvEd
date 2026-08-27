@@ -14,7 +14,7 @@ import { getFirebaseAuth } from "./firebase";
 import { onAuthStateChanged, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { isDesktopLocalMode } from "./lib/runtime";
-import { LanguageProvider } from "./lib/i18n";
+import { LanguageProvider, useLanguage } from "./lib/i18n";
 import { AppearanceProvider } from "./lib/appearance";
 import { EMPTY_KEYS, loadApiKeysForUser } from "./lib/secureKeys";
 import { Analytics } from "@vercel/analytics/react";
@@ -23,6 +23,7 @@ const queryClient = new QueryClient();
 const LOCAL_USER_KEY = "app.localUser";
 
 const AppContent = () => {
+  const { t } = useLanguage();
   const location = useLocation();
   const navigate = useNavigate();
   const desktopLocal = isDesktopLocalMode();
@@ -36,7 +37,7 @@ const AppContent = () => {
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [users, setUsers] = useState<User[]>([{
-    name: "Demo User",
+    name: t("app.demoUser"),
     email: "demo@user.com",
     password: "password",
     chats: []
@@ -145,7 +146,7 @@ const AppContent = () => {
   const resetLocalData = () => {
     if (!desktopLocal) return;
     const ok = window.confirm(
-      "Reset all local desktop data? This removes local chats, media history, settings, and saved keys on this device."
+      t("app.resetConfirm")
     );
     if (!ok) return;
     try {
@@ -204,7 +205,7 @@ const AppContent = () => {
         } else {
           const guestEmail = "local@upcurved.desktop";
           const guestUser: User = {
-            name: "Local User",
+            name: t("app.localUser"),
             email: guestEmail,
             chats: [],
           };

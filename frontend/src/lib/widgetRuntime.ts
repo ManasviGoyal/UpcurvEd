@@ -43,7 +43,7 @@ const BASE_STYLE = `
   }
 </style>`;
 
-const ERROR_BRIDGE = `
+const errorBridge = (labels: WidgetErrorLabels) => `
 <script id="upcurved-widget-error-bridge">
 (() => {
   const ensureErrorBox = () => {
@@ -59,18 +59,18 @@ const ERROR_BRIDGE = `
   const show = (label, message) => {
     const el = ensureErrorBox();
     el.style.display = 'block';
-    el.textContent = label + ': ' + String(message || 'Unknown widget error');
+    el.textContent = label + ': ' + String(message || ${JSON.stringify(labels.unknownError)});
   };
 
   window.addEventListener('error', (event) => {
-    show('Widget error', event?.error?.stack || event?.message || 'Unknown widget error');
+    show(${JSON.stringify(labels.error)}, event?.error?.stack || event?.message || ${JSON.stringify(labels.unknownError)});
   });
 
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event?.reason;
     show(
-      'Widget promise rejection',
-      reason?.stack || reason?.message || String(reason || 'Unknown rejection')
+      ${JSON.stringify(labels.promiseRejection)},
+      reason?.stack || reason?.message || String(reason || ${JSON.stringify(labels.unknownRejection)})
     );
   });
 })();
@@ -121,12 +121,29 @@ const injectIntoHead = (html: string, injection: string) => {
   return `<!DOCTYPE html><html><head>${injection}</head><body>${html}</body></html>`;
 };
 
+export type WidgetErrorLabels = {
+  error: string;
+  unknownError: string;
+  promiseRejection: string;
+  unknownRejection: string;
+};
+
+// English defaults keep existing callers working; the app passes translated labels
+// so the error banner inside a generated widget matches the rest of the UI.
+const DEFAULT_WIDGET_ERROR_LABELS: WidgetErrorLabels = {
+  error: "Widget error",
+  unknownError: "Unknown widget error",
+  promiseRejection: "Widget promise rejection",
+  unknownRejection: "Unknown rejection",
+};
+
 export const prepareWidgetHtmlForIframe = (
   rawHtml: string,
-  _options: PrepareWidgetHtmlOptions = {}
+  _options: PrepareWidgetHtmlOptions = {},
+  labels: WidgetErrorLabels = DEFAULT_WIDGET_ERROR_LABELS
 ): string => {
   const trimmed = String(rawHtml || "").trim();
   let html = hasFullHtmlDocument(trimmed) ? trimmed : wrapFragment(trimmed);
-  html = injectIntoHead(html, `${BASE_STYLE}\n${ERROR_BRIDGE}\n${CANVAS_FIX}`);
+  html = injectIntoHead(html, `${BASE_STYLE}\n${errorBridge(labels)}\n${CANVAS_FIX}`);
   return html;
 };

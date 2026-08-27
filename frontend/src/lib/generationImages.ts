@@ -1,3 +1,5 @@
+import type { Translate } from "@/lib/i18n";
+
 export const MAX_GENERATION_IMAGES = 3;
 export const MAX_GENERATION_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_GENERATION_IMAGE_DIMENSION = 2000;
@@ -33,6 +35,7 @@ export function isSupportedGenerationImage(file: File): boolean {
 export function validateGenerationImageFiles(
   existing: readonly File[],
   incoming: readonly File[],
+  t: Translate,
 ): GenerationImageValidation {
   const rejected: { file: File; reason: string }[] = [];
   const accepted: File[] = [];
@@ -43,18 +46,18 @@ export function validateGenerationImageFiles(
     if (!isSupportedGenerationImage(file)) {
       rejected.push({
         file,
-        reason: "Only PNG, JPEG, and WebP images are supported.",
+        reason: t("image.unsupportedType"),
       });
       continue;
     }
     if (file.size <= 0) {
-      rejected.push({ file, reason: "The image is empty." });
+      rejected.push({ file, reason: t("image.empty") });
       continue;
     }
     if (file.size > MAX_GENERATION_IMAGE_BYTES) {
       rejected.push({
         file,
-        reason: "Each image must be 5 MB or smaller before compression.",
+        reason: t("image.tooLarge"),
       });
       continue;
     }
@@ -73,13 +76,13 @@ export function validateGenerationImageFiles(
   return { accepted, rejected, limitReached };
 }
 
-function fileToDataUrl(file: Blob): Promise<string> {
+function fileToDataUrl(file: Blob, t: Translate): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error || new Error("Could not read image."));
+    reader.onerror = () => reject(reader.error || t ? new Error(t("image.readFailed")) : new Error("Could not read image."));
     reader.onload = () => {
       if (typeof reader.result !== "string") {
-        reject(new Error("Could not encode image."));
+        reject(new Error(t("image.encodeFailed")));
         return;
       }
       resolve(reader.result);
@@ -88,7 +91,7 @@ function fileToDataUrl(file: Blob): Promise<string> {
   });
 }
 
-async function decodeImage(file: File): Promise<{
+async function decodeImage(file: File, t: Translate): Promise<{
   width: number;
   height: number;
   draw: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
@@ -109,7 +112,7 @@ async function decodeImage(file: File): Promise<{
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("Could not decode image."));
+      img.onerror = () => reject(new Error(t("image.decodeFailed")));
       img.src = objectUrl;
     });
     return {
@@ -125,6 +128,7 @@ async function decodeImage(file: File): Promise<{
 }
 
 function canvasToBlob(
+  t: Translate,
   canvas: HTMLCanvasElement,
   mimeType: GenerationImageMimeType,
   quality?: number,
@@ -133,7 +137,7 @@ function canvasToBlob(
     canvas.toBlob(
       (blob) => {
         if (!blob) {
-          reject(new Error("Could not compress image."));
+          reject(new Error(t("image.compressFailed")));
           return;
         }
         resolve(blob);
@@ -144,13 +148,13 @@ function canvasToBlob(
   });
 }
 
-async function prepareOneImage(file: File): Promise<GenerationImagePayload> {
+async function prepareOneImage(file: File, t: Translate): Promise<GenerationImagePayload> {
   const originalMime = String(file.type || "").toLowerCase() as GenerationImageMimeType;
   if (!SUPPORTED_TYPE_SET.has(originalMime)) {
     throw new Error(`Unsupported image type: ${file.type || "unknown"}`);
   }
 
-  const decoded = await decodeImage(file);
+  const decoded = await decodeImage(file, t);
   try {
     const maxSide = Math.max(decoded.width, decoded.height);
     const needsResize = maxSide > MAX_GENERATION_IMAGE_DIMENSION;
@@ -159,7 +163,7 @@ async function prepareOneImage(file: File): Promise<GenerationImagePayload> {
 
     if (canKeepOriginal) {
       return {
-        dataUrl: await fileToDataUrl(file),
+        dataUrl: await fileToDataUrl(file, t),
         mimeType: originalMime,
         name: file.name || undefined,
       };
@@ -174,7 +178,7 @@ async function prepareOneImage(file: File): Promise<GenerationImagePayload> {
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Could not prepare image canvas.");
+    if (!ctx) throw new Error(t("image.canvasFailed"));
     decoded.draw(ctx, width, height);
 
     // Preserve PNG when practical for crisp screenshots. Larger non-PNG images use
@@ -184,6 +188,7 @@ async function prepareOneImage(file: File): Promise<GenerationImagePayload> {
         ? "image/png"
         : "image/webp";
     const blob = await canvasToBlob(
+      t,
       canvas,
       outputMime,
       outputMime === "image/webp" ? 0.94 : undefined,
@@ -192,19 +197,19 @@ async function prepareOneImage(file: File): Promise<GenerationImagePayload> {
     if (blob.size > MAX_PREPARED_IMAGE_BYTES) {
       // Keep prepared images at or below 4 MB so three attachments also stay within
       // the backend's 12 MB combined decoded-size limit.
-      const fallback = await canvasToBlob(canvas, "image/webp", 0.9);
+      const fallback = await canvasToBlob(t, canvas, "image/webp", 0.9);
       if (fallback.size > MAX_PREPARED_IMAGE_BYTES) {
-        throw new Error("Prepared image is still too large. Try a smaller screenshot or crop.");
+        throw new Error(t("image.stillTooLarge"));
       }
       return {
-        dataUrl: await fileToDataUrl(fallback),
+        dataUrl: await fileToDataUrl(fallback, t),
         mimeType: "image/webp",
         name: file.name || undefined,
       };
     }
 
     return {
-      dataUrl: await fileToDataUrl(blob),
+      dataUrl: await fileToDataUrl(blob, t),
       mimeType: outputMime,
       name: file.name || undefined,
     };
@@ -215,9 +220,10 @@ async function prepareOneImage(file: File): Promise<GenerationImagePayload> {
 
 export async function prepareGenerationImages(
   files: readonly File[],
+  t: Translate,
 ): Promise<GenerationImagePayload[]> {
   if (files.length > MAX_GENERATION_IMAGES) {
     throw new Error(`Up to ${MAX_GENERATION_IMAGES} images can be attached.`);
   }
-  return Promise.all(files.map((file) => prepareOneImage(file)));
+  return Promise.all(files.map((file) => prepareOneImage(file, t)));
 }
