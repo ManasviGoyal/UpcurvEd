@@ -15,10 +15,10 @@ export interface ApiKeys extends Record<ProviderId, string> {
 
 export interface ProviderUiConfig {
   label: string;
-  keyLabel: string;
-  keyPlaceholder: string;
+  /** Bare product name, interpolated into translated strings ("{provider} API Key").
+   *  Not translated: these are proper nouns that stay identical in every language. */
+  shortName: string;
   models: readonly string[];
-  help: string;
 }
 
 export const PROVIDER_PRIORITY: readonly ProviderId[] = [
@@ -31,8 +31,7 @@ export const PROVIDER_PRIORITY: readonly ProviderId[] = [
 export const PROVIDER_CONFIG: Record<ProviderId, ProviderUiConfig> = {
   gemini: {
     label: "Gemini (Google)",
-    keyLabel: "Gemini API Key",
-    keyPlaceholder: "Enter your Gemini API key",
+    shortName: "Gemini",
     models: [
       "gemini-3-flash-preview",
       "gemini-3.7-flash",
@@ -41,12 +40,10 @@ export const PROVIDER_CONFIG: Record<ProviderId, ProviderUiConfig> = {
       "gemini-2.5-flash",
       "gemini-2.5-pro",
     ],
-    help: "Choose a Gemini model, or type another exact Google model ID.",
   },
   claude: {
     label: "Claude (Anthropic)",
-    keyLabel: "Claude API Key",
-    keyPlaceholder: "Enter your Claude API key",
+    shortName: "Claude",
     models: [
       "claude-haiku-4-5",
       "claude-sonnet-5",
@@ -55,24 +52,20 @@ export const PROVIDER_CONFIG: Record<ProviderId, ProviderUiConfig> = {
       "claude-opus-4-8",
       "claude-opus-4-7",
     ],
-    help: "Choose a Claude model, or type another exact Anthropic model ID.",
   },
   openai: {
     label: "OpenAI",
-    keyLabel: "OpenAI API Key",
-    keyPlaceholder: "Enter your OpenAI API key",
+    shortName: "OpenAI",
     models: [
       "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ],
-    help: "Choose an OpenAI model, or type another exact OpenAI model ID.",
   },
   openrouter: {
     label: "OpenRouter",
-    keyLabel: "OpenRouter API Key",
-    keyPlaceholder: "Enter your OpenRouter API key",
+    shortName: "OpenRouter",
     models: [
       "nvidia/nemotron-3-ultra-550b-a55b:free",
       "openai/gpt-oss-20b:free",
@@ -81,13 +74,9 @@ export const PROVIDER_CONFIG: Record<ProviderId, ProviderUiConfig> = {
       "nvidia/nemotron-3-super-120b-a12b:free",
       "google/gemma-4-31b-it:free",
     ],
-    help:
-      "Choose a specific OpenRouter model, or type any exact OpenRouter model ID.",
   },
 };
 
-export const AUTO_PROVIDER_LABEL = "Auto (by available key)";
-export const NO_PROVIDER_MODEL_HELP = "Select a provider first.";
 
 export const EMPTY_API_KEYS: ApiKeys = {
   gemini: "",

@@ -5,8 +5,6 @@ import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import type { ApiKeys, Provider, User } from "@/types";
 import {
-  AUTO_PROVIDER_LABEL,
-  NO_PROVIDER_MODEL_HELP,
   PROVIDER_CONFIG,
   PROVIDER_IDS,
   normalizeApiKeys,
@@ -115,7 +113,7 @@ export const SettingsPage = ({
         setSecureStorageEnabled(false);
         setUseSecureStorage(false);
         setStatusMessage(
-          "Secure storage is unavailable on this device, so keys were saved locally instead."
+          t("settingsPage.secureStorage.unavailable")
         );
         setView("chat");
         return;
@@ -142,7 +140,7 @@ export const SettingsPage = ({
         method: "GET",
       });
       if (!response.ok) {
-        let detail = "Could not export generation diagnostics.";
+        let detail = t("settingsPage.export.failed");
         try {
           const payload = await response.json();
           detail = String(payload?.detail || detail);
@@ -164,10 +162,10 @@ export const SettingsPage = ({
       anchor.click();
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      setExportStatus("Generation diagnostics exported.");
+      setExportStatus(t("settingsPage.export.done"));
     } catch (error: any) {
       setExportStatus(
-        error?.message || "Could not export generation diagnostics."
+        error?.message || t("settingsPage.export.failed")
       );
     } finally {
       setExportBusy(false);
@@ -182,7 +180,7 @@ export const SettingsPage = ({
     try {
       const uninstall = window.desktop?.appManagement?.uninstallAndDeleteLocalData;
       if (!uninstall) {
-        setUninstallStatus("Uninstall is unavailable in this build.");
+        setUninstallStatus(t("settingsPage.uninstall.unavailable"));
         return;
       }
 
@@ -190,7 +188,7 @@ export const SettingsPage = ({
       if (result?.canceled) return;
       if (!result?.ok) {
         setUninstallStatus(
-          result?.message || "Could not start the UpcurvEd uninstall."
+          result?.message || t("settingsPage.uninstall.failed")
         );
         return;
       }
@@ -207,12 +205,12 @@ export const SettingsPage = ({
 
       setUninstallStatus(
         result.mode === "dev_cleanup"
-          ? "Development data cleared. UpcurvEd will close."
-          : "Uninstall started. UpcurvEd will close."
+          ? t("settingsPage.uninstall.devCleared")
+          : t("settingsPage.uninstall.started")
       );
     } catch (error: any) {
       setUninstallStatus(
-        error?.message || "Could not start the UpcurvEd uninstall."
+        error?.message || t("settingsPage.uninstall.failed")
       );
     } finally {
       setUninstallBusy(false);
@@ -283,7 +281,9 @@ export const SettingsPage = ({
             const config = PROVIDER_CONFIG[provider];
             return (
               <div key={provider}>
-                <label className="text-sm font-medium">{config.keyLabel}</label>
+                <label className="text-sm font-medium">
+                  {t("settingsPage.apiKeyLabel", { provider: config.shortName })}
+                </label>
                 <Input
                   type="password"
                   value={localKeys[provider]}
@@ -293,7 +293,7 @@ export const SettingsPage = ({
                       [provider]: event.target.value,
                     }))
                   }
-                  placeholder={config.keyPlaceholder}
+                  placeholder={t("settingsPage.apiKeyPlaceholder", { provider: config.shortName })}
                 />
               </div>
             );
@@ -306,7 +306,7 @@ export const SettingsPage = ({
               value={selectedProvider}
               onChange={(event) => handleProviderChange(event.target.value as Provider)}
             >
-              <option value="">{AUTO_PROVIDER_LABEL}</option>
+              <option value="">{t("settingsPage.autoProvider")}</option>
               {PROVIDER_IDS.map((provider) => (
                 <option key={provider} value={provider}>
                   {PROVIDER_CONFIG[provider].label}
@@ -340,7 +340,7 @@ export const SettingsPage = ({
                   option the browser would show the first model while state stays "",
                   so the UI would claim a model that never gets saved. */}
               {selectedProvider && !isCustomModel && !localKeys.model && (
-                <option value="">Choose a model…</option>
+                <option value="">{t("settingsPage.chooseModel")}</option>
               )}
               {selectedProviderModels.map((model) => (
                 <option key={model} value={model}>
@@ -348,7 +348,7 @@ export const SettingsPage = ({
                 </option>
               ))}
               {selectedProvider && (
-                <option value={CUSTOM_MODEL_OPTION}>Other — enter a model ID…</option>
+                <option value={CUSTOM_MODEL_OPTION}>{t("settingsPage.customModel")}</option>
               )}
             </select>
 
@@ -367,7 +367,9 @@ export const SettingsPage = ({
             )}
 
             <p className="text-xs text-muted-foreground">
-              {selectedProviderConfig?.help || NO_PROVIDER_MODEL_HELP}
+              {selectedProviderConfig
+                ? t("settingsPage.modelHelp", { provider: selectedProviderConfig.shortName })
+                : t("settingsPage.selectProviderFirst")}
             </p>
           </div>
 

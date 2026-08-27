@@ -132,6 +132,7 @@ interface WidgetFrameProps {
 }
 
 const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, height }) => {
+  const { t } = useLanguage();
   const preparedHtml = useMemo(() => prepareWidgetHtmlForIframe(widgetCode), [widgetCode]);
 
   const widgetUrl = useMemo(() => {
@@ -149,7 +150,7 @@ const WidgetFrame: FC<WidgetFrameProps> = ({ widgetCode, title, className, heigh
       sandbox="allow-scripts"
       className={className || "w-full border-0"}
       style={height ? { height } : undefined}
-      title={title || "Interactive Worksheet"}
+      title={title || t("chat.artifact.interactiveWorksheet")}
       loading="eager"
     />
   );
@@ -170,6 +171,7 @@ const StaticWorksheetFrame: FC<StaticWorksheetFrameProps> = ({
   title,
   className,
 }) => {
+  const { t } = useLanguage();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const preparedHtml = useMemo(
     () => prepareStaticWorksheetHtml(worksheetHtml, worksheetId),
@@ -230,7 +232,7 @@ const StaticWorksheetFrame: FC<StaticWorksheetFrameProps> = ({
       src={worksheetUrl}
       sandbox="allow-scripts allow-modals"
       className={className || "w-full border-0"}
-      title={title || "Static Worksheet"}
+      title={title || t("chat.artifact.staticWorksheet")}
       loading="eager"
     />
   );
@@ -244,6 +246,7 @@ interface DiagramFrameProps {
 }
 
 const DiagramFrame: FC<DiagramFrameProps> = ({ svgCode, title, className }) => {
+  const { t } = useLanguage();
   const diagramUrl = useMemo(() => {
     const blob = new Blob([svgCode], { type: "image/svg+xml" });
     return URL.createObjectURL(blob);
@@ -257,7 +260,7 @@ const DiagramFrame: FC<DiagramFrameProps> = ({ svgCode, title, className }) => {
     <div className={className || "flex h-full w-full items-center justify-center overflow-auto bg-white p-3"}>
       <img
         src={diagramUrl}
-        alt={title || "Educational diagram"}
+        alt={title || t("chat.artifact.educationalDiagram")}
         className="max-h-full max-w-full object-contain"
         draggable={false}
       />
@@ -265,12 +268,12 @@ const DiagramFrame: FC<DiagramFrameProps> = ({ svgCode, title, className }) => {
   );
 };
 
-const svgToPngBlob = async (svgCode: string): Promise<Blob> => {
+const svgToPngBlob = async (svgCode: string, t: Translate): Promise<Blob> => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svgCode, "image/svg+xml");
   const svg = doc.documentElement;
   if (!svg || svg.nodeName.toLowerCase() !== "svg" || doc.querySelector("parsererror")) {
-    throw new Error("The diagram SVG could not be read.");
+    throw new Error(t("chat.diagram.svgUnreadable"));
   }
 
   const viewBox = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
@@ -290,7 +293,7 @@ const svgToPngBlob = async (svgCode: string): Promise<Blob> => {
     const image = new Image();
     await new Promise<void>((resolve, reject) => {
       image.onload = () => resolve();
-      image.onerror = () => reject(new Error("The diagram could not be rendered as PNG."));
+      image.onerror = () => reject(new Error(t("chat.diagram.renderPngFailed")));
       image.src = sourceUrl;
     });
     const canvas = document.createElement("canvas");
@@ -925,7 +928,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       return;
     }
     if ((kind === 'story' || kind === 'widget' || kind === 'static_worksheet' || kind === 'diagram') && !msg.media?.widgetCode) {
-      toast({ title: t("toast.cannotEditArtifact"), description: kind === 'diagram' ? "The original SVG is missing. Regenerate it to enable editing." : "The original HTML is missing. Regenerate it to enable editing.", duration: 4000 });
+      toast({ title: t("toast.cannotEditArtifact"), description: kind === 'diagram' ? t("chat.edit.missingSvg") : t("chat.edit.missingHtml"), duration: 4000 });
       return;
     }
     if (kind === 'quiz' && !quizData && !msg?.quizData) {
@@ -2858,7 +2861,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     } catch (error: any) {
       toast({
         title: t("toast.couldNotPrepareImage"),
-        description: error?.message || "Please try attaching the image again.",
+        description: error?.message || t("chat.image.retryAttach"),
         duration: 5000,
       });
       throw error;
@@ -2902,7 +2905,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
-    const chatSeed = prompt || sourceFiles[0]?.name || "Image learning request";
+    const chatSeed = prompt || sourceFiles[0]?.name || t("chat.imageLearningRequest");
     const persistedId = await ensurePersistedActiveChat(chatSeed);
     const finalChatId = persistedId || activeChatId;
     if (!finalChatId) {
@@ -2992,7 +2995,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         // Use signed URL if available, otherwise use regular URL
         const audioUrl = toPlayableMediaUrl(data.signed_video_url || data.video_url) || "";
         setVideoUrl(audioUrl);
-        const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
+        const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || t("chat.imageLearningRequest");
         setCurrentMediaMeta({ artifactId: data.artifact_id, gcsPath: data.gcs_path, type: 'audio', artifactKind: 'podcast', title: sourceLabel });
         setSubtitleLang((data.lang as string) || undefined);
 
@@ -3003,7 +3006,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
           artifactKind: 'podcast' as any,
           url: audioUrl, // Use signed URL for persistence
           subtitleUrl: toPlayableMediaUrl(data.signed_subtitle_url),
-          title: `${requestedMode === "debate" ? "Debate Podcast" : "Podcast"}: ${sourceLabel.slice(0, 50)}...`,
+          title: `${requestedMode === "debate" ? t("chat.podcast.debate") : t("chat.podcast.standard")}: ${sourceLabel.slice(0, 50)}...`,
           artifactId: data.artifact_id,
           gcsPath: data.gcs_path,
           scriptGcsPath: data.script_gcs_path, // GCS path for persistent script fallback
@@ -3088,7 +3091,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     }
 
     const requestAudience = audienceLevel === "auto" ? undefined : audienceLevel;
-    const chatSeed = prompt || sourceFiles[0]?.name || "Image learning request";
+    const chatSeed = prompt || sourceFiles[0]?.name || t("chat.imageLearningRequest");
     const persistedId = await ensurePersistedActiveChat(chatSeed);
     const finalChatId = persistedId || activeChatId;
     if (!finalChatId) {
@@ -3169,7 +3172,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     let persistedId: string | undefined;
     try {
       const pendingPrompt = normalizePrompt(currentPrompt, "quiz");
-      const chatSeed = pendingPrompt || sourceFiles[0]?.name || "Image learning request";
+      const chatSeed = pendingPrompt || sourceFiles[0]?.name || t("chat.imageLearningRequest");
       persistedId = await ensurePersistedActiveChat(chatSeed);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
@@ -3274,7 +3277,11 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     const sourceFiles = [...uploadedFiles];
     const isDiagram = artifactKind === "diagram";
     const isStaticWorksheet = artifactKind === "static_worksheet";
-    const artifactName = isDiagram ? "Diagram" : isStaticWorksheet ? "Static Worksheet" : "Interactive Worksheet";
+    const artifactName = isDiagram
+      ? t("chat.artifact.diagram")
+      : isStaticWorksheet
+        ? t("chat.artifact.staticWorksheet")
+        : t("chat.artifact.interactiveWorksheet");
     if (!prompt && sourceFiles.length === 0) {
       toast({ title: t("toast.needInput"), description: t("toast.addTextFirst"), duration: 4000 });
       return;
@@ -3299,7 +3306,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
     let persistedId: string | undefined;
 
     try {
-      const chatSeed = prompt || sourceFiles[0]?.name || "Image learning request";
+      const chatSeed = prompt || sourceFiles[0]?.name || t("chat.imageLearningRequest");
       persistedId = await ensurePersistedActiveChat(chatSeed);
       const finalChatId = persistedId || activeChatId;
       if (!finalChatId) {
@@ -3354,7 +3361,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
 
       const artifactSource = isDiagram ? data?.svg_code : isStaticWorksheet ? data?.worksheet_html : data?.widget_html;
       if (res.ok && data?.status === "ok" && artifactSource) {
-        const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
+        const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || t("chat.imageLearningRequest");
         const downloadUrl = toPlayableMediaUrl(data.download_url);
         const downloadFilename = data.download_filename || (
           isDiagram
@@ -3623,13 +3630,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     } else if (currentUser.providerData.some((p: any) => p.providerId === 'github.com')) {
                       provider = new GithubAuthProvider();
                     } else {
-                      setReauthError("Unsupported provider. Please log out and log back in.");
+                      setReauthError(t("chat.account.unsupportedProvider"));
                       setReauthLoading(false);
                       return;
                     }
                     await reauthenticateWithPopup(currentUser, provider);
                   } catch (err: any) {
-                    setReauthError("Confirmation cancelled or failed. Please try again.");
+                    setReauthError(t("chat.account.confirmCancelled"));
                     setReauthLoading(false);
                     return;
                   }
@@ -3687,7 +3694,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               }}
               disabled={reauthLoading}
             >
-              {reauthLoading ? "Processing..." : "Delete Permanently"}
+              {reauthLoading ? "Processing..." : t("chat.account.deletePermanently")}
             </button>
           </div>
         </div>
@@ -3737,9 +3744,9 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   const { getFirebaseAuth } = await import("@/firebase");
                   const auth = getFirebaseAuth();
                   const currentUser = auth.currentUser;
-                  if (!currentUser) throw new Error("No user is currently signed in");
+                  if (!currentUser) throw new Error(t("chat.account.noUser"));
                   if (!reauthPassword) {
-                    setReauthError("Please enter your password.");
+                    setReauthError(t("chat.account.enterPassword"));
                     setReauthLoading(false);
                     return;
                   }
@@ -3748,7 +3755,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   try {
                     await reauthenticateWithCredential(currentUser, credential);
                   } catch (err: any) {
-                    setReauthError("Incorrect password. Please try again.");
+                    setReauthError(t("chat.account.wrongPassword"));
                     setReauthLoading(false);
                     return;
                   }
@@ -3799,8 +3806,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   // window.location.replace("/"); // Removed to prevent double redirect
                 } catch (error: any) {
                   const errorMessage = error?.code === 'auth/requires-recent-login'
-                    ? "For security, please reauthenticate before deleting your account."
-                    : "Could not delete account, try again.";
+                    ? t("chat.account.reauthRequired")
+                    : t("chat.account.deleteFailed");
                   toast({
                     title: t("toast.deleteAccountFailed"),
                     description: errorMessage,
@@ -3814,7 +3821,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
               }}
               disabled={reauthLoading || !reauthPassword}
             >
-              {reauthLoading ? "Deleting..." : "Delete Permanently"}
+              {reauthLoading ? "Deleting..." : t("chat.account.deletePermanently")}
             </button>
           </div>
         </div>
@@ -3832,13 +3839,13 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       const { getFirebaseAuth } = await import("@/firebase");
       const auth = getFirebaseAuth();
       const currentUser = auth.currentUser;
-      if (!currentUser) throw new Error("No user is currently signed in");
+      if (!currentUser) throw new Error(t("chat.account.noUser"));
       // Detect provider type
       const isPassword = currentUser.providerData.some((p: any) => p.providerId === 'password');
       // Reauth step
       if (isPassword) {
         if (!reauthPassword) {
-          setReauthError("Please enter your password.");
+          setReauthError(t("chat.account.enterPassword"));
           setReauthLoading(false);
           return;
         }
@@ -3848,7 +3855,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         try {
           await reauthenticateWithCredential(currentUser, credential);
         } catch (err: any) {
-          setReauthError("Incorrect password. Please try again.");
+          setReauthError(t("chat.account.wrongPassword"));
           setReauthLoading(false);
           return;
         }
@@ -3861,14 +3868,14 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
         } else if (currentUser.providerData.some((p: any) => p.providerId === 'github.com')) {
           provider = new GithubAuthProvider();
         } else {
-          setReauthError("Unsupported provider. Please log out and log back in.");
+          setReauthError(t("chat.account.unsupportedProvider"));
           setReauthLoading(false);
           return;
         }
         try {
           await reauthenticateWithPopup(currentUser, provider);
         } catch (err: any) {
-          setReauthError("Confirmation cancelled or failed. Please try again.");
+          setReauthError(t("chat.account.confirmCancelled"));
           setReauthLoading(false);
           return;
         }
@@ -3922,8 +3929,8 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       window.location.replace("/");
     } catch (error: any) {
       const errorMessage = error?.code === 'auth/requires-recent-login'
-        ? "For security, please reauthenticate before deleting your account."
-        : "Could not delete account, try again.";
+        ? t("chat.account.reauthRequired")
+        : t("chat.account.deleteFailed");
       toast({
         title: t("toast.deleteAccountFailed"),
         description: errorMessage,
@@ -4164,7 +4171,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   try {
       // Defensive defaults: ensure keys object always exists
       const llmConfig = buildLlmRequestConfig(apiKeys);
-      const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || "Image learning request";
+      const sourceLabel = prompt || images.map((image) => image.name).filter(Boolean).join(", ") || t("chat.imageLearningRequest");
 
       // assign a client job id so backend can cancel the right process
       const jobId = makeJobId();
@@ -5539,7 +5546,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
   const handleDiagramPngDownload = async () => {
     if (!widgetHtml || currentMediaMeta?.artifactKind !== "diagram") return;
     try {
-      const blob = await svgToPngBlob(widgetHtml);
+      const blob = await svgToPngBlob(widgetHtml, t);
       const objectUrl = URL.createObjectURL(blob);
       const svgName = sanitizeDownloadFilename(
         htmlDownloadFilename || "upcurved_diagram.svg",
@@ -5557,7 +5564,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
       console.error("Diagram PNG export failed", error);
       toast({
         title: t("toast.pngExportFailed"),
-        description: error?.message || "The diagram could not be converted to PNG.",
+        description: error?.message || t("chat.diagram.convertPngFailed"),
         duration: 5000,
       });
     }
@@ -5944,7 +5951,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                             <div
                               className={`mt-3 bg-card border rounded-lg p-3 cursor-pointer hover:bg-accent transition-colors ${busy ? 'opacity-50 pointer-events-none' : ''}`}
                               onClick={() => { if (!busy && !podcastLoading && !quizLoading && !widgetLoading) void openMediaFromMessage(msg); }}
-                              title={normalizeArtifactKind(msg.media, msg) === "diagram" ? "Open diagram" : normalizeArtifactKind(msg.media, msg) === "static_worksheet" ? "Open static worksheet" : "Open interactive worksheet"}
+                              title={normalizeArtifactKind(msg.media, msg) === "diagram" ? t("chat.tooltip.openDiagram") : normalizeArtifactKind(msg.media, msg) === "static_worksheet" ? t("chat.tooltip.openStaticWorksheet") : t("chat.tooltip.openInteractiveWorksheet")}
                             >
                               <div className="flex items-center gap-3">
                                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${getThemeGradient(colorTheme)}`}>
@@ -6364,7 +6371,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     variant="default"
                     className={`bg-gradient-to-r ${getThemeGradient(colorTheme)} text-white hover:opacity-90`}
                     onClick={() => void handleEditVideo()}
-                    title={busy || widgetLoading || quizLoading ? "Stop editing" : "Apply edits"}
+                    title={busy || widgetLoading || quizLoading ? t("chat.tooltip.stopEditing") : t("chat.tooltip.applyEdits")}
                     disabled={!query.trim()}
                   >
                     {busy ? <Square className="w-5 h-5" /> : <Pencil className="w-5 h-5" />}
@@ -6465,7 +6472,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                 <DiagramFrame
                   svgCode={widgetHtml}
                   className="flex h-full w-full items-center justify-center overflow-auto rounded-xl bg-white p-3"
-                  title={currentMediaMeta?.title || "Educational diagram"}
+                  title={currentMediaMeta?.title || t("chat.artifact.educationalDiagram")}
                 />
               ) : currentMediaMeta?.artifactKind === "static_worksheet" ? (
                 <StaticWorksheetFrame
@@ -6473,7 +6480,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   worksheetId={currentMediaMeta?.worksheetId || "static_worksheet"}
                   userEmail={user.email}
                   className="w-full h-full rounded-xl border-0 bg-white"
-                  title={currentMediaMeta?.title || "Static Worksheet"}
+                  title={currentMediaMeta?.title || t("chat.artifact.staticWorksheet")}
                 />
               ) : (
                 <WidgetFrame
@@ -6592,7 +6599,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                     <Button
                       variant="ghost"
                       size="icon"
-                      title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+                      title={isFullscreen ? t("chat.tooltip.exitFullscreen") : t("chat.tooltip.enterFullscreen")}
                       onClick={toggleFullscreen}
                       className="absolute bottom-4 right-4 h-10 w-10 bg-black/70 hover:bg-black/90 text-white z-10 rounded-md"
                     >
@@ -6821,7 +6828,7 @@ export const ChatInterface: FC<ChatInterfaceProps> = ({
                   <Button
                     variant="ghost"
                     size="icon"
-                    title={currentMediaMeta?.type === "video" && isCaptionsOn ? "Download MP4 with burned-in captions" : currentMediaMeta?.type === "audio" && isCaptionsOn ? "Download audio, captions, and transcript ZIP" : "Download"}
+                    title={currentMediaMeta?.type === "video" && isCaptionsOn ? t("chat.tooltip.downloadMp4Captions") : currentMediaMeta?.type === "audio" && isCaptionsOn ? t("chat.tooltip.downloadAudioZip") : "Download"}
                     disabled={!videoUrl}
                     onClick={handleDownload}
                     className="h-7 w-7 ml-2"
