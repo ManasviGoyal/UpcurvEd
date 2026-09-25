@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import SettingsMenu from "@/components/SettingsMenu";
+import LanguageMenu from "@/components/LanguageMenu";
 import { Trans, useLanguage } from "@/lib/i18n";
 import { useAppearance } from "@/lib/appearance";
 
@@ -52,6 +53,34 @@ type TargetOS = "mac" | "windows";
 
 const OPENROUTER_HOME_URL = "https://openrouter.ai/";
 const OPENROUTER_KEYS_URL = "https://openrouter.ai/settings/keys";
+
+const PRIVACY_LINKS = {
+  anthropic: "https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data",
+  openai: "https://developers.openai.com/api/docs/guides/your-data",
+  openrouter: "https://openrouter.ai/docs/guides/privacy/data-collection",
+  gemini: "https://ai.google.dev/gemini-api/terms",
+} as const;
+
+const PRIVACY_NOTE_COPY = {
+  en: {
+    heading: "Privacy before classroom use",
+    body1:
+      "UpcurvEd Desktop keeps your local chats, settings, and finished files on your computer. Generating AI content still requires sending your prompt and any attached inputs to the provider you selected.",
+    body2:
+      "Provider retention and training practices differ. OpenRouter can also route requests to underlying providers, so both layers of policy can matter.",
+    student:
+      "For school use, avoid identifiable or sensitive student information unless your school has approved the provider and its data practices.",
+  },
+  id: {
+    heading: "Privasi sebelum digunakan di kelas",
+    body1:
+      "UpcurvEd Desktop menyimpan chat lokal, pengaturan, dan file akhir di komputer Anda. Namun, saat membuat konten AI, prompt dan input terlampir tetap dikirim ke penyedia AI yang Anda pilih.",
+    body2:
+      "Kebijakan penyimpanan data dan pelatihan model berbeda antar penyedia. OpenRouter juga dapat meneruskan permintaan ke penyedia lain, sehingga kebijakan keduanya dapat berlaku.",
+    student:
+      "Untuk penggunaan di sekolah, hindari memasukkan informasi siswa yang dapat mengidentifikasi atau data sensitif kecuali sekolah Anda telah menyetujui penyedia dan praktik datanya.",
+  },
+} as const;
 
 // Anchor for the OpenRouter walkthrough further down the page; the provider table
 // points at it instead of an outside tutorial.
@@ -120,8 +149,8 @@ function detectOS(): TargetOS {
 }
 
 export default function SetupGuide() {
-  const { t } = useLanguage();
-  const { isDark } = useAppearance();
+  const { t, language } = useLanguage();
+  const { isDark, setMode } = useAppearance();
   const [os, setOS] = useState<TargetOS>("mac");
   const [installOpen, setInstallOpen] = useState(true);
 
@@ -255,6 +284,11 @@ export default function SetupGuide() {
       : "text-slate-600 hover:bg-slate-200/70";
   };
 
+  const privacyNote = language === "id" ? PRIVACY_NOTE_COPY.id : PRIVACY_NOTE_COPY.en;
+  const appearanceLabel = isDark
+    ? t("settings.appearance.light")
+    : t("settings.appearance.dark");
+
   return (
     <div className={`min-h-screen ${bgClass} relative overflow-hidden transition-colors duration-500`}>
       <div className="absolute inset-0 overflow-hidden opacity-20">
@@ -286,7 +320,23 @@ export default function SetupGuide() {
             {t("setup.backToHome")}
           </Link>
 
-          <SettingsMenu isDark={isDark} buttonClassName={utilityButtonClass} />
+          <div className="flex items-center gap-2">
+            <LanguageMenu
+              variant="pill"
+              isDark={isDark}
+              buttonClassName={utilityButtonClass}
+              align="end"
+            />
+            <button
+              type="button"
+              onClick={() => setMode(isDark ? "light" : "dark")}
+              aria-label={appearanceLabel}
+              title={appearanceLabel}
+              className={`inline-flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${utilityButtonClass}`}
+            >
+              {isDark ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
+            </button>
+          </div>
           </div>
 
           <div className="text-center">
@@ -681,6 +731,27 @@ export default function SetupGuide() {
                   <strong>{t("setup.costNotice.lead")}</strong> {t("setup.costNotice.body1")}
                 </p>
                 <p className="mt-2">{t("setup.costNotice.body2")}</p>
+              </div>
+
+              <div
+                className={`rounded-xl border p-5 ${
+                  isDark
+                    ? "border-teal-500/30 bg-teal-500/10"
+                    : "border-teal-300 bg-teal-50"
+                }`}
+              >
+                <h3 className={`mb-2 text-lg font-bold ${textPrimary}`}>{privacyNote.heading}</h3>
+                <div className={`space-y-2 ${textSecondary}`}>
+                  <p>{privacyNote.body1}</p>
+                  <p>{privacyNote.body2}</p>
+                  <p className="font-medium">{privacyNote.student}</p>
+                  <p className="flex flex-wrap gap-x-3 gap-y-1 pt-1 text-xs">
+                    <a className={linkClass} href={PRIVACY_LINKS.openrouter} target="_blank" rel="noreferrer">OpenRouter</a>
+                    <a className={linkClass} href={PRIVACY_LINKS.anthropic} target="_blank" rel="noreferrer">Anthropic</a>
+                    <a className={linkClass} href={PRIVACY_LINKS.openai} target="_blank" rel="noreferrer">OpenAI</a>
+                    <a className={linkClass} href={PRIVACY_LINKS.gemini} target="_blank" rel="noreferrer">Google Gemini</a>
+                  </p>
+                </div>
               </div>
             </section>
 

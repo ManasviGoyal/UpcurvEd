@@ -4,7 +4,7 @@
 // light/dark palette (chosen by time of day) that is independent of the app theme,
 // so the menu takes its colours from props there and from theme tokens in the app.
 import { useEffect, useRef, useState } from "react";
-import { Check, Globe } from "lucide-react";
+import { Check, ChevronDown, Globe } from "lucide-react";
 
 import { LANGUAGES, useLanguage, type LanguageCode } from "@/lib/i18n";
 
@@ -94,7 +94,15 @@ export function LanguageMenu({
       >
         <Globe className={variant === "pill" ? "h-4 w-4" : "w-5 h-5"} aria-hidden="true" />
         {variant === "pill" ? (
-          <span className="language-label">{active.label}</span>
+          <>
+            <span className="language-label">
+              {language === "en" ? t("language.label") : active.label}
+            </span>
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${isOpen ? "rotate-180" : ""}`}
+              aria-hidden="true"
+            />
+          </>
         ) : (
           !collapsed && (
             <span className="flex-1 truncate">
