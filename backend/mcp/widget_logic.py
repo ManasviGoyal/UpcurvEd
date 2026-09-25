@@ -832,11 +832,39 @@ def generate_widget(
             generation_path = "repaired_primary"
 
     except Exception as exc:
-        # Do not substitute a simpler or hardcoded widget when generation fails.
-        # Surface the original provider/model/validation error to the normal
-        # generation-failure UI so the user knows the requested artifact was not created.
-        logger.warning("widget: generation failed (%s); no fallback will be used", exc)
-        raise
+        # Image requests use the same ladder as text ones. What the original guard
+        # protected against -- a fallback quietly ignoring the attached images --
+        # is handled by passing the images down to the simple fallback instead.
+        logger.warning(
+            "widget: primary path failed (%s); generating a fresh simple fallback",
+            exc,
+        )
+        try:
+            html = _generate_simple_fallback_html(
+                provider=prov,
+                api_key=api_key,
+                model=model,
+                topic=prompt,
+                reason=str(exc),
+                images=images,
+                provider_keys=provider_keys,
+                learner_prompt=learner_prompt,
+                default_image_prompt_used=default_image_prompt_used,
+            )
+            ok3, reason3 = _validate_widget_html(html, require_visual=False)
+            if not ok3:
+                raise RuntimeError(f"Simple fallback failed validation: {reason3}")
+            generation_path = "simple_llm_fallback"
+
+        except Exception as fallback_exc:
+            # Stop here. The simple retry still uses the selected model and the user's
+            # actual prompt/images, but if it also fails we should surface that real
+            # failure instead of substituting a generic hardcoded/template widget.
+            logger.warning(
+                "widget: simple fallback failed (%s); surfacing generation failure",
+                fallback_exc,
+            )
+            raise
 
     assert html is not None
     logger.info(
