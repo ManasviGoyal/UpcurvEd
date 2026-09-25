@@ -783,7 +783,6 @@ def generate_widget(
 
     html: str | None = None
     generation_path = "primary"
-    first_error: Exception | None = None
     generation_diagnostics: dict[str, object] | None = None
 
     try:
@@ -833,69 +832,11 @@ def generate_widget(
             generation_path = "repaired_primary"
 
     except Exception as exc:
-        # Image requests use the same ladder as text ones. What the original guard
-        # protected against -- a fallback quietly ignoring the attached images --
-        # is handled by passing the images down to the simple fallback instead.
-        first_error = exc
-        logger.warning(
-            "widget: primary path failed (%s); generating a fresh simple fallback",
-            exc,
-        )
-        try:
-            html = _generate_simple_fallback_html(
-                provider=prov,
-                api_key=api_key,
-                model=model,
-                topic=prompt,
-                reason=str(exc),
-                images=images,
-                provider_keys=provider_keys,
-                learner_prompt=learner_prompt,
-                default_image_prompt_used=default_image_prompt_used,
-            )
-            ok3, reason3 = _validate_widget_html(html, require_visual=False)
-            if not ok3:
-                raise RuntimeError(f"Simple fallback failed validation: {reason3}")
-            generation_path = "simple_llm_fallback"
-
-        except Exception as fallback_exc:
-            # The emergency template is hardcoded and never sees the images, so an
-            # image request stops here rather than returning something unrelated to
-            # what the user attached.
-            if images:
-                raise RuntimeError(
-                    "Widget generation failed for an image request after the primary, "
-                    "repair, and simple fallback attempts. Try again or switch models."
-                ) from fallback_exc
-
-            logger.warning(
-                "widget: simple fallback failed (%s); using emergency topic fallback",
-                fallback_exc,
-            )
-            if os.environ.get("UPCURVED_WIDGET_DISABLE_JSON_FALLBACK", "0").strip().lower() in {
-                "1",
-                "true",
-                "yes",
-            }:
-                raise RuntimeError(
-                    "Widget generation failed after the primary and simple fallback attempts. "
-                    "Try again or switch models."
-                ) from fallback_exc
-
-            html = _topic_fallback_widget_html(
-                prompt,
-                provider=prov,
-                api_key=api_key,
-                model=model,
-                reason=str(fallback_exc),
-            )
-            ok4, reason4 = _validate_widget_html(html, require_visual=False)
-            if not ok4:
-                detail = str(first_error) if first_error else reason4
-                raise RuntimeError(
-                    f"Emergency widget fallback invalid after generation error: {detail}"
-                ) from fallback_exc
-            generation_path = "emergency_spec_fallback"
+        # Do not substitute a simpler or hardcoded widget when generation fails.
+        # Surface the original provider/model/validation error to the normal
+        # generation-failure UI so the user knows the requested artifact was not created.
+        logger.warning("widget: generation failed (%s); no fallback will be used", exc)
+        raise
 
     assert html is not None
     logger.info(
