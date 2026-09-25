@@ -226,17 +226,6 @@
       "free": true,
       "source": "https://openrouter.ai/models"
     },
-    "openrouter::openai/gpt-oss-20b:free": {
-      "rates": [
-        {
-          "effective_from": "2026-08-22",
-          "input": 0.0,
-          "output": 0.0
-        }
-      ],
-      "free": true,
-      "source": "https://openrouter.ai/models"
-    },
     "openrouter::openrouter/free": {
       "rates": [
         {
